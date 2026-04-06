@@ -54,4 +54,4 @@ The system is designed to run automatically using a cron job.
 * [ ] Dark Web Forum scraping via Tor
 * [ ] NLP-based content classification (e.g., threat type detection)
 * [ ] Machine Learning for dynamic threat scoring
-* [ ] Email alerts and web-based dashboard
+* [ ] Email alerts and web-based dashboard# multi-agent-threat-intelligence
