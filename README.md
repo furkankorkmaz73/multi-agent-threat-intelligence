@@ -1,57 +1,75 @@
-# Autonomous AI Agent for Threat Intelligence Gathering
+# Multi-Agent Cyber Threat Intelligence & Risk Analysis System
 
-This project implements an autonomous AI-powered agent designed to collect and analyze cybersecurity threat intelligence from multiple sources including:
+This project presents a multi-agent based system designed to improve cyber threat intelligence (CTI) and dynamic risk analysis for critical systems.
 
-- **CVE Databases (NVD)**
-- **Threat Intelligence Feeds (e.g., URLHaus)**
+## Overview
 
-> **Note:** Dark web scraping is planned for future improvements.  
-> **Cron-based automation is implemented and actively used.**
+Modern cyber threat intelligence involves large volumes of heterogeneous data from multiple sources such as vulnerability databases (CVE) and threat feeds (e.g., URLhaus, Dark Web). These sources are often analyzed independently, which limits the ability to assess real-world risk accurately.
 
-## 🚀 Features
+This project proposes a multi-agent architecture that correlates data from different sources and performs contextual risk analysis.
 
-- 🔄 **Automated Data Fetching:** Retrieves latest CVE and threat feed data.
-- 🧠 **Expandable AI/NLP Framework:** Code structure supports future integration of machine learning and NLP modules.
-- 📁 **Timestamped Archiving:** Data is saved with time-based folder structure for historical tracking.
-- 📊 **JSON Output:** Provides structured and standardized data for integration and future analytics.
+## Key Features
 
-## ⚙️ How It Works
+- Multi-agent architecture for modular data processing
+- Integration of multiple threat intelligence sources (CVE, URLhaus, Dark Web)
+- Graph-based relationship modeling
+- Dynamic risk scoring mechanism
+- Context-aware vulnerability prioritization
 
-1. **CVE Fetching:** Downloads recent vulnerability records from the National Vulnerability Database (NVD).
-2. **Threat Feeds:** Pulls open-source threat data from trusted sources like URLHaus.
-3. **Data Storage:** Saves fetched data in categorized JSON format using timestamped folders for organization and traceability.
+## Risk Model
 
-## 🔁 Automation with Cron
+The system uses a weighted risk scoring model:
 
-The system is designed to run automatically using a cron job.
+Risk = w1·CVSS + w2·Exploit + w3·Recency + w4·Centrality
 
-### Example Crontab Entry (every 8 hours):
-```cron
-0 */8 * * * cd /home/youruser/path/to/project && /usr/bin/go run main.go >> logs/test.log 2>&1
-````
+Where:
 
-### For testing (every 1 minute):
+- CVSS: Technical severity of the vulnerability
+- Exploit: Presence of active exploitation indicators
+- Recency: Freshness of the vulnerability
+- Centrality: Importance in the threat graph
 
-```cron
-*/1 * * * * cd /home/youruser/path/to/project && /usr/bin/go run main.go >> logs/test.log 2>&1
-```
+Initial weights:
 
-### Notes:
+- w1 = 0.4
+- w2 = 0.3
+- w3 = 0.2
+- w4 = 0.1
 
-* Ensure the `cron` service is running:
+These weights are subject to optimization based on experimental results.
 
-  ```bash
-  sudo service cron start
-  ```
-* On WSL systems, you can add this line to your `~/.bashrc` to auto-start cron:
+## Architecture
 
-  ```bash
-  sudo service cron status >/dev/null || sudo service cron start
-  ```
+The system consists of the following components:
 
-## 📈 Future Improvements
+- Data Collection Agents
+- Processing Layer
+- Graph Model
+- Risk Analysis Engine
+- Output / Reporting Layer
 
-* [ ] Dark Web Forum scraping via Tor
-* [ ] NLP-based content classification (e.g., threat type detection)
-* [ ] Machine Learning for dynamic threat scoring
-* [ ] Email alerts and web-based dashboard# multi-agent-threat-intelligence
+## Technologies
+
+- Go (data collection & processing)
+- Python (analysis & orchestration)
+- Graph-based modeling
+- Threat intelligence data sources
+
+## Repository Structure
+
+agent-go/       -> data collection agents (Go)
+agent-python/   -> analysis & orchestration (Python)
+
+## Project Status
+
+This project is developed as part of an academic research study and is currently in the proposal / prototype stage.
+
+## Contribution
+
+This project aims to provide a more realistic and context-aware approach to cyber threat analysis by combining vulnerability data with threat intelligence signals.
+
+---
+
+## Author
+
+Furkan Korkmaz
