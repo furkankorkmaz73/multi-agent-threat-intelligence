@@ -1,3 +1,11 @@
 pymongo
 python-dotenv
 openai
+networkx
+pytest
+fastapi
+uvicorn
+httpx
+matplotlib
+pandas
+numpy

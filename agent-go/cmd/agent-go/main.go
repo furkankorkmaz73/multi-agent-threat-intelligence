@@ -13,7 +13,9 @@ import (
 
 func main() {
 	source := flag.String("source", "", "cve, urlhaus, dread")
-	limit := flag.Int("limit", 20, "limit records")
+	limit := flag.Int("limit", 20, "limit records to save (0 = no limit)")
+	mode := flag.String("mode", "incremental", "cve fetch mode: incremental or full")
+	days := flag.Int("days", 2, "how many days back to fetch in incremental mode")
 	flag.Parse()
 
 	appInstance := app.New()
@@ -30,16 +32,28 @@ func main() {
 
 	switch *source {
 	case "cve":
-		data, err := fetch.FetchCVE(appInstance, os.Getenv("CVE_KEY"))
-		if err != nil {
-			fmt.Printf("[ERROR] CVE: %v\n", err)
+		var (
+			data interface{}
+			err  error
+		)
+
+		cveData, fetchErr := fetch.FetchCVE(appInstance, os.Getenv("CVE_KEY"), *mode, *days)
+		if fetchErr != nil {
+			fmt.Printf("[ERROR] CVE: %v\n", fetchErr)
 			os.Exit(2)
 		}
-		toSave := data.Vulnerabilities
-		if len(toSave) > *limit {
+
+		toSave := cveData.Vulnerabilities
+		if *limit > 0 && len(toSave) > *limit {
 			toSave = toSave[:*limit]
 		}
-		_ = db.SaveCVEMany(appInstance, toSave)
+
+		if err = db.SaveCVEMany(appInstance, toSave); err != nil {
+			fmt.Printf("[ERROR] Save CVE: %v\n", err)
+			os.Exit(3)
+		}
+
+		_ = data
 		fmt.Printf("[SUCCESS] Saved %d CVE records\n", len(toSave))
 
 	case "urlhaus":
@@ -48,10 +62,13 @@ func main() {
 			fmt.Printf("[ERROR] URLhaus: %v\n", err)
 			os.Exit(2)
 		}
-		if len(data) > *limit {
+		if *limit > 0 && len(data) > *limit {
 			data = data[:*limit]
 		}
-		_ = db.SaveURLhausMany(appInstance, data)
+		if err := db.SaveURLhausMany(appInstance, data); err != nil {
+			fmt.Printf("[ERROR] Save URLhaus: %v\n", err)
+			os.Exit(3)
+		}
 		fmt.Printf("[SUCCESS] Saved %d URLhaus records\n", len(data))
 
 	case "dread":
@@ -60,5 +77,9 @@ func main() {
 			os.Exit(2)
 		}
 		fmt.Println("[SUCCESS] Dread completed")
+
+	default:
+		fmt.Printf("[ERROR] Unknown source: %s\n", *source)
+		os.Exit(1)
 	}
 }

@@ -18,10 +18,7 @@ func Update(CVEApiKey string) error {
 	}
 	defer client.Disconnect(context.Background())
 
-	appInstance := &app.App{
-		MongoClient: client,
-		Database:    "threat_intel",
-	}
+	appInstance := &app.App{MongoClient: client, Database: "threat_intel"}
 
 	var wg sync.WaitGroup
 	wg.Add(3)
@@ -36,7 +33,7 @@ func Update(CVEApiKey string) error {
 	go func() {
 		defer wg.Done()
 		appInstance.LogJSON("INFO", "cve", "Starting CVE sync")
-		data, err := fetch.FetchCVE(appInstance, CVEApiKey)
+		data, err := fetch.FetchCVE(appInstance, CVEApiKey, "incremental", 2)
 		if err != nil {
 			appInstance.LogJSON("ERROR", "cve", err.Error())
 			return

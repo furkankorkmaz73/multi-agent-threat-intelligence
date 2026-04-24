@@ -1,15 +1,20 @@
 package models
 
 type CVEList struct {
+	ResultsPerPage  int `json:"resultsPerPage" bson:"results_per_page"`
+	StartIndex      int `json:"startIndex" bson:"start_index"`
+	TotalResults    int `json:"totalResults" bson:"total_results"`
 	Vulnerabilities []struct {
 		CVE CVE `json:"cve" bson:"cve"`
 	} `json:"vulnerabilities" bson:"vulnerabilities"`
 }
 
 type CVE struct {
-	ID           string `json:"id" bson:"_id"`
-	Published    string `json:"published" bson:"published"`
-	LastModified string `json:"lastModified" bson:"last_modified"`
+	Metadata     SourceMetadata   `json:"metadata,omitempty" bson:"metadata,omitempty"`
+	Normalized   NormalizedFields `json:"normalized_fields,omitempty" bson:"normalized_fields,omitempty"`
+	ID           string           `json:"id" bson:"_id"`
+	Published    string           `json:"published" bson:"published"`
+	LastModified string           `json:"lastModified" bson:"last_modified"`
 	Descriptions []struct {
 		Lang  string `json:"lang" bson:"lang"`
 		Value string `json:"value" bson:"value"`

@@ -1,20 +1,20 @@
-import os
 import json
-from typing import Dict, Any
+from typing import Any, Dict
 
-from openai import OpenAI
+from config import LLM_MODEL, OPENAI_API_KEY, OPENAI_BASE_URL
 
-MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
-BASE_URL = os.getenv("OPENAI_BASE_URL")
-API_KEY = os.getenv("OPENAI_API_KEY")
 
 client = None
-if API_KEY:
-    client = OpenAI(
-        api_key=API_KEY,
-        base_url=BASE_URL if BASE_URL else None,
-    )
+if OPENAI_API_KEY:
+    try:
+        from openai import OpenAI  # type: ignore
 
+        client = OpenAI(
+            api_key=OPENAI_API_KEY,
+            base_url=OPENAI_BASE_URL if OPENAI_BASE_URL else None,
+        )
+    except Exception:
+        client = None
 SYSTEM_PROMPT = """You are a cybersecurity analyst.
 Extract structured fields from text. Return STRICT JSON only.
 Do not add markdown. Do not add explanations outside JSON.
@@ -47,7 +47,7 @@ Return JSON only.
 
     try:
         resp = client.chat.completions.create(
-            model=MODEL,
+            model=LLM_MODEL,
             temperature=0.2,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -83,7 +83,7 @@ Return JSON only.
 
     try:
         resp = client.chat.completions.create(
-            model=MODEL,
+            model=LLM_MODEL,
             temperature=0.2,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -109,7 +109,7 @@ Context:
 
     try:
         resp = client.chat.completions.create(
-            model=MODEL,
+            model=LLM_MODEL,
             temperature=0.3,
             messages=[
                 {"role": "system", "content": "You are a concise cybersecurity analyst."},

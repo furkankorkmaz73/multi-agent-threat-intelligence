@@ -1,22 +1,15 @@
 import argparse
-import os
-import textwrap
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pymongo
-from dotenv import load_dotenv
 
-
-env_path = Path(__file__).resolve().parents[2] / ".env"
-load_dotenv(dotenv_path=env_path)
+from config import DB_NAME, DEFAULT_REPORT_LIMIT, MONGO_URI
 
 
 class DemoReport:
     def __init__(self) -> None:
-        mongo_uri = os.getenv("MONGO_URI", "mongodb://127.0.0.1:27017")
-        self.client = pymongo.MongoClient(mongo_uri)
-        self.db = self.client["threat_intel"]
+        self.client = pymongo.MongoClient(MONGO_URI)
+        self.db = self.client[DB_NAME]
         self.collections = {
             "cve": self.db["cve_intel"],
             "urlhaus": self.db["urlhaus_intel"],
@@ -26,7 +19,7 @@ class DemoReport:
     def fetch_records(
         self,
         source: str,
-        limit: int = 5,
+        limit: int = DEFAULT_REPORT_LIMIT,
         only_analyzed: bool = True,
     ) -> List[Dict[str, Any]]:
         query: Dict[str, Any] = {}
@@ -42,12 +35,12 @@ class DemoReport:
 
         return list(cursor)
 
-    def render(self, source: str, limit: int = 5) -> None:
+    def render(self, source: str, limit: int = DEFAULT_REPORT_LIMIT) -> None:
         records = self.fetch_records(source=source, limit=limit, only_analyzed=True)
 
-        print("=" * 90)
+        print("=" * 100)
         print(f" THREAT-AGENT DEMO REPORT | SOURCE={source.upper()} | LIMIT={limit}")
-        print("=" * 90)
+        print("=" * 100)
 
         if not records:
             print("Analiz edilmiş kayıt bulunamadı.")
@@ -56,13 +49,16 @@ class DemoReport:
 
         for idx, record in enumerate(records, start=1):
             self._print_record(idx, source, record)
-            print("-" * 90)
+            print("-" * 100)
 
         print()
 
     def _print_record(self, idx: int, source: str, record: Dict[str, Any]) -> None:
         analysis = record.get("analysis", {})
         evidence = analysis.get("evidence", {})
+        feature_breakdown = analysis.get("feature_breakdown", {})
+        graph_summary = analysis.get("graph_summary", {})
+        graph_edges = analysis.get("graph_edges", [])
 
         entity_id = self._resolve_entity_id(source, record, analysis)
         risk_level = analysis.get("risk_level", "N/A")
@@ -87,6 +83,8 @@ class DemoReport:
             print(f"Impact     : {evidence.get('llm_impact', 'N/A')}")
             print(f"URLhaus    : {evidence.get('related_urlhaus_count', 0)} related record")
             print(f"Dread      : {evidence.get('related_dread_count', 0)} related record")
+            self._print_match_stats("URLhaus Match Stats", evidence.get("urlhaus_match_stats", {}))
+            self._print_match_stats("Dread Match Stats", evidence.get("dread_match_stats", {}))
 
         elif source == "urlhaus":
             print(f"URL        : {record.get('url', 'N/A')}")
@@ -105,15 +103,116 @@ class DemoReport:
             print(f"Rel. CVE   : {evidence.get('related_cve_count', 0)}")
             print(f"Rel. URLH  : {evidence.get('related_urlhaus_count', 0)}")
 
+        self._print_feature_breakdown(feature_breakdown)
+        self._print_graph_summary(graph_summary)
+        self._print_graph_edges(graph_edges)
+
         if explanation:
             print("Explanation:")
-            for item in explanation[:3]:
+            for item in explanation[:4]:
                 print(f"  - {self._wrap(item)}")
 
         if recommendations:
             print("Recommendations:")
-            for item in recommendations[:4]:
+            for item in recommendations[:5]:
                 print(f"  - {self._wrap(item)}")
+
+    def _print_match_stats(self, title: str, stats: Dict[str, Any]) -> None:
+        if not stats:
+            return
+
+        print(f"{title}:")
+        preferred_order = [
+            "avg_overlap_ratio",
+            "exact_cve_hits",
+            "online_hits",
+            "high_signal_hits",
+            "classifier_hits",
+            "strongest_match_score",
+        ]
+
+        used = set()
+        for key in preferred_order:
+            if key in stats:
+                used.add(key)
+                print(f"  - {key}: {stats[key]}")
+
+        for key, value in stats.items():
+            if key not in used:
+                print(f"  - {key}: {value}")
+
+    def _print_feature_breakdown(self, feature_breakdown: Dict[str, Any]) -> None:
+        if not feature_breakdown:
+            return
+
+        print("Feature Breakdown:")
+        ordered_keys = [
+            "base_cvss_component",
+            "base_source_component",
+            "recentness_bonus",
+            "urlhaus_correlation_bonus",
+            "dread_correlation_bonus",
+            "llm_context_bonus",
+            "category_bonus",
+            "status_bonus",
+            "url_structure_bonus",
+            "tag_diversity_bonus",
+            "related_cve_bonus",
+            "related_dread_bonus",
+            "related_urlhaus_bonus",
+            "weak_signal_penalty",
+            "age_penalty",
+            "graph_centrality_score",
+            "graph_bonus",
+            "urlhaus_avg_overlap_ratio",
+            "dread_avg_overlap_ratio",
+            "urlhaus_exact_cve_hits",
+            "dread_exact_cve_hits",
+            "pre_graph_score",
+            "raw_score_before_clamp",
+            "final_score",
+        ]
+
+        used = set()
+        for key in ordered_keys:
+            if key in feature_breakdown:
+                used.add(key)
+                print(f"  - {key}: {feature_breakdown[key]}")
+
+        for key, value in feature_breakdown.items():
+            if key not in used:
+                print(f"  - {key}: {value}")
+
+    def _print_graph_summary(self, graph_summary: Dict[str, Any]) -> None:
+        if not graph_summary:
+            return
+
+        print("Graph Summary:")
+        print(f"  - nodes: {graph_summary.get('node_count', 'N/A')}")
+        print(f"  - edges: {graph_summary.get('edge_count', 'N/A')}")
+        print(f"  - components: {graph_summary.get('connected_component_count', 'N/A')}")
+        print(f"  - largest_component_size: {graph_summary.get('largest_component_size', 'N/A')}")
+        print(f"  - degree_centrality: {graph_summary.get('root_degree_centrality', 'N/A')}")
+        print(f"  - betweenness_centrality: {graph_summary.get('root_betweenness_centrality', 'N/A')}")
+        print(f"  - closeness_centrality: {graph_summary.get('root_closeness_centrality', 'N/A')}")
+        print(f"  - centrality_score: {graph_summary.get('centrality_score', 'N/A')}")
+
+        neighbor_dist = graph_summary.get("neighbor_type_distribution", {})
+        if neighbor_dist:
+            parts = [f"{k}={v}" for k, v in neighbor_dist.items()]
+            print(f"  - neighbor_types: {', '.join(parts)}")
+
+    def _print_graph_edges(self, graph_edges: List[Dict[str, Any]]) -> None:
+        if not graph_edges:
+            return
+
+        print("Graph Edges (sample):")
+        for edge in graph_edges[:8]:
+            source = edge.get("source", "N/A")
+            target = edge.get("target", "N/A")
+            relation = edge.get("relation", "related_to")
+            weight = edge.get("weight", 1.0)
+            print(f"  - {source} --[{relation}, w={weight}]--> {target}")
 
     def _resolve_entity_id(
         self,
@@ -143,7 +242,8 @@ class DemoReport:
             return "-"
         return ", ".join(str(x) for x in items[:8])
 
-    def _wrap(self, text: str, width: int = 75) -> str:
+    def _wrap(self, text: str, width: int = 78) -> str:
+        import textwrap
         return textwrap.fill(str(text), width=width, subsequent_indent="    ")
 
 
@@ -158,7 +258,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--limit",
         type=int,
-        default=5,
+        default=DEFAULT_REPORT_LIMIT,
         help="Number of records per source",
     )
     return parser.parse_args()

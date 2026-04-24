@@ -1,5 +1,76 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.Python
 venv/
 .venv/
-__pycache__/
-*.pyc
+env/
+ENV/
+pip-wheel-metadata/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Python local files
 .env
+.env.*
+!.env.example
+
+# Jupyter
+.ipynb_checkpoints/
+
+# FastAPI / local outputs
+outputs/
+reports/
+*.log
+
+# Go
+bin/
+*.test
+*.out
+coverage.out
+go.work
+go.work.sum
+
+# Go build artifacts
+agent-go/cmd/agent-go/agent-go
+agent-go/*.exe
+agent-go/**/*.exe
+
+# Node / misc, if any
+node_modules/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# Mongo / local db dumps
+dump/
+*.bson
+*.metadata.json
+
+# Cache
+.cache/
+tmp/
+temp/
+
+report_outputs/

@@ -2,6 +2,8 @@ module github.com/furkankorkmaz309/threat-agent
 
 go 1.24.0
 
+toolchain go1.24.2
+
 require (
 	github.com/go-rod/rod v0.116.2
 	github.com/go-rod/stealth v0.4.9
