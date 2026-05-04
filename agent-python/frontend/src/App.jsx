@@ -123,6 +123,150 @@ function MetricCard({ label, value }) {
   );
 }
 
+function titleCase(value) {
+  return String(value || "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+function compactValue(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  if (Array.isArray(value)) return value.length ? value.join(", ") : "-";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function scoreTone(value) {
+  const n = Number(value);
+  if (Number.isNaN(n)) return "neutral";
+  if (n < 0) return "negative";
+  if (n >= 20) return "critical";
+  if (n >= 8) return "high";
+  if (n > 0) return "positive";
+  return "neutral";
+}
+
+function BreakdownBar({ label, value, maxAbs }) {
+  const numeric = Number(value || 0);
+  const width = maxAbs > 0 ? Math.min(100, Math.abs(numeric / maxAbs) * 100) : 0;
+  return (
+    <div className="breakdown-row" data-tone={scoreTone(numeric)}>
+      <div className="breakdown-row-head">
+        <span>{titleCase(label)}</span>
+        <strong>{formatNumber(numeric)}</strong>
+      </div>
+      <div className="breakdown-track">
+        <div className="breakdown-fill" style={{ width: `${width}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function ScoreBreakdown({ breakdown = {} }) {
+  const entries = Object.entries(breakdown || {}).filter(([key, value]) => {
+    if (["pre_graph_score", "final_score"].includes(key)) return false;
+    return typeof value === "number" || (typeof value === "string" && value !== "" && !Number.isNaN(Number(value)));
+  });
+
+  const maxAbs = Math.max(1, ...entries.map(([, value]) => Math.abs(Number(value || 0))));
+  const finalScore = breakdown?.final_score;
+  const preGraphScore = breakdown?.pre_graph_score;
+
+  return (
+    <div className="score-breakdown">
+      <div className="score-summary-row">
+        <MetricCard label="Pre-graph score" value={formatNumber(preGraphScore)} />
+        <MetricCard label="Final score" value={formatNumber(finalScore)} />
+      </div>
+      <div className="breakdown-bars">
+        {entries.length ? entries.map(([key, value]) => (
+          <BreakdownBar key={key} label={key} value={Number(value)} maxAbs={maxAbs} />
+        )) : <div className="empty-state">No numeric breakdown available.</div>}
+      </div>
+    </div>
+  );
+}
+
+function EntityGroup({ label, values }) {
+  const safeValues = Array.isArray(values) ? values.filter(Boolean) : [];
+  if (!safeValues.length) return null;
+
+  return (
+    <div className="entity-group">
+      <div className="entity-label">{titleCase(label)}</div>
+      <div className="entity-chip-row">
+        {safeValues.slice(0, 14).map((value) => (
+          <span key={`${label}-${value}`} className="entity-chip">{value}</span>
+        ))}
+        {safeValues.length > 14 ? <span className="entity-chip muted-chip">+{safeValues.length - 14}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+function NlpEntityPanel({ entities = {} }) {
+  const preferredOrder = [
+    "cve_ids",
+    "cwe_ids",
+    "products",
+    "versions",
+    "vuln_types",
+    "impacts",
+    "threat_terms",
+    "iocs",
+    "domains",
+    "keywords",
+    "salient_phrases",
+  ];
+  const keys = preferredOrder.filter((key) => Array.isArray(entities?.[key]) && entities[key].length);
+
+  if (!keys.length) {
+    return <div className="empty-state">No NLP entities were extracted for this record.</div>;
+  }
+
+  return (
+    <div className="entity-panel">
+      {keys.map((key) => <EntityGroup key={key} label={key} values={entities[key]} />)}
+    </div>
+  );
+}
+
+function EvidenceMetricGrid({ evidence = {}, relationSummary = {} }) {
+  const nlp = evidence?.nlp_entities || {};
+  const highSignalTerms = [
+    ...(nlp.vuln_types || []),
+    ...(nlp.impacts || []),
+    ...(nlp.threat_terms || []),
+  ];
+
+  return (
+    <div className="metric-strip">
+      <MetricCard label="CVSS" value={formatNumber(evidence.cvss_score)} />
+      <MetricCard label="URLhaus links" value={evidence.related_urlhaus_count ?? 0} />
+      <MetricCard label="Dread links" value={evidence.related_dread_count ?? 0} />
+      <MetricCard label="Evidence relations" value={relationSummary.total_relations ?? 0} />
+      <MetricCard label="Extracted entities" value={Object.values(nlp).reduce((sum, values) => sum + (Array.isArray(values) ? values.length : 0), 0)} />
+      <MetricCard label="High-signal terms" value={highSignalTerms.length} />
+    </div>
+  );
+}
+
+function SourceContributionPanel({ contributions = {} }) {
+  const rows = Object.entries(contributions || {}).filter(([, value]) => value !== null && value !== undefined);
+  if (!rows.length) return <div className="empty-state">No source contribution detail available.</div>;
+
+  return (
+    <div className="contribution-grid">
+      {rows.map(([key, value]) => (
+        <div key={key} className="contribution-card">
+          <span>{titleCase(key)}</span>
+          <strong>{compactValue(value)}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function formatNumber(value, digits = 2) {
   if (value === null || value === undefined || value === "") return "-";
   const n = Number(value);
@@ -337,6 +481,7 @@ export default function App() {
               <div className="hero-chips">
                 <span className="hero-chip">Graph-supported context</span>
                 <span className="hero-chip">Explainable dynamic scoring</span>
+                <span className="hero-chip">NLP entity extraction</span>
                 <span className="hero-chip">Comparative evaluation</span>
                 <span className="hero-chip">Live payload analysis</span>
               </div>
@@ -571,26 +716,45 @@ export default function App() {
                     ]}
                   />
 
-                  <div className="two-col">
-                    <div className="panel">
-                      <h3>Feature Breakdown</h3>
-                      <pre className="pre-block">{JSON.stringify(detail.feature_breakdown, null, 2)}</pre>
+                  <div className="analysis-overview-panel">
+                    <h3>Evidence Overview</h3>
+                    <EvidenceMetricGrid evidence={detail.evidence || {}} relationSummary={detail.relation_summary || {}} />
+                  </div>
+
+                  <div className="panel">
+                    <div className="panel-heading-row">
+                      <div>
+                        <h3>Explainable Score Breakdown</h3>
+                        <p>Shows which analysis signals moved the dynamic risk score up or down.</p>
+                      </div>
                     </div>
-                    <div className="panel">
-                      <h3>Graph Summary</h3>
-                      <pre className="pre-block">{JSON.stringify(detail.graph_summary, null, 2)}</pre>
+                    <ScoreBreakdown breakdown={detail.feature_breakdown || {}} />
+                  </div>
+
+                  <div className="panel">
+                    <div className="panel-heading-row">
+                      <div>
+                        <h3>NLP Entity Extraction</h3>
+                        <p>Security entities extracted from the raw record and used by retrieval, correlation, and scoring.</p>
+                      </div>
                     </div>
+                    <NlpEntityPanel entities={detail.evidence?.nlp_entities || {}} />
                   </div>
 
                   <div className="two-col">
                     <div className="panel">
-                      <h3>Why Prioritized</h3>
-                      <pre className="pre-block">{JSON.stringify(detail.source_contributions || {}, null, 2)}</pre>
+                      <h3>Source Contributions</h3>
+                      <SourceContributionPanel contributions={detail.source_contributions || {}} />
                     </div>
                     <div className="panel">
                       <h3>Counterfactuals</h3>
                       <pre className="pre-block">{JSON.stringify(detail.counterfactuals || {}, null, 2)}</pre>
                     </div>
+                  </div>
+
+                  <div className="panel">
+                    <h3>Graph Summary</h3>
+                    <pre className="pre-block">{JSON.stringify(detail.graph_summary, null, 2)}</pre>
                   </div>
 
                   <div className="two-col">

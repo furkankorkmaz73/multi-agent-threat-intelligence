@@ -300,3 +300,16 @@ What changed:
 - API results now include `evidence.nlp_entities`, which can be rendered directly in the dashboard.
 
 The goal is not to claim a perfect ML model. The goal is to provide a transparent, explainable prioritization model where every score component can be inspected and defended.
+
+
+## Dashboard analysis visibility
+
+The frontend now renders the analysis layer directly instead of hiding it in raw JSON:
+
+- Evidence overview metrics for CVSS, linked URLhaus/Dread records, relation count, extracted entities and high-signal terms.
+- Visual score breakdown bars for CVSS, NLP context, correlation, cross-source, graph and age-penalty components.
+- NLP entity chips for CVEs, CWEs, products, versions, vulnerability types, impacts, threat terms, IOCs, domains, keywords and salient phrases.
+- Source contribution cards and counterfactual output for explainability.
+
+This makes the core NLP/correlation/risk-engine behavior visible during demos and manual analysis.
+
