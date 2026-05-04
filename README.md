@@ -1,74 +1,223 @@
 # Multi-Agent Cyber Threat Intelligence & Risk Analysis System
 
-This project presents a multi-agent based system designed to improve cyber threat intelligence (CTI) and dynamic risk analysis for critical systems.
+Bu proje, CVE/NVD, URLhaus ve Dread benzeri açık kaynak tehdit istihbaratı sinyallerini birleştirerek dinamik risk skoru üreten çok ajanlı bir CTI analiz prototipidir.
 
-## Overview
+## Mevcut Durum
 
-Modern cyber threat intelligence involves large volumes of heterogeneous data from multiple sources such as vulnerability databases (CVE) and threat feeds (e.g., URLhaus, Dark Web). These sources are often analyzed independently, which limits the ability to assess real-world risk accurately.
+Proje artık yalnızca proposal aşamasında değildir. Mevcut kod tabanında şu parçalar bulunur:
 
-This project proposes a multi-agent architecture that correlates data from different sources and performs contextual risk analysis.
+- Go tabanlı veri toplama ajanları
+- MongoDB üzerinde kalıcı veri saklama
+- Python analiz ve orkestrasyon katmanı
+- FastAPI tabanlı analiz API'si
+- React/Vite tabanlı dashboard
+- Risk skorlama, korelasyon, graph analizi ve raporlama modülleri
+- Python test dosyaları
 
-## Key Features
+Bu haliyle proje akademik demo/prototip olarak sunulabilir. Production kullanımı için güvenlik, deployment, gözlemlenebilirlik ve gerçek veri validasyonu tarafında ek çalışma gerekir.
 
-- Multi-agent architecture for modular data processing
-- Integration of multiple threat intelligence sources (CVE, URLhaus, Dark Web)
-- Graph-based relationship modeling
-- Dynamic risk scoring mechanism
-- Context-aware vulnerability prioritization
+## Mimari
 
-## Risk Model
+```text
+Threat Sources
+  ├─ NVD / CVE
+  ├─ URLhaus
+  └─ Dread-like source
+        ↓
+Go Collectors
+        ↓
+MongoDB
+        ↓
+Python Worker / Analysis Pipeline
+  ├─ Risk Engine
+  ├─ Correlator
+  ├─ Graph Builder
+  ├─ Diagnostic Agent
+  └─ Recommender Agent
+        ↓
+FastAPI
+        ↓
+React Dashboard
+```
 
-The system uses a weighted risk scoring model:
+## Klasör Yapısı
 
-Risk = w1·CVSS + w2·Exploit + w3·Recency + w4·Centrality
+```text
+agent-go/                 Go veri toplama ajanları
+agent-python/src/         Python analiz, API, core ve reporting modülleri
+agent-python/tests/       Python testleri
+agent-python/frontend/    React dashboard
+docker-compose.yml        MongoDB + API + frontend geliştirme ortamı
+.env.example              Örnek ortam değişkenleri
+```
 
-Where:
+## Güvenlik Notu
 
-- CVSS: Technical severity of the vulnerability
-- Exploit: Presence of active exploitation indicators
-- Recency: Freshness of the vulnerability
-- Centrality: Importance in the threat graph
+Gerçek `.env` dosyası repoya eklenmemelidir. Bu repoda yalnızca `.env.example` tutulur.
 
-Initial weights:
+Yapılması gerekenler:
 
-- w1 = 0.4
-- w2 = 0.3
-- w3 = 0.2
-- w4 = 0.1
+1. `.env.example` dosyasını `.env` olarak kopyalayın.
+2. Gerçek `CVE_KEY`, `MONGO_URI` ve diğer değerleri `.env` içine yazın.
+3. `.env` dosyasını commit etmeyin.
+4. Daha önce gerçek anahtarlar paylaşılmışsa ilgili API key ve connection string değerlerini değiştirin.
 
-These weights are subject to optimization based on experimental results.
+```bash
+cp .env.example .env
+```
 
-## Architecture
+## Kurulum
 
-The system consists of the following components:
+### Python API ve Worker
 
-- Data Collection Agents
-- Processing Layer
-- Graph Model
-- Risk Analysis Engine
-- Output / Reporting Layer
+```bash
+cd agent-python
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
-## Technologies
+API'yi başlatmak için:
 
-- Go (data collection & processing)
-- Python (analysis & orchestration)
-- Graph-based modeling
-- Threat intelligence data sources
+```bash
+PYTHONPATH=src uvicorn api.app:app --reload
+```
 
-## Repository Structure
+Worker'ı tek seferlik çalıştırmak için:
 
-agent-go/       -> data collection agents (Go)
-agent-python/   -> analysis & orchestration (Python)
+```bash
+PYTHONPATH=src python src/main.py --source all --run-once
+```
 
-## Project Status
+### Go Veri Toplama
 
-This project is developed as part of an academic research study and is currently in the proposal / prototype stage.
+```bash
+cd agent-go
+go test ./...
+go run ./cmd/agent-go -source cve -limit 20
+```
 
-## Contribution
+Desteklenen kaynaklar:
 
-This project aims to provide a more realistic and context-aware approach to cyber threat analysis by combining vulnerability data with threat intelligence signals.
+```text
+cve
+urlhaus
+dread
+```
 
----
+### Frontend
+
+```bash
+cd agent-python/frontend
+npm install
+npm run dev
+```
+
+Frontend varsayılan olarak API'ye şu adresten bağlanır:
+
+```text
+http://127.0.0.1:8000
+```
+
+Bunu değiştirmek için `agent-python/frontend/.env` dosyasına şunu ekleyin:
+
+```text
+VITE_API_BASE=http://127.0.0.1:8000
+```
+
+## Docker Compose ile Çalıştırma
+
+Önce `.env` dosyasını oluşturun:
+
+```bash
+cp .env.example .env
+```
+
+Ardından servisleri başlatın:
+
+```bash
+docker compose up --build
+```
+
+Worker'ı ayrıca çalıştırmak için:
+
+```bash
+docker compose --profile worker up worker
+```
+
+## API Örnekleri
+
+Health check:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+CVE analizi:
+
+```bash
+curl -X POST http://127.0.0.1:8000/analyze/cve \
+  -H "Content-Type: application/json" \
+  -d '{"_id":"CVE-2026-DEMO","descriptions":[{"value":"remote code execution in vpn appliance"}]}'
+```
+
+Dashboard için analiz edilmiş bulgular:
+
+```bash
+curl http://127.0.0.1:8000/findings/top-risky?limit=10
+```
+
+## Risk Modeli
+
+Risk skoru aşağıdaki sinyallerin birlikte değerlendirilmesiyle üretilir:
+
+- CVSS / teknik şiddet
+- URLhaus korelasyonları
+- Dread benzeri tehdit sinyalleri
+- Graph centrality ve edge confidence
+- Zaman / güncellik etkisi
+- Semantic similarity
+- Opsiyonel LLM destekli açıklama ve öneriler
+
+Model deterministik bir güvenlik kararı yerine önceliklendirme desteği sağlar. Gerçek ortamda doğrulama ve tuning gerekir.
+
+## Testler
+
+```bash
+cd agent-python
+PYTHONPATH=src pytest -q
+```
+
+Testler minimal ortamlarda `pymongo` bulunmadığında collection aşamasında kırılmaması için test stub'ı içerir. Gerçek entegrasyon testleri için MongoDB çalışır durumda olmalıdır.
+
+## Yapılabilecek Geliştirmeler
+
+### Kısa Vadeli
+
+- Testleri tam dependency kurulu ortamda çalıştırıp kalan hataları düzeltmek
+- API route'larını ayrı dosyalara bölmek
+- Frontend'e filtreleme ve tarih aralığı eklemek
+- CI pipeline eklemek
+- Docker image'larını production için optimize etmek
+
+### Orta Vadeli
+
+- Repository pattern ile MongoDB bağımlılığını azaltmak
+- Daha ayrıntılı logging ve metrics eklemek
+- Risk skorunu benchmark veri setleriyle değerlendirmek
+- Semantic model backend'ini production için netleştirmek
+- Dashboard'a export ve karşılaştırma ekranları eklemek
+
+### Uzun Vadeli
+
+- Deployment ortamı için TLS, auth ve rate limiting eklemek
+- Gerçek tehdit istihbaratı feed'leriyle validasyon yapmak
+- Model ağırlıklarını veriyle optimize etmek
+- Alerting ve scheduled ingestion eklemek
+
+## Lisans / Kullanım
+
+Bu proje akademik çalışma ve prototip amaçlıdır. Dark web veya üçüncü taraf kaynaklarla çalışırken ilgili kaynakların kullanım şartları, yasal sınırlar ve etik kurallar dikkate alınmalıdır.
 
 ## Author
 

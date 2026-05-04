@@ -4,12 +4,21 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/furkankorkmaz309/threat-agent/internal/app"
 	"github.com/furkankorkmaz309/threat-agent/internal/db"
 	"github.com/furkankorkmaz309/threat-agent/internal/fetch"
 	"github.com/joho/godotenv"
 )
+
+func loadEnvFiles() {
+	if envFile := strings.TrimSpace(os.Getenv("ENV_FILE")); envFile != "" {
+		_ = godotenv.Load(envFile)
+		return
+	}
+	_ = godotenv.Load(".env", "../.env", "../../.env", "../../../.env")
+}
 
 func main() {
 	source := flag.String("source", "", "cve, urlhaus, dread")
@@ -20,8 +29,11 @@ func main() {
 
 	appInstance := app.New()
 
-	_ = godotenv.Load("../../../.env")
-	db.Init(appInstance)
+	loadEnvFiles()
+	if err := db.Init(appInstance); err != nil {
+		fmt.Printf("[ERROR] Database initialization failed: %v\n", err)
+		os.Exit(2)
+	}
 
 	if *source == "" {
 		fmt.Println("[ERROR] Missing -source parameter")

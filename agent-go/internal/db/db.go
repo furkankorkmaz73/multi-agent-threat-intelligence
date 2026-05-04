@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"regexp"
 	"sort"
@@ -25,15 +26,27 @@ func InitDB(uri string) (*mongo.Client, error) {
 	return mongo.Connect(context.Background(), clientOptions)
 }
 
-func Init(appInstance *app.App) {
+func Init(appInstance *app.App) error {
 	uri := os.Getenv("MONGO_URI")
 	client, err := InitDB(uri)
 	if err != nil {
-		return
+		return err
 	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := client.Ping(ctx, nil); err != nil {
+		return fmt.Errorf("mongo ping failed: %w", err)
+	}
+
 	appInstance.MongoClient = client
-	appInstance.Database = "threat_intel"
+	dbName := strings.TrimSpace(os.Getenv("DB_NAME"))
+	if dbName == "" {
+		dbName = "threat_intel"
+	}
+	appInstance.Database = dbName
 	EnsureIndexes(appInstance)
+	return nil
 }
 
 func EnsureIndexes(appInstance *app.App) {

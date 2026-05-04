@@ -23,7 +23,13 @@ recommender_agent = RecommenderAgent()
 SETTINGS = get_settings()
 
 app = FastAPI(title="Threat-Agent API", version="0.2.0", description="API for multi-source cyber threat intelligence analysis results.")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=SETTINGS.api.cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class APIRepository:

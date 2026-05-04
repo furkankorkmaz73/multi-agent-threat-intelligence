@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 import os
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 try:
     from dotenv import load_dotenv
@@ -13,9 +13,16 @@ except Exception:
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-ENV_PATH = BASE_DIR.parent / ".env"
+PROJECT_ROOT = BASE_DIR.parent
 
-load_dotenv(dotenv_path=ENV_PATH)
+# Load local environment files without requiring secrets to be committed.
+# Later files override earlier values only when variables are not already set by the shell.
+for env_path in (PROJECT_ROOT / ".env", BASE_DIR / ".env"):
+    load_dotenv(dotenv_path=env_path, override=False)
+
+
+def _csv_env(name: str, default: str = "") -> List[str]:
+    return [item.strip() for item in os.getenv(name, default).split(",") if item.strip()]
 
 
 @dataclass(frozen=True)
@@ -89,8 +96,14 @@ class SemanticConfig:
 
 
 @dataclass(frozen=True)
+class APIConfig:
+    cors_origins: List[str] = field(default_factory=lambda: _csv_env("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"))
+
+
+@dataclass(frozen=True)
 class AppSettings:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
+    api: APIConfig = field(default_factory=APIConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     scoring: ScoreWeights = field(default_factory=ScoreWeights)
