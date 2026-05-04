@@ -1,54 +1,34 @@
-import re
+from __future__ import annotations
+
 from typing import List
 
-
-STOPWORDS = {
-    "the", "and", "for", "with", "that", "this", "from", "into", "have", "has",
-    "allow", "allows", "could", "would", "there", "their", "them", "been",
-    "being", "after", "before", "about", "through", "remote", "local", "attack",
-    "attacker", "attackers", "vulnerability", "vulnerabilities", "product",
-    "products", "component", "components", "affected", "impact", "issue",
-    "causes", "using", "used", "when", "where", "which", "via",
-    "unauthenticated", "authenticated", "arbitrary", "code", "execution",
-    "privilege", "escalation", "denial", "service", "overflow", "buffer",
-    "improper", "input", "validation", "application", "software", "version",
-    "versions", "may", "can", "also",
-}
-
-HIGH_SIGNAL_TERMS = {
-    "rce", "exploit", "0day", "zero-day", "zeroday", "leak", "breach",
-    "malware", "botnet", "cobaltstrike", "ransomware", "phishing",
-    "credential", "access", "shell", "loader", "dropper", "backdoor",
-}
+from analysis.nlp_features import extract_nlp_features
 
 
 def extract_keywords(text: str, extra: str = "") -> List[str]:
-    combined = f"{text} {extra}".lower()
-    cve_ids = re.findall(r"cve-\d{4}-\d{4,7}", combined, flags=re.IGNORECASE)
+    """Return high-signal, normalized search terms for cross-source retrieval.
 
-    tokens = re.findall(r"[a-zA-Z0-9\-_\.]{4,}", combined)
-    cleaned: List[str] = []
-
-    for token in tokens:
-        token = token.strip("._- ").lower()
-        if not token or token in STOPWORDS or token.isdigit():
-            continue
-        cleaned.append(token)
-
-    boosted: List[str] = []
-    for token in cleaned:
-        if token in HIGH_SIGNAL_TERMS:
-            boosted.append(token)
-        elif any(ch.isdigit() for ch in token):
-            boosted.append(token)
-        elif token[0].isalpha():
-            boosted.append(token)
-
+    The old implementation was mostly token filtering. This version keeps the same
+    public function but prioritizes CVE/CWE identifiers, products, vulnerability
+    types, threat terms, and salient phrases from the lightweight NLP extractor.
+    """
+    features = extract_nlp_features(text, extra)
+    ordered = (
+        features.cve_ids
+        + features.cwe_ids
+        + features.products
+        + features.vuln_types
+        + features.threat_terms
+        + features.impacts
+        + features.keywords
+        + features.salient_phrases
+    )
     seen = set()
     result: List[str] = []
-    for item in cve_ids + boosted:
-        if item not in seen:
+    for item in ordered:
+        if item and item not in seen:
             seen.add(item)
             result.append(item)
-
-    return result[:12]
+        if len(result) >= 12:
+            break
+    return result

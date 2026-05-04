@@ -278,3 +278,25 @@ make test-go
 make setup-frontend
 make build-frontend
 ```
+
+## Analysis Engine v2
+
+The analysis layer has been redesigned to make the project value clearer and the scoring easier to defend.
+
+What changed:
+
+- Lightweight NLP extraction now identifies CVE/CWE identifiers, affected products, versions, vulnerability types, attacker impact, threat terms, URLs and domains.
+- Keyword retrieval is now based on normalized security entities instead of mostly raw token filtering.
+- Cross-source correlation now uses an evidence gate before adding score: exact CVE matches, entity alignment, high-signal threat terms, lexical overlap, or semantic+temporal support.
+- Correlation scoring uses diminishing returns so many weak matches do not overpower one strong match.
+- CVE scoring now separates intrinsic NLP context from observed threat activity:
+  - `base_cvss_component`
+  - `nlp_context_bonus`
+  - `urlhaus_correlation_bonus`
+  - `dread_correlation_bonus`
+  - `cross_source_bonus`
+  - `graph_bonus`
+  - `age_penalty`
+- API results now include `evidence.nlp_entities`, which can be rendered directly in the dashboard.
+
+The goal is not to claim a perfect ML model. The goal is to provide a transparent, explainable prioritization model where every score component can be inspected and defended.

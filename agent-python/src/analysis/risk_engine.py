@@ -6,6 +6,7 @@ from agents.llm_helper import generate_explanation
 from analysis.correlator import DREAD_CLASSIFIERS, score_dread_matches, score_urlhaus_matches
 from analysis.graph_builder import GraphBuilder
 from analysis.keyword_extractor import extract_keywords
+from analysis.nlp_features import extract_nlp_features
 from analysis.scoring import calculate_age_days, calculate_age_penalty, calculate_recentness_bonus, extract_cvss_score, level_from_score
 from config import get_settings
 
@@ -32,7 +33,8 @@ class RiskEngine:
             return self._build_invalid_cve_analysis(cve_id, description)
 
         cvss_score, cvss_version = extract_cvss_score(data.get("metrics", {}))
-        keywords = extract_keywords(description, cve_id)
+        nlp_features = extract_nlp_features(description, cve_id)
+        keywords = nlp_features.all_terms[:18]
         age_days = calculate_age_days(data.get("published"))
         recentness_bonus = calculate_recentness_bonus(age_days)
         age_penalty = calculate_age_penalty(age_days)
@@ -43,9 +45,13 @@ class RiskEngine:
         urlhaus_score, urlhaus_explanations, urlhaus_stats = score_urlhaus_matches(urlhaus_matches, keywords, data.get("published"))
         dread_score, dread_explanations, dread_categories, dread_stats = score_dread_matches(dread_matches, keywords, data.get("published"))
         llm_bonus, llm_explanations = self._score_llm_cve_info(llm_info)
+        nlp_bonus, nlp_explanations = self._score_nlp_context(nlp_features.to_dict())
 
         base_score = self.weights.zero_cvss_fallback if cvss_score == 0 else cvss_score * self.weights.base_cvss_multiplier
-        pre_graph_score = base_score + recentness_bonus + urlhaus_score + dread_score + llm_bonus - age_penalty
+        # Transparent 0-10 scoring: base CVSS is the anchor, NLP adds intrinsic exploitability
+        # context, cross-source matches add observed threat activity, and age/graph refine priority.
+        cross_source_score = urlhaus_score + dread_score
+        pre_graph_score = base_score + recentness_bonus + cross_source_score + llm_bonus + nlp_bonus - age_penalty
 
         graph = self.graph_builder.build_entity_graph(
             entity_type="cve",
@@ -53,6 +59,7 @@ class RiskEngine:
             record=data,
             evidence={
                 "keywords": keywords,
+                "nlp_entities": nlp_features.to_dict(),
                 "cvss_score": cvss_score,
                 "llm_products": llm_info.get("products", []),
                 "llm_vuln_type": llm_info.get("vuln_type"),
@@ -70,8 +77,8 @@ class RiskEngine:
         final_score = max(0.0, min(round(raw_score, 2), 10.0))
         risk_level = level_from_score(final_score)
 
-        counterfactuals = self._build_counterfactuals(final_score, graph_bonus, urlhaus_score, dread_score, llm_bonus)
-        source_contributions = self._build_source_contributions("cve", base_score, urlhaus_score, dread_score, llm_bonus, graph_bonus, {"age_penalty": age_penalty})
+        counterfactuals = self._build_counterfactuals(final_score, graph_bonus, urlhaus_score, dread_score, llm_bonus + nlp_bonus)
+        source_contributions = self._build_source_contributions("cve", base_score, urlhaus_score, dread_score, llm_bonus + nlp_bonus, graph_bonus, {"age_penalty": age_penalty})
         relation_summary = self._summarize_relations(graph_edges)
         confidence = self._calculate_confidence(
             has_cvss=cvss_score > 0,
@@ -91,6 +98,7 @@ class RiskEngine:
             explanations.append("Older vulnerability record reduced current priority score.")
         explanations.extend(urlhaus_explanations)
         explanations.extend(dread_explanations)
+        explanations.extend(nlp_explanations)
         explanations.extend(llm_explanations)
         if graph_bonus > 0:
             explanations.append(f"Graph connectivity increased the score by {round(graph_bonus, 2)}.")
@@ -132,6 +140,7 @@ class RiskEngine:
             "explanation": explanations,
             "evidence": {
                 "keywords": keywords,
+                "nlp_entities": nlp_features.to_dict(),
                 "cvss_score": cvss_score,
                 "cvss_version": cvss_version,
                 "age_days": age_days,
@@ -152,7 +161,9 @@ class RiskEngine:
                 "recentness_bonus": round(recentness_bonus, 2),
                 "urlhaus_correlation_bonus": round(urlhaus_score, 2),
                 "dread_correlation_bonus": round(dread_score, 2),
+                "nlp_context_bonus": round(nlp_bonus, 2),
                 "llm_context_bonus": round(llm_bonus, 2),
+                "cross_source_bonus": round(cross_source_score, 2),
                 "age_penalty": round(age_penalty, 2),
                 "graph_centrality_score": round(float(graph_summary.get("centrality_score", 0.0)), 4),
                 "graph_bonus": round(graph_bonus, 2),
@@ -397,6 +408,40 @@ class RiskEngine:
             score += 0.10
             explanations.append("Attacker impact context increased prioritization confidence.")
         return min(score, self.weights.llm_bonus_cap), explanations
+
+    def _score_nlp_context(self, entities: Dict[str, Any]) -> tuple[float, List[str]]:
+        """Score intrinsic exploitability context extracted from text only.
+
+        This is intentionally capped so NLP cannot turn a low-severity, uncorroborated
+        vulnerability into a high-risk item by itself. Cross-source evidence still carries
+        the main dynamic-priority signal.
+        """
+        score = 0.0
+        explanations: List[str] = []
+        vuln_types = set(entities.get("vuln_types") or [])
+        impacts = set(entities.get("impacts") or [])
+        threat_terms = set(entities.get("threat_terms") or [])
+        products = set(entities.get("products") or [])
+
+        if {"remote_code_execution", "authentication_bypass", "privilege_escalation"} & vuln_types:
+            score += 0.45
+            explanations.append("NLP identified a high-impact vulnerability type in the CVE description.")
+        elif vuln_types:
+            score += 0.20
+            explanations.append("NLP identified a concrete vulnerability type in the CVE description.")
+
+        if {"takeover", "credential_theft", "initial_access", "data_leak"} & impacts:
+            score += 0.30
+            explanations.append("NLP extracted attacker-impact context from the description.")
+
+        if {"exploit", "zero-day", "0day", "rce", "ransomware", "malware"} & threat_terms:
+            score += 0.25
+            explanations.append("Threat/exploit terminology in the text increased intrinsic prioritization.")
+
+        if products:
+            score += min(len(products) * 0.03, 0.12)
+
+        return min(round(score, 2), 0.85), explanations
 
     def _calculate_confidence(self, has_cvss: bool, urlhaus_match_count: int, dread_match_count: int, keyword_count: int, llm_fields_count: int, graph_score: float) -> float:
         confidence = 0.35
