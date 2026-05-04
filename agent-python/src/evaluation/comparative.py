@@ -95,7 +95,13 @@ def build_cve_comparison_frame(rows: Iterable[Dict[str, Any]]) -> pd.DataFrame:
         df["urlhaus_correlation_bonus"].fillna(0).astype(float)
         + df["dread_correlation_bonus"].fillna(0).astype(float)
     ).round(2)
-    df["semantic_signal"] = df[["urlhaus_avg_semantic_score", "dread_avg_semantic_score"]].fillna(0).max(axis=1).round(4)
+    df["semantic_signal"] = (
+        df[["urlhaus_avg_semantic_score", "dread_avg_semantic_score"]]
+        .apply(pd.to_numeric, errors="coerce")
+        .fillna(0)
+        .max(axis=1)
+        .round(4)
+    )
     df["correlation_count"] = df["related_urlhaus_count"].fillna(0).astype(int) + df["related_dread_count"].fillna(0).astype(int)
     df["source_diversity_score"] = (df["related_urlhaus_count"].fillna(0).astype(int) > 0).astype(int) + (df["related_dread_count"].fillna(0).astype(int) > 0).astype(int)
     df["graph_support_ratio"] = (df["graph_bonus"].fillna(0).astype(float) / df["risk_score"].replace(0, 1)).round(4)

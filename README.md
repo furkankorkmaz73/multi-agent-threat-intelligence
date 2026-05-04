@@ -48,6 +48,8 @@ agent-python/src/         Python analiz, API, core ve reporting modülleri
 agent-python/tests/       Python testleri
 agent-python/frontend/    React dashboard
 docker-compose.yml        MongoDB + API + frontend geliştirme ortamı
+Makefile                  Sık kullanılan kurulum/test/çalıştırma komutları
+.github/workflows/ci.yml  Python, Go ve frontend CI doğrulamaları
 .env.example              Örnek ortam değişkenleri
 ```
 
@@ -125,6 +127,22 @@ Bunu değiştirmek için `agent-python/frontend/.env` dosyasına şunu ekleyin:
 VITE_API_BASE=http://127.0.0.1:8000
 ```
 
+## Makefile ile Hızlı Komutlar
+
+Kök dizinden kullanılabilir:
+
+```bash
+make setup-python
+make test-python
+make run-api
+make run-worker
+make setup-frontend
+make run-frontend
+make build-frontend
+make test-go
+make docker-up
+```
+
 ## Docker Compose ile Çalıştırma
 
 Önce `.env` dosyasını oluşturun:
@@ -142,8 +160,10 @@ docker compose up --build
 Worker'ı ayrıca çalıştırmak için:
 
 ```bash
-docker compose --profile worker up worker
+docker compose --profile worker up --build worker
 ```
+
+Docker Compose servisleri artık özel Dockerfile dosyalarını kullanır; container her açılışta dependency kurmaz. MongoDB için healthcheck vardır ve API/worker Mongo hazır olduktan sonra başlar.
 
 ## API Örnekleri
 
@@ -183,22 +203,35 @@ Model deterministik bir güvenlik kararı yerine önceliklendirme desteği sağl
 
 ## Testler
 
+Python testleri:
+
 ```bash
 cd agent-python
-PYTHONPATH=src pytest -q
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src pytest -q -p no:ddtrace
 ```
 
-Testler minimal ortamlarda `pymongo` bulunmadığında collection aşamasında kırılmaması için test stub'ı içerir. Gerçek entegrasyon testleri için MongoDB çalışır durumda olmalıdır.
+veya kök dizinden:
+
+```bash
+make test-python
+```
+
+API çalışırken minimal smoke test:
+
+```bash
+cd agent-python
+python scripts/smoke_api.py http://127.0.0.1:8000
+```
+
+Testler minimal ortamlarda `pymongo` bulunmadığında collection aşamasında kırılmaması için test stub'ı içerir. Bazı hazır Python ortamlarında harici `ddtrace` pytest plugin'i test sürecinin kapanışını geciktirebildiği için test komutunda `-p no:ddtrace` kullanılır. Gerçek entegrasyon testleri için MongoDB çalışır durumda olmalıdır.
 
 ## Yapılabilecek Geliştirmeler
 
 ### Kısa Vadeli
 
-- Testleri tam dependency kurulu ortamda çalıştırıp kalan hataları düzeltmek
 - API route'larını ayrı dosyalara bölmek
 - Frontend'e filtreleme ve tarih aralığı eklemek
-- CI pipeline eklemek
-- Docker image'larını production için optimize etmek
+- Docker image'larını production için daha küçük ve non-root kullanıcıyla optimize etmek
 
 ### Orta Vadeli
 
@@ -222,3 +255,26 @@ Bu proje akademik çalışma ve prototip amaçlıdır. Dark web veya üçüncü 
 ## Author
 
 Furkan Korkmaz
+
+## Son Doğrulama Durumu
+
+Bu paket hazırlanırken Python testleri şu komutla doğrulandı:
+
+```bash
+cd agent-python
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src pytest -q -p no:ddtrace
+```
+
+Sonuç:
+
+```text
+49 passed
+```
+
+Go ve frontend doğrulamaları dependency indirme gerektirdiği için internet erişimi olan ortamda şu komutlarla tekrar çalıştırılmalıdır:
+
+```bash
+make test-go
+make setup-frontend
+make build-frontend
+```
