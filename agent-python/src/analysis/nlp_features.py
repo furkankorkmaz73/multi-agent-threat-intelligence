@@ -50,6 +50,12 @@ WEAK_TERMS = {
     "system", "systems", "version", "versions", "affected", "application", "service",
     "input", "output", "request", "response", "network", "user", "users", "crafted", "prior",
     "before", "after", "through", "using", "successful", "exploitation", "exploitability",
+    # Common stopwords and generic security words that produced noisy CVE/IOC joins.
+    "a", "an", "or", "of", "to", "in", "on", "by", "as", "is", "are", "was", "were",
+    "de", "del", "la", "las", "el", "en", "y", "un", "una", "con", "que", "se",
+    "security", "secure", "device", "devices", "server", "client", "feature", "condition",
+    "cause", "result", "resulting", "valid", "validation", "management", "interface",
+    "interfaces", "connection", "packets", "software", "http", "service", "access",
 }
 
 VENDOR_HINTS = {

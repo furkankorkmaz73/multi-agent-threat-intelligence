@@ -44,6 +44,8 @@ class RiskEngine:
 
         urlhaus_score, urlhaus_explanations, urlhaus_stats = score_urlhaus_matches(urlhaus_matches, keywords, data.get("published"))
         dread_score, dread_explanations, dread_categories, dread_stats = score_dread_matches(dread_matches, keywords, data.get("published"))
+        accepted_urlhaus_matches = list(urlhaus_stats.get("accepted_matches") or [])
+        accepted_dread_matches = list(dread_stats.get("accepted_matches") or [])
         llm_bonus, llm_explanations = self._score_llm_cve_info(llm_info)
         nlp_bonus, nlp_explanations = self._score_nlp_context(nlp_features.to_dict())
 
@@ -65,8 +67,8 @@ class RiskEngine:
                 "llm_vuln_type": llm_info.get("vuln_type"),
                 "llm_impact": llm_info.get("impact"),
                 "dread_categories": dread_categories,
-                "sample_urlhaus_hits": self._sample_urlhaus_hits(urlhaus_matches),
-                "sample_dread_hits": self._sample_dread_hits(dread_matches),
+                "sample_urlhaus_hits": self._sample_urlhaus_hits(accepted_urlhaus_matches),
+                "sample_dread_hits": self._sample_dread_hits(accepted_dread_matches),
             },
         )
         graph_summary = self.graph_builder.summarize_graph(graph, root_node=f"cve:{cve_id}")
@@ -82,11 +84,14 @@ class RiskEngine:
         relation_summary = self._summarize_relations(graph_edges)
         confidence = self._calculate_confidence(
             has_cvss=cvss_score > 0,
-            urlhaus_match_count=len(urlhaus_matches),
-            dread_match_count=len(dread_matches),
+            urlhaus_match_count=len(accepted_urlhaus_matches),
+            dread_match_count=len(accepted_dread_matches),
             keyword_count=len(keywords),
             llm_fields_count=self._count_non_empty_llm_fields(llm_info),
             graph_score=float(graph_summary.get("centrality_score", 0.0)),
+            nlp_entities=nlp_features.to_dict(),
+            urlhaus_stats=urlhaus_stats,
+            dread_stats=dread_stats,
         )
 
         explanations = [f"Base risk derived from CVSS ({cvss_version}) score: {cvss_score}."]
@@ -103,8 +108,8 @@ class RiskEngine:
         if graph_bonus > 0:
             explanations.append(f"Graph connectivity increased the score by {round(graph_bonus, 2)}.")
         explanations.extend(self._build_counterfactual_explanations(counterfactuals))
-        if not urlhaus_matches and not dread_matches:
-            explanations.append("No cross-source corroboration found; score relies mainly on CVE metadata.")
+        if not accepted_urlhaus_matches and not accepted_dread_matches:
+            explanations.append("No accepted cross-source corroboration found; score relies mainly on CVE metadata and intrinsic context.")
 
         llm_text = generate_explanation({
             "entity_type": "cve",
@@ -124,7 +129,7 @@ class RiskEngine:
 
         orchestration_trace = [
             {"agent": "planner", "action": "build-analysis-plan", "status": "completed", "details": {"source": "cve", "keyword_count": len(keywords)}},
-            {"agent": "correlation", "action": "collect-cross-source-evidence", "status": "completed", "details": {"urlhaus_candidates": len(urlhaus_matches), "dread_candidates": len(dread_matches), "semantic_urlhaus": urlhaus_stats.get("avg_semantic_score", 0.0), "semantic_dread": dread_stats.get("avg_semantic_score", 0.0)}},
+            {"agent": "correlation", "action": "collect-cross-source-evidence", "status": "completed", "details": {"urlhaus_candidates": len(urlhaus_matches), "urlhaus_accepted": len(accepted_urlhaus_matches), "dread_candidates": len(dread_matches), "dread_accepted": len(accepted_dread_matches), "semantic_urlhaus": urlhaus_stats.get("avg_semantic_score", 0.0), "semantic_dread": dread_stats.get("avg_semantic_score", 0.0)}},
             {"agent": "graph", "action": "build-entity-graph", "status": "completed", "details": {"node_count": graph_summary.get("node_count", 0), "edge_count": graph_summary.get("edge_count", 0)}},
             {"agent": "risk", "action": "score-risk", "status": "completed", "details": {"pre_graph_score": round(pre_graph_score, 2), "graph_bonus": round(graph_bonus, 2), "final_score": final_score}},
             {"agent": "critic", "action": "sanity-check-score", "status": "completed", "details": {"confidence": confidence, "risk_level": risk_level}},
@@ -144,11 +149,13 @@ class RiskEngine:
                 "cvss_score": cvss_score,
                 "cvss_version": cvss_version,
                 "age_days": age_days,
-                "related_urlhaus_count": len(urlhaus_matches),
-                "related_dread_count": len(dread_matches),
+                "related_urlhaus_count": len(accepted_urlhaus_matches),
+                "related_dread_count": len(accepted_dread_matches),
+                "candidate_urlhaus_count": len(urlhaus_matches),
+                "candidate_dread_count": len(dread_matches),
                 "dread_categories": dread_categories,
-                "sample_urlhaus_hits": self._sample_urlhaus_hits(urlhaus_matches),
-                "sample_dread_hits": self._sample_dread_hits(dread_matches),
+                "sample_urlhaus_hits": self._sample_urlhaus_hits(accepted_urlhaus_matches),
+                "sample_dread_hits": self._sample_dread_hits(accepted_dread_matches),
                 "llm_products": llm_info.get("products", []),
                 "llm_versions": llm_info.get("versions", []),
                 "llm_vuln_type": llm_info.get("vuln_type"),
@@ -443,16 +450,73 @@ class RiskEngine:
 
         return min(round(score, 2), 0.85), explanations
 
-    def _calculate_confidence(self, has_cvss: bool, urlhaus_match_count: int, dread_match_count: int, keyword_count: int, llm_fields_count: int, graph_score: float) -> float:
+    def _calculate_confidence(
+        self,
+        has_cvss: bool,
+        urlhaus_match_count: int,
+        dread_match_count: int,
+        keyword_count: int,
+        llm_fields_count: int,
+        graph_score: float,
+        *,
+        nlp_entities: Optional[Dict[str, Any]] = None,
+        urlhaus_stats: Optional[Dict[str, Any]] = None,
+        dread_stats: Optional[Dict[str, Any]] = None,
+    ) -> float:
+        """Estimate confidence from accepted evidence quality, not candidate volume.
+
+        Candidate retrieval is intentionally noisy. A record should not become
+        high-confidence merely because many weak URLhaus/Dread candidates were
+        retrieved or because graph nodes were created from generic terms.
+        """
+        urlhaus_stats = urlhaus_stats or {}
+        dread_stats = dread_stats or {}
+        nlp_entities = nlp_entities or {}
+
+        accepted_external = urlhaus_match_count + dread_match_count
+        exact_hits = int(urlhaus_stats.get("exact_cve_hits", 0) or 0) + int(dread_stats.get("exact_cve_hits", 0) or 0)
+        high_signal_hits = int(urlhaus_stats.get("high_signal_hits", 0) or 0) + int(dread_stats.get("high_signal_hits", 0) or 0)
+        entity_hits = int(urlhaus_stats.get("entity_overlap_hits", 0) or 0) + int(dread_stats.get("entity_overlap_hits", 0) or 0)
+        semantic_signal = max(
+            float(urlhaus_stats.get("avg_semantic_score", 0.0) or 0.0),
+            float(dread_stats.get("avg_semantic_score", 0.0) or 0.0),
+        )
+
         confidence = 0.35
         if has_cvss:
-            confidence += 0.15
-        confidence += min(urlhaus_match_count * 0.03, 0.12)
-        confidence += min(dread_match_count * 0.03, 0.12)
-        confidence += min(keyword_count * 0.01, 0.10)
-        confidence += min(llm_fields_count * 0.03, 0.09)
-        confidence += min(graph_score * 0.15, 0.12)
-        return round(min(confidence, 0.98), 3)
+            confidence += 0.20
+
+        # Intrinsic extraction quality: useful, but capped because it is not
+        # independent corroboration.
+        nlp_quality = 0.0
+        for key in ("cve_ids", "products", "vuln_types", "impacts", "threat_terms"):
+            if nlp_entities.get(key):
+                nlp_quality += 0.025
+        confidence += min(nlp_quality, 0.12)
+
+        confidence += min(keyword_count * 0.004, 0.04)
+        confidence += min(llm_fields_count * 0.025, 0.07)
+
+        # External evidence only counts after the correlation gate accepts it.
+        confidence += min(urlhaus_match_count * 0.035, 0.14)
+        confidence += min(dread_match_count * 0.04, 0.14)
+        if exact_hits:
+            confidence += min(exact_hits * 0.10, 0.18)
+        if high_signal_hits:
+            confidence += min(high_signal_hits * 0.04, 0.10)
+        if entity_hits:
+            confidence += min(entity_hits * 0.04, 0.10)
+        if semantic_signal >= SETTINGS.semantic.similarity_floor:
+            confidence += min(semantic_signal * 0.12, 0.08)
+
+        if accepted_external > 0:
+            confidence += min(graph_score * 0.05, 0.08)
+        else:
+            confidence -= 0.10
+            if exact_hits == 0 and high_signal_hits == 0 and entity_hits == 0 and semantic_signal == 0:
+                confidence -= 0.03
+
+        return round(max(0.05, min(confidence, 0.98)), 3)
 
     def _count_non_empty_llm_fields(self, llm_info: Dict[str, Any]) -> int:
         count = 0

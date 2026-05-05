@@ -79,6 +79,7 @@ def _score_matches(
     base_features = extract_nlp_features(base_text)
 
     accepted_scores: List[float] = []
+    accepted_matches: List[Dict[str, Any]] = []
     lexical_scores: List[float] = []
     semantic_scores: List[float] = []
     temporal_scores: List[float] = []
@@ -106,7 +107,9 @@ def _score_matches(
 
         joined_terms = " ".join(match_terms)
         exact_cve = any(cve_id in joined_terms for cve_id in {t for t in base_terms if CVE_RE.fullmatch(t)})
-        high_signal_term_hits = len(_normalize_threat_terms(match_terms) & _normalize_threat_terms(base_terms + list(HIGH_IMPACT_TERMS)))
+        base_high_signal_terms = _normalize_threat_terms(base_terms) & _normalize_threat_terms(HIGH_IMPACT_TERMS)
+        candidate_high_signal_terms = _normalize_threat_terms(match_terms) & _normalize_threat_terms(HIGH_IMPACT_TERMS)
+        high_signal_term_hits = len(base_high_signal_terms & candidate_high_signal_terms)
 
         accepted, reason = _accept_match(
             source=source,
@@ -145,6 +148,7 @@ def _score_matches(
             entity_hits += 1
 
         accepted_scores.append(score)
+        accepted_matches.append(_accepted_match_summary(match, source, score=score, reason=reason))
         strongest_match_score = max(strongest_match_score, score)
         lexical_scores.append(round(lexical, 4))
         semantic_scores.append(round(semantic, 4))
@@ -197,6 +201,8 @@ def _score_matches(
         "strongest_match_score": round(strongest_match_score, 4),
         "shared_terms": sorted(set(shared_terms))[:12],
         "acceptance_reasons": sorted(set(reasons))[:8],
+        "accepted_matches": accepted_matches[:8],
+        "candidate_count": len(matches[:8]),
         "hybrid_score_cap": cap,
     }
     return min(round(total_score, 4), cap), explanations, stats
@@ -224,6 +230,35 @@ def _accept_match(
     if semantic >= max(SETTINGS.retrieval.min_semantic_support, 0.30) and temporal >= 0.2:
         return True, "semantic_temporal_support"
     return False, "weak_support"
+
+
+def _accepted_match_summary(match: Dict[str, Any], source: str, *, score: float, reason: str) -> Dict[str, Any]:
+    """Return a JSON-safe, minimal view of an accepted correlation candidate.
+
+    The risk engine and graph builder must only consume accepted evidence. Keeping
+    this summary small prevents raw feed records or ObjectIds from leaking into
+    the persisted analysis payload.
+    """
+    base = {
+        "score": round(float(score), 4),
+        "acceptance_reason": reason,
+    }
+    if source == "urlhaus":
+        base.update({
+            "url": match.get("url"),
+            "threat": match.get("threat"),
+            "tags": list(match.get("tags") or [])[:8],
+            "url_status": match.get("url_status"),
+            "date_added": match.get("date_added"),
+        })
+    else:
+        base.update({
+            "title": match.get("title"),
+            "category": match.get("category"),
+            "author": match.get("author"),
+            "created_at": match.get("created_at") or match.get("published"),
+        })
+    return base
 
 
 def _match_text(match: Dict[str, Any], source: str) -> str:
@@ -326,6 +361,8 @@ def _empty_match_stats(rejected_count: int = 0) -> Dict[str, Any]:
         "strongest_match_score": 0.0,
         "shared_terms": [],
         "acceptance_reasons": [],
+        "accepted_matches": [],
+        "candidate_count": rejected_count,
     }
 
 

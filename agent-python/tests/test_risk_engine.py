@@ -159,3 +159,50 @@ def test_graph_bonus_is_present_in_cve_breakdown():
 
     assert "graph_bonus" in breakdown
     assert breakdown["graph_bonus"] >= 0
+
+class WeakCorrelationDB:
+    def find_related_urlhaus(self, keywords, limit=10):
+        return [
+            {
+                "url": "https://refundonex.com/cloud/form_96986.pdf.ps1",
+                "threat": "malware_download",
+                "tags": ["ascii", "opendir", "powershell", "ps1"],
+                "url_status": "offline",
+                "date_added": "2026-05-04T10:00:00+00:00",
+            }
+        ]
+
+    def find_related_dread(self, keywords, limit=10):
+        return []
+
+
+def test_rejected_urlhaus_candidates_do_not_drive_graph_or_confidence():
+    engine = RiskEngine()
+    data = {
+        "_id": "CVE-2026-20100",
+        "published": "2026-03-04T10:00:00+00:00",
+        "descriptions": [
+            {
+                "lang": "en",
+                "value": (
+                    "A vulnerability in the Lua interpreter access feature of Cisco Secure Firewall "
+                    "Adaptive Security Appliance and Secure Firewall Threat Defense Software could "
+                    "allow an authenticated remote attacker to cause a denial of service condition."
+                ),
+            }
+        ],
+        "metrics": {
+            "cvss_metric_v31": [{"cvss_data": {"base_score": 7.7}}],
+        },
+    }
+
+    result = engine.evaluate_cve(data=data, db=WeakCorrelationDB())
+
+    assert result["evidence"]["candidate_urlhaus_count"] == 1
+    assert result["evidence"]["related_urlhaus_count"] == 0
+    assert result["evidence"]["sample_urlhaus_hits"] == []
+    assert result["evidence"]["urlhaus_match_stats"]["accepted_match_count"] == 0
+    assert result["feature_breakdown"]["urlhaus_correlation_bonus"] == 0
+    assert result["feature_breakdown"]["graph_bonus"] == 0
+    assert all(edge.get("relation") != "correlated_urlhaus" for edge in result["graph_edges"])
+    assert result["confidence"] <= 0.70

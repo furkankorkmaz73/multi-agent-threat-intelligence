@@ -33,6 +33,8 @@ def test_score_urlhaus_matches_returns_stats():
     assert len(explanations) > 0
     assert "avg_overlap_ratio" in stats
     assert stats["avg_overlap_ratio"] > 0
+    assert stats["accepted_match_count"] == 1
+    assert stats["accepted_matches"][0]["url"] == "http://bad.example/download.exe"
 
 
 def test_score_dread_matches_returns_categories_and_stats():
@@ -54,3 +56,32 @@ def test_score_dread_matches_returns_categories_and_stats():
     assert "exploit_sale" in categories
     assert stats["exact_cve_hits"] >= 1
     assert stats["avg_overlap_ratio"] > 0
+
+def test_weak_urlhaus_candidates_are_rejected():
+    matches = [
+        {
+            "url": "https://refundonex.com/cloud/form_96986.pdf.ps1",
+            "threat": "malware_download",
+            "tags": ["ascii", "opendir", "powershell", "ps1"],
+            "url_status": "offline",
+            "date_added": "2026-05-04T10:00:00+00:00",
+        }
+    ]
+
+    score, explanations, stats = score_urlhaus_matches(
+        matches,
+        base_keywords=[
+            "cve-2026-20100",
+            "cisco secure firewall",
+            "remote access ssl vpn",
+            "denial_of_service",
+            "service_disruption",
+        ],
+        entity_time="2026-03-04T10:00:00+00:00",
+    )
+
+    assert score == 0.0
+    assert explanations == []
+    assert stats["accepted_match_count"] == 0
+    assert stats["rejected_match_count"] == 1
+    assert stats["accepted_matches"] == []
