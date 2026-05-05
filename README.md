@@ -1,22 +1,50 @@
 # Multi-Agent Cyber Threat Intelligence & Risk Analysis System
 
-Bu proje, CVE/NVD, URLhaus ve Dread benzeri açık kaynak tehdit istihbaratı sinyallerini birleştirerek dinamik risk skoru üreten çok ajanlı bir CTI analiz prototipidir.
+A multi-agent cyber threat intelligence (CTI) prototype that collects signals from CVE/NVD, URLhaus, and Dread-like open-source threat sources, stores them in MongoDB, and produces explainable dynamic risk scores through a Python analysis pipeline.
 
-## Mevcut Durum
+The project combines:
 
-Proje artık yalnızca proposal aşamasında değildir. Mevcut kod tabanında şu parçalar bulunur:
+- Go-based threat intelligence collectors
+- MongoDB persistence
+- Python analysis and orchestration
+- FastAPI service layer
+- React/Vite dashboard
+- NLP-assisted evidence extraction
+- Cross-source correlation
+- Graph-based context analysis
+- Explainable risk scoring and recommendations
 
-- Go tabanlı veri toplama ajanları
-- MongoDB üzerinde kalıcı veri saklama
-- Python analiz ve orkestrasyon katmanı
-- FastAPI tabanlı analiz API'si
-- React/Vite tabanlı dashboard
-- Risk skorlama, korelasyon, graph analizi ve raporlama modülleri
-- Python test dosyaları
+This is intended as an academic/prototype-grade CTI analysis system. It is suitable for demonstrations and portfolio use, but additional work is required before production use.
 
-Bu haliyle proje akademik demo/prototip olarak sunulabilir. Production kullanımı için güvenlik, deployment, gözlemlenebilirlik ve gerçek veri validasyonu tarafında ek çalışma gerekir.
+---
 
-## Mimari
+## Current Status
+
+The project is no longer only a proposal. The current codebase includes:
+
+- Go collectors for external intelligence feeds
+- MongoDB-backed persistence
+- Python worker for analysis orchestration
+- FastAPI API for findings and analysis results
+- React/Vite dashboard
+- Risk scoring, correlation, graph analysis, reporting, and evaluation modules
+- Python tests for the analysis layer and API-related behavior
+- Docker Compose development environment
+- GitHub Actions CI workflow
+
+The end-to-end flow has been verified locally:
+
+```text
+Go collectors
+  → MongoDB
+  → Python analysis worker
+  → FastAPI
+  → React dashboard
+```
+
+---
+
+## Architecture
 
 ```text
 Threat Sources
@@ -29,77 +57,117 @@ Go Collectors
 MongoDB
         ↓
 Python Worker / Analysis Pipeline
-  ├─ Risk Engine
+  ├─ Planner
   ├─ Correlator
   ├─ Graph Builder
-  ├─ Diagnostic Agent
-  └─ Recommender Agent
+  ├─ Risk Engine
+  ├─ Critic
+  └─ Recommender
         ↓
 FastAPI
         ↓
 React Dashboard
 ```
 
-## Klasör Yapısı
+---
+
+## Repository Structure
 
 ```text
-agent-go/                 Go veri toplama ajanları
-agent-python/src/         Python analiz, API, core ve reporting modülleri
-agent-python/tests/       Python testleri
-agent-python/frontend/    React dashboard
-docker-compose.yml        MongoDB + API + frontend geliştirme ortamı
-Makefile                  Sık kullanılan kurulum/test/çalıştırma komutları
-.github/workflows/ci.yml  Python, Go ve frontend CI doğrulamaları
-.env.example              Örnek ortam değişkenleri
+agent-go/                  Go-based data collection agents
+agent-python/src/          Python analysis, API, core, evaluation and reporting modules
+agent-python/tests/        Python tests
+agent-python/frontend/     React/Vite dashboard
+docs/                      Analysis engine and architecture notes
+docker-compose.yml         MongoDB + API + frontend development environment
+Makefile                   Common setup, test and run commands
+.github/workflows/ci.yml   CI workflow for Python, Go and frontend validation
+.env.example               Safe environment variable template
 ```
 
-## Güvenlik Notu
+---
 
-Gerçek `.env` dosyası repoya eklenmemelidir. Bu repoda yalnızca `.env.example` tutulur.
+## Security Notice
 
-Yapılması gerekenler:
+Do not commit a real `.env` file.
 
-1. `.env.example` dosyasını `.env` olarak kopyalayın.
-2. Gerçek `CVE_KEY`, `MONGO_URI` ve diğer değerleri `.env` içine yazın.
-3. `.env` dosyasını commit etmeyin.
-4. Daha önce gerçek anahtarlar paylaşılmışsa ilgili API key ve connection string değerlerini değiştirin.
+Only `.env.example` should be stored in the repository. Real API keys, database credentials, and connection strings must stay local.
+
+Recommended setup:
 
 ```bash
 cp .env.example .env
 ```
 
-## Kurulum
+Then edit `.env` with your local values:
 
-### Python API ve Worker
+```text
+CVE_KEY=your-nvd-api-key
+MONGO_URI=mongodb://localhost:27017
+DB_NAME=threat_intel
+```
+
+If real keys or database credentials were previously exposed, rotate them before pushing the project publicly.
+
+---
+
+## Requirements
+
+Recommended local tooling:
+
+- Python 3.11+
+- Go 1.22+
+- Node.js 20+
+- Docker and Docker Compose
+- MongoDB, either local or Docker-based
+
+---
+
+## Local Setup
+
+### 1. Python API and Worker
 
 ```bash
 cd agent-python
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-API'yi başlatmak için:
+Run the API:
 
 ```bash
 PYTHONPATH=src uvicorn api.app:app --reload
 ```
 
-Worker'ı tek seferlik çalıştırmak için:
+Run the worker once:
 
 ```bash
 PYTHONPATH=src python src/main.py --source all --run-once
 ```
 
-### Go Veri Toplama
+---
+
+### 2. Go Collectors
 
 ```bash
 cd agent-go
 go test ./...
-go run ./cmd/agent-go -source cve -limit 20
 ```
 
-Desteklenen kaynaklar:
+Fetch a small CVE batch:
+
+```bash
+go run ./cmd/agent-go -source cve -limit 20 -mode incremental -days 2
+```
+
+Fetch URLhaus records:
+
+```bash
+go run ./cmd/agent-go -source urlhaus -limit 50
+```
+
+Supported sources:
 
 ```text
 cve
@@ -107,7 +175,9 @@ urlhaus
 dread
 ```
 
-### Frontend
+---
+
+### 3. Frontend
 
 ```bash
 cd agent-python/frontend
@@ -115,21 +185,88 @@ npm install
 npm run dev
 ```
 
-Frontend varsayılan olarak API'ye şu adresten bağlanır:
+The dashboard runs at:
+
+```text
+http://localhost:5173
+```
+
+By default, the frontend talks to:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-Bunu değiştirmek için `agent-python/frontend/.env` dosyasına şunu ekleyin:
+To override this, create `agent-python/frontend/.env`:
 
 ```text
 VITE_API_BASE=http://127.0.0.1:8000
 ```
 
-## Makefile ile Hızlı Komutlar
+---
 
-Kök dizinden kullanılabilir:
+## Docker Compose
+
+Docker is mainly used to simplify the development/demo environment. It is not mandatory for every component, but it makes MongoDB, the API, and the frontend easier to run consistently.
+
+Start the stack:
+
+```bash
+docker compose up --build
+```
+
+Expected services:
+
+```text
+MongoDB   → http://localhost:27017
+API       → http://localhost:8000
+Frontend  → http://localhost:5173
+```
+
+The API and frontend containers are built from dedicated Dockerfiles, so dependencies are not installed from scratch every time the containers start.
+
+To stop the stack:
+
+```bash
+docker compose down
+```
+
+To run the optional worker profile:
+
+```bash
+docker compose --profile worker up --build worker
+```
+
+---
+
+## Recommended Development Mode
+
+For day-to-day development, the most practical setup is hybrid:
+
+```text
+Docker:
+  - MongoDB
+
+Local:
+  - Go collector
+  - Python API
+  - Python worker
+  - React frontend
+```
+
+Start only MongoDB:
+
+```bash
+docker compose up mongodb
+```
+
+Then run the API, worker, frontend, and collectors locally. This keeps development faster while still avoiding local MongoDB installation issues.
+
+---
+
+## Makefile Commands
+
+From the repository root:
 
 ```bash
 make setup-python
@@ -143,29 +280,9 @@ make test-go
 make docker-up
 ```
 
-## Docker Compose ile Çalıştırma
+---
 
-Önce `.env` dosyasını oluşturun:
-
-```bash
-cp .env.example .env
-```
-
-Ardından servisleri başlatın:
-
-```bash
-docker compose up --build
-```
-
-Worker'ı ayrıca çalıştırmak için:
-
-```bash
-docker compose --profile worker up --build worker
-```
-
-Docker Compose servisleri artık özel Dockerfile dosyalarını kullanır; container her açılışta dependency kurmaz. MongoDB için healthcheck vardır ve API/worker Mongo hazır olduktan sonra başlar.
-
-## API Örnekleri
+## API Examples
 
 Health check:
 
@@ -173,7 +290,13 @@ Health check:
 curl http://127.0.0.1:8000/health
 ```
 
-CVE analizi:
+Top analyzed findings:
+
+```bash
+curl "http://127.0.0.1:8000/findings/top?limit=10"
+```
+
+Manual CVE analysis:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/analyze/cve \
@@ -181,97 +304,256 @@ curl -X POST http://127.0.0.1:8000/analyze/cve \
   -d '{"_id":"CVE-2026-DEMO","descriptions":[{"value":"remote code execution in vpn appliance"}]}'
 ```
 
-Dashboard için analiz edilmiş bulgular:
+---
+
+## End-to-End Demo Flow
+
+1. Start MongoDB, API, and frontend:
 
 ```bash
-curl http://127.0.0.1:8000/findings/top-risky?limit=10
+docker compose up --build
 ```
 
-## Risk Modeli
+2. In a separate terminal, collect CVE data:
 
-Risk skoru aşağıdaki sinyallerin birlikte değerlendirilmesiyle üretilir:
+```bash
+cd agent-go
+go run ./cmd/agent-go -source cve -limit 20 -mode incremental -days 2
+```
 
-- CVSS / teknik şiddet
-- URLhaus korelasyonları
-- Dread benzeri tehdit sinyalleri
-- Graph centrality ve edge confidence
-- Zaman / güncellik etkisi
-- Semantic similarity
-- Opsiyonel LLM destekli açıklama ve öneriler
+3. Collect URLhaus records:
 
-Model deterministik bir güvenlik kararı yerine önceliklendirme desteği sağlar. Gerçek ortamda doğrulama ve tuning gerekir.
+```bash
+go run ./cmd/agent-go -source urlhaus -limit 50
+```
 
-## Testler
+4. Run the Python analysis worker:
 
-Python testleri:
+```bash
+cd ../agent-python
+source .venv/bin/activate
+PYTHONPATH=src python src/main.py --source all --run-once
+```
+
+5. Check API results:
+
+```bash
+curl "http://localhost:8000/findings/top?limit=5"
+```
+
+6. Open the dashboard:
+
+```text
+http://localhost:5173
+```
+
+---
+
+## Analysis Engine
+
+The analysis engine is the core value of the project. It is designed to produce explainable prioritization, not a black-box prediction.
+
+The pipeline evaluates several signal groups:
+
+- Base technical severity from CVSS
+- NLP-derived vulnerability context
+- Source correlation from URLhaus and Dread-like records
+- Entity and keyword alignment
+- Graph structure and centrality
+- Recency and age effects
+- Evidence quality and confidence
+- Counterfactual score comparisons
+
+The main analysis modules are:
+
+```text
+agent-python/src/analysis/
+  correlator.py
+  graph_builder.py
+  keyword_extractor.py
+  nlp_features.py
+  risk_engine.py
+  scoring.py
+  semantic_similarity.py
+```
+
+The runtime path is:
+
+```text
+src/main.py
+  → agents/orchestrator.py
+    → analysis/risk_engine.py
+      → correlator / graph_builder / scoring / nlp_features
+```
+
+---
+
+## NLP and Evidence Extraction
+
+The lightweight NLP layer extracts security-relevant entities such as:
+
+- CVE identifiers
+- CWE identifiers
+- affected products
+- versions
+- vulnerability types
+- impact terms
+- exploit/threat terms
+- IOCs
+- domains
+- salient phrases
+
+This extraction is used to reduce raw keyword noise and improve correlation quality.
+
+Example extracted entities:
+
+```text
+products:
+  - cisco secure firewall
+  - remote access ssl vpn
+
+vulnerability types:
+  - denial_of_service
+
+impacts:
+  - service_disruption
+  - initial_access
+
+threat terms:
+  - exploit
+  - access
+```
+
+---
+
+## Evidence-Gated Correlation
+
+Correlation is intentionally conservative.
+
+Retrieved candidates are not automatically treated as accepted evidence. A URLhaus or Dread candidate must pass an evidence gate before it can influence risk scoring, confidence, or graph context.
+
+Accepted evidence may be based on:
+
+- exact CVE match
+- strong entity alignment
+- high-signal exploit or malware terms
+- meaningful lexical overlap
+- semantic and temporal support
+
+Rejected candidates remain diagnostic information only. They must not:
+
+- increase the risk score
+- create risk-relevant graph edges
+- increase confidence
+- appear as accepted related evidence
+
+This prevents weak keyword overlap from producing misleading risk increases.
+
+---
+
+## Risk Score Breakdown
+
+The risk engine separates score components for explainability:
+
+```text
+base_cvss_component
+nlp_context_bonus
+urlhaus_correlation_bonus
+dread_correlation_bonus
+cross_source_bonus
+graph_bonus
+age_penalty
+final_score
+```
+
+The model also stores counterfactuals, for example:
+
+```text
+score_without_graph
+score_without_urlhaus
+score_without_dread
+score_without_llm_context
+```
+
+This makes it easier to explain why a score changed.
+
+---
+
+## Confidence Model
+
+Risk score and confidence are treated separately.
+
+A high score means the item should be prioritized. High confidence means the system has strong evidence for that score.
+
+Confidence is based on evidence quality, including:
+
+- presence of CVSS metadata
+- quality of normalized entities
+- accepted external evidence
+- exact CVE hits
+- high-signal terms
+- entity overlap
+- semantic signal
+- graph support
+
+Rejected evidence and generic keyword overlap should not inflate confidence.
+
+---
+
+## Dashboard Analysis Visibility
+
+The dashboard renders the analysis layer directly instead of hiding it in raw JSON.
+
+It includes:
+
+- evidence overview metrics
+- score breakdown bars
+- NLP entity chips
+- source contribution cards
+- counterfactual output
+- source-level evidence panels
+
+This makes the NLP/correlation/risk-engine behavior visible during demos and manual review.
+
+---
+
+## Tests
+
+Run Python tests:
 
 ```bash
 cd agent-python
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src pytest -q -p no:ddtrace
 ```
 
-veya kök dizinden:
+or from the repository root:
 
 ```bash
 make test-python
 ```
 
-API çalışırken minimal smoke test:
+Run a minimal API smoke test while the API is running:
 
 ```bash
 cd agent-python
-python scripts/smoke_api.py http://127.0.0.1:8000
+python3 scripts/smoke_api.py http://127.0.0.1:8000
 ```
 
-Testler minimal ortamlarda `pymongo` bulunmadığında collection aşamasında kırılmaması için test stub'ı içerir. Bazı hazır Python ortamlarında harici `ddtrace` pytest plugin'i test sürecinin kapanışını geciktirebildiği için test komutunda `-p no:ddtrace` kullanılır. Gerçek entegrasyon testleri için MongoDB çalışır durumda olmalıdır.
+Some test environments include external pytest plugins such as `ddtrace`, which may slow down test shutdown. The `-p no:ddtrace` flag disables that plugin for the test run.
 
-## Yapılabilecek Geliştirmeler
+---
 
-### Kısa Vadeli
+## Validation Status
 
-- API route'larını ayrı dosyalara bölmek
-- Frontend'e filtreleme ve tarih aralığı eklemek
-- Docker image'larını production için daha küçük ve non-root kullanıcıyla optimize etmek
+The Python test suite has been verified after the latest analysis semantics changes.
 
-### Orta Vadeli
-
-- Repository pattern ile MongoDB bağımlılığını azaltmak
-- Daha ayrıntılı logging ve metrics eklemek
-- Risk skorunu benchmark veri setleriyle değerlendirmek
-- Semantic model backend'ini production için netleştirmek
-- Dashboard'a export ve karşılaştırma ekranları eklemek
-
-### Uzun Vadeli
-
-- Deployment ortamı için TLS, auth ve rate limiting eklemek
-- Gerçek tehdit istihbaratı feed'leriyle validasyon yapmak
-- Model ağırlıklarını veriyle optimize etmek
-- Alerting ve scheduled ingestion eklemek
-
-## Lisans / Kullanım
-
-Bu proje akademik çalışma ve prototip amaçlıdır. Dark web veya üçüncü taraf kaynaklarla çalışırken ilgili kaynakların kullanım şartları, yasal sınırlar ve etik kurallar dikkate alınmalıdır.
-
-## Author
-
-Furkan Korkmaz
-
-## Son Doğrulama Durumu
-
-Bu paket hazırlanırken Python testleri şu komutla doğrulandı:
-
-```bash
-cd agent-python
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src pytest -q -p no:ddtrace
-```
-
-Sonuç:
+Latest expected result:
 
 ```text
-49 passed
+54 passed
 ```
 
-Go ve frontend doğrulamaları dependency indirme gerektirdiği için internet erişimi olan ortamda şu komutlarla tekrar çalıştırılmalıdır:
+Go and frontend validation should be run in an internet-enabled environment because they may need to download dependencies:
 
 ```bash
 make test-go
@@ -279,37 +561,74 @@ make setup-frontend
 make build-frontend
 ```
 
-## Analysis Engine v2
+---
 
-The analysis layer has been redesigned to make the project value clearer and the scoring easier to defend.
+## Known Limitations
 
-What changed:
+This is a prototype. Important limitations remain:
 
-- Lightweight NLP extraction now identifies CVE/CWE identifiers, affected products, versions, vulnerability types, attacker impact, threat terms, URLs and domains.
-- Keyword retrieval is now based on normalized security entities instead of mostly raw token filtering.
-- Cross-source correlation now uses an evidence gate before adding score: exact CVE matches, entity alignment, high-signal threat terms, lexical overlap, or semantic+temporal support.
-- Correlation scoring uses diminishing returns so many weak matches do not overpower one strong match.
-- CVE scoring now separates intrinsic NLP context from observed threat activity:
-  - `base_cvss_component`
-  - `nlp_context_bonus`
-  - `urlhaus_correlation_bonus`
-  - `dread_correlation_bonus`
-  - `cross_source_bonus`
-  - `graph_bonus`
-  - `age_penalty`
-- API results now include `evidence.nlp_entities`, which can be rendered directly in the dashboard.
+- Risk scoring is heuristic and requires real-world validation.
+- The current NLP layer is lightweight and rule-based.
+- Dread-like source handling depends on available data and ethical/legal constraints.
+- URLhaus correlation must be interpreted carefully; weak or rejected candidates should not be treated as confirmed relationships.
+- The system does not include authentication, TLS, rate limiting, or production observability.
+- The dashboard is intended for demonstration and analyst support, not as a SOC production console.
 
-The goal is not to claim a perfect ML model. The goal is to provide a transparent, explainable prioritization model where every score component can be inspected and defended.
+---
 
+## Possible Improvements
 
-## Dashboard analysis visibility
+### Short Term
 
-The frontend now renders the analysis layer directly instead of hiding it in raw JSON:
+- Split large FastAPI route logic into separate route modules.
+- Add date and severity filters to the dashboard.
+- Improve API response models for full analysis inspection.
+- Add a “re-run analysis” endpoint for selected findings.
+- Add seeded demo data for easier showcase setup.
 
-- Evidence overview metrics for CVSS, linked URLhaus/Dread records, relation count, extracted entities and high-signal terms.
-- Visual score breakdown bars for CVSS, NLP context, correlation, cross-source, graph and age-penalty components.
-- NLP entity chips for CVEs, CWEs, products, versions, vulnerability types, impacts, threat terms, IOCs, domains, keywords and salient phrases.
-- Source contribution cards and counterfactual output for explainability.
+### Medium Term
 
-This makes the core NLP/correlation/risk-engine behavior visible during demos and manual analysis.
+- Introduce repository interfaces to reduce direct MongoDB coupling.
+- Add structured logging and metrics.
+- Improve graph scoring with stricter evidence-quality weights.
+- Add benchmark datasets for risk model validation.
+- Add frontend export and comparison views.
 
+### Long Term
+
+- Add authentication, TLS, and rate limiting.
+- Add scheduled ingestion and alerting.
+- Tune model weights using real analyst feedback.
+- Add production-grade semantic model support.
+- Integrate with SIEM/SOAR or ticketing workflows.
+
+---
+
+## Suggested Commit Order
+
+If this project is being pushed to GitHub from the staged versions, a clean commit history would be:
+
+```text
+chore: initialize project with safe configuration
+chore: add developer tooling and CI
+refactor: add NLP-driven evidence analysis
+feat: show explainable analysis in dashboard
+fix: enforce accepted evidence gating in risk analysis
+docs: rewrite README in English
+```
+
+---
+
+## License and Ethical Use
+
+This project is for academic, research, and prototype purposes.
+
+When working with third-party intelligence feeds, dark-web-like sources, malware URLs, or threat infrastructure, follow applicable laws, source terms of service, and ethical research practices.
+
+Do not use this project to access, distribute, or interact with malicious infrastructure beyond safe defensive analysis.
+
+---
+
+## Author
+
+Furkan Korkmaz
