@@ -85,3 +85,28 @@ def test_weak_urlhaus_candidates_are_rejected():
     assert stats["accepted_match_count"] == 0
     assert stats["rejected_match_count"] == 1
     assert stats["accepted_matches"] == []
+
+
+def test_urlhaus_entity_alignment_without_meaningful_terms_is_rejected():
+    matches = [
+        {
+            "url": "https://github.com/sunxholejabi/bc-game-crash-predictor/raw/refs/heads/main/CrashPredictor.Test/Markup/predictor-crash-game-bc-2.0.zip",
+            "threat": "malware_download",
+            "tags": ["SmartLoader", "zip"],
+            "url_status": "offline",
+            "date_added": "2026-05-04T10:00:00+00:00",
+        }
+    ]
+
+    score, explanations, stats = score_urlhaus_matches(
+        matches,
+        base_keywords=["cve-2006-5295", "bc game crash predictor", "crash predictor", "game"],
+        entity_time="2006-10-16T23:07:00+00:00",
+    )
+
+    assert score == 0.0
+    assert explanations == []
+    assert stats["accepted_match_count"] == 0
+    assert stats["rejected_match_count"] == 1
+    assert stats["accepted_matches"] == []
+    assert stats["shared_terms"] == []

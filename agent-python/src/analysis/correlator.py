@@ -37,7 +37,16 @@ HIGH_IMPACT_TERMS = {
     "backdoor", "exploit", "rce", "zeroday", "zero-day", "0day", "webshell",
 }
 
-GENERIC_FILTER_TERMS = set(WEAK_TERMS)
+# URLhaus records are IOC artifacts. Generic URL/path tokens can accidentally
+# align with CVE descriptions and should not make a candidate accepted evidence.
+URL_ARTIFACT_NOISE_TERMS = {
+    "api", "cdn", "cloud", "cloudflare", "com", "data", "dl", "download",
+    "exe", "file", "files", "form", "github", "head", "heads", "html",
+    "http", "https", "index", "index.php", "main", "mode", "php", "raw",
+    "ref", "refs", "token", "url", "zip",
+}
+
+GENERIC_FILTER_TERMS = set(WEAK_TERMS) | URL_ARTIFACT_NOISE_TERMS
 CVE_RE = re.compile(r"cve-\d{4}-\d{4,7}", re.I)
 
 
@@ -103,7 +112,9 @@ def _score_matches(
         temporal = _compute_time_proximity_score(entity_time, _match_time(match, source))
         entity_info = entity_overlap(base_features, match_features)
         entity_score = float(entity_info.get("score", 0.0))
-        shared_term_count = len(set(base_terms) & set(match_terms))
+        shared_for_match = top_shared_terms(base_terms, match_terms, limit=8)
+        meaningful_shared_terms = _meaningful_shared_terms(shared_for_match)
+        shared_term_count = len(meaningful_shared_terms)
 
         joined_terms = " ".join(match_terms)
         exact_cve = any(cve_id in joined_terms for cve_id in {t for t in base_terms if CVE_RE.fullmatch(t)})
@@ -120,6 +131,7 @@ def _score_matches(
             shared_term_count=shared_term_count,
             exact_cve=exact_cve,
             high_signal_term_hits=high_signal_term_hits,
+            entity_matches=entity_info.get("matches", {}),
         )
         if not accepted:
             rejected_count += 1
@@ -154,7 +166,7 @@ def _score_matches(
         semantic_scores.append(round(semantic, 4))
         temporal_scores.append(round(temporal, 4))
         entity_scores.append(round(entity_score, 4))
-        shared_terms.extend(top_shared_terms(base_terms, match_terms, limit=8))
+        shared_terms.extend(meaningful_shared_terms)
         reasons.append(reason)
 
     cap = cfg.urlhaus_score_cap if source == "urlhaus" else cfg.dread_score_cap
@@ -218,16 +230,32 @@ def _accept_match(
     shared_term_count: int,
     exact_cve: bool,
     high_signal_term_hits: int,
+    entity_matches: Optional[Dict[str, List[str]]] = None,
 ) -> tuple[bool, str]:
+    entity_matches = entity_matches or {}
     if exact_cve:
         return True, "exact_cve"
-    if entity_score >= 0.30 and (semantic >= 0.10 or lexical >= 0.04):
+
+    # URLhaus IOC candidates need stricter corroboration than prose-like sources.
+    # Entity overlap caused by generic vuln/impact labels such as DoS/crash or
+    # URL path artifacts must not become accepted evidence by itself.
+    if source == "urlhaus":
+        strong_entity_group = bool(
+            entity_matches.get("cve_ids")
+            or entity_matches.get("domains")
+            or entity_matches.get("threat_terms")
+        )
+        has_meaningful_support = shared_term_count >= 1 or high_signal_term_hits >= 1 or strong_entity_group
+        if entity_score >= 0.35 and has_meaningful_support and (semantic >= 0.18 or lexical >= 0.08):
+            return True, "entity_alignment"
+    elif entity_score >= 0.30 and (semantic >= 0.10 or lexical >= 0.04):
         return True, "entity_alignment"
+
     if high_signal_term_hits >= 2 and (lexical >= 0.06 or semantic >= 0.18):
         return True, "high_signal_terms"
     if shared_term_count >= SETTINGS.retrieval.min_shared_terms and lexical >= SETTINGS.retrieval.min_lexical_overlap:
         return True, "lexical_overlap"
-    if semantic >= max(SETTINGS.retrieval.min_semantic_support, 0.30) and temporal >= 0.2:
+    if semantic >= max(SETTINGS.retrieval.min_semantic_support, 0.30) and temporal >= 0.2 and shared_term_count >= 1:
         return True, "semantic_temporal_support"
     return False, "weak_support"
 
@@ -281,6 +309,22 @@ def _match_time(match: Dict[str, Any], source: str) -> Optional[str]:
     if source == "urlhaus":
         return match.get("date_added")
     return match.get("created_at") or match.get("published")
+
+
+def _meaningful_shared_terms(shared_terms: Iterable[str]) -> List[str]:
+    meaningful: List[str] = []
+    seen = set()
+    for term in shared_terms:
+        normalized = normalize_token(str(term)).strip("._-/")
+        if not normalized or normalized in seen:
+            continue
+        if normalized in GENERIC_FILTER_TERMS and not CVE_RE.fullmatch(normalized):
+            continue
+        if len(normalized) < 4 and not CVE_RE.fullmatch(normalized):
+            continue
+        seen.add(normalized)
+        meaningful.append(normalized)
+    return meaningful
 
 
 def _hybrid_lexical_overlap(base_terms: Iterable[str], match_terms: Iterable[str]) -> float:

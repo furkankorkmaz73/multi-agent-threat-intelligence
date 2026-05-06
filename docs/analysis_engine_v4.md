@@ -127,3 +127,23 @@ This keeps the model distinction clear:
 risk_score = prioritization / severity-driven urgency
 confidence = reliability of the evidence supporting that prioritization
 ```
+
+## v8 URLhaus Evidence Quality Note
+
+URLhaus correlation is now stricter than prose-like sources because IOC records are dominated by URL paths, file names, tags, and infrastructure artifacts. Generic URL/path overlap or vulnerability-type overlap is not enough to promote a retrieved candidate into accepted evidence.
+
+Accepted URLhaus evidence should have at least one strong corroborating signal, such as:
+
+- exact CVE identifier reference
+- meaningful non-generic shared term
+- high-signal malware or exploit term overlap
+- domain or threat-term entity alignment
+- semantic support plus meaningful shared context
+
+The following patterns are rejected or kept diagnostic-only:
+
+- `entity_alignment` with no meaningful shared terms
+- generic URL/path tokens such as `index.php`, `api`, `token`, `raw`, `refs`, `zip`, or `github`
+- offline IOC artifacts that only overlap through broad vulnerability/impact labels such as DoS or crash
+
+This prevents weak URLhaus candidates from inflating `related_urlhaus_count`, confidence, or active threat evidence.
