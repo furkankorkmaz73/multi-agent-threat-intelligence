@@ -110,3 +110,50 @@ def test_urlhaus_entity_alignment_without_meaningful_terms_is_rejected():
     assert stats["rejected_match_count"] == 1
     assert stats["accepted_matches"] == []
     assert stats["shared_terms"] == []
+
+
+def test_urlhaus_generic_platform_shared_term_is_rejected():
+    matches = [
+        {
+            "url": "https://ip-address-check-mo.vercel.app/api/settings/windows",
+            "threat": "malware_download",
+            "tags": ["ContagiousInterview", "DPRK", "Lazarus"],
+            "url_status": "offline",
+            "date_added": "",
+        }
+    ]
+
+    score, explanations, stats = score_urlhaus_matches(
+        matches,
+        base_keywords=["cve-2005-0051", "microsoft windows", "remote code execution", "windows"],
+        entity_time="2005-05-02T04:00:00+00:00",
+    )
+
+    assert score == 0.0
+    assert explanations == []
+    assert stats["accepted_match_count"] == 0
+    assert stats["rejected_match_count"] == 1
+    assert stats["shared_terms"] == []
+
+
+def test_urlhaus_generic_cms_shared_term_is_rejected():
+    matches = [
+        {
+            "url": "https://krikadoo.com/wordpress/update.ps1",
+            "threat": "malware_download",
+            "tags": ["PhantomStealer", "powershell", "ps1"],
+            "url_status": "offline",
+            "date_added": "",
+        }
+    ]
+
+    score, explanations, stats = score_urlhaus_matches(
+        matches,
+        base_keywords=["cve-2006-2702", "wordpress", "plugin", "cross site scripting"],
+        entity_time="2006-05-31T10:06:00+00:00",
+    )
+
+    assert score == 0.0
+    assert explanations == []
+    assert stats["accepted_match_count"] == 0
+    assert stats["shared_terms"] == []

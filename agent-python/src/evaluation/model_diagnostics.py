@@ -108,6 +108,23 @@ def summarize_documents(docs: List[Dict[str, Any]]) -> Dict[str, Any]:
     accepted_urlhaus = sum(int(_get_nested(doc, "analysis.evidence.related_urlhaus_count", 0) or 0) for doc in analyzed)
     accepted_dread = sum(int(_get_nested(doc, "analysis.evidence.related_dread_count", 0) or 0) for doc in analyzed)
 
+    confidence_component_keys = [
+        "base_confidence",
+        "metadata_confidence",
+        "entity_confidence",
+        "external_evidence_confidence",
+        "correlation_confidence",
+        "freshness_confidence",
+        "penalties",
+    ]
+    confidence_breakdown_averages = {
+        key: round(
+            mean([_safe_float(_get_nested(doc, f"analysis.confidence_breakdown.{key}")) for doc in analyzed]),
+            4,
+        ) if analyzed else 0.0
+        for key in confidence_component_keys
+    }
+
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "total_documents": len(docs),
@@ -122,6 +139,7 @@ def summarize_documents(docs: List[Dict[str, Any]]) -> Dict[str, Any]:
         "average_cvss": round(mean(cvss_scores), 4) if cvss_scores else 0.0,
         "accepted_urlhaus_evidence_total": accepted_urlhaus,
         "accepted_dread_evidence_total": accepted_dread,
+        "confidence_breakdown_averages": confidence_breakdown_averages,
         "high_cvss_suppressed_examples": high_cvss_suppressed,
         "low_cvss_boosted_examples": low_cvss_boosted,
     }
@@ -156,6 +174,16 @@ def render_markdown(summary: Dict[str, Any], *, title: str) -> str:
     lines.append("")
     lines.append(f"- Accepted URLhaus evidence: `{summary['accepted_urlhaus_evidence_total']}`")
     lines.append(f"- Accepted Dread evidence: `{summary['accepted_dread_evidence_total']}`")
+    lines.append("")
+
+    lines.append("## Confidence breakdown averages")
+    lines.append("")
+    breakdown = summary.get("confidence_breakdown_averages") or {}
+    if not breakdown:
+        lines.append("No confidence breakdown data found.")
+    else:
+        for name, value in breakdown.items():
+            lines.append(f"- `{name}`: `{value}`")
     lines.append("")
 
     lines.append("## High-CVSS suppressed examples")

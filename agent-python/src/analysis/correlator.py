@@ -46,7 +46,16 @@ URL_ARTIFACT_NOISE_TERMS = {
     "ref", "refs", "token", "url", "zip",
 }
 
-GENERIC_FILTER_TERMS = set(WEAK_TERMS) | URL_ARTIFACT_NOISE_TERMS
+# Broad platform/CMS/vendor tokens are too low-specificity to prove that a
+# malware URL is related to a CVE. They may still be useful in NLP/entity
+# extraction elsewhere, but for URLhaus correlation they must not become
+# meaningful shared terms by themselves.
+URLHAUS_LOW_SPECIFICITY_SHARED_TERMS = {
+    "windows", "microsoft", "linux", "wordpress", "apache", "nginx",
+    "php", "java", "android", "server", "web", "plugin", "cms",
+}
+
+GENERIC_FILTER_TERMS = set(WEAK_TERMS) | URL_ARTIFACT_NOISE_TERMS | URLHAUS_LOW_SPECIFICITY_SHARED_TERMS
 CVE_RE = re.compile(r"cve-\d{4}-\d{4,7}", re.I)
 
 

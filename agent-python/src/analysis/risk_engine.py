@@ -85,8 +85,12 @@ class RiskEngine:
         counterfactuals = self._build_counterfactuals(final_score, graph_bonus, urlhaus_score, dread_score, llm_bonus + nlp_bonus)
         source_contributions = self._build_source_contributions("cve", base_score, urlhaus_score, dread_score, llm_bonus + nlp_bonus, graph_bonus, {"age_penalty": age_penalty})
         relation_summary = self._summarize_relations(graph_edges)
-        confidence = self._calculate_confidence(
+        confidence_details = self._calculate_confidence_details(
             has_cvss=cvss_score > 0,
+            cvss_score=cvss_score,
+            cvss_version=cvss_version,
+            description=description,
+            age_days=age_days,
             urlhaus_match_count=len(accepted_urlhaus_matches),
             dread_match_count=len(accepted_dread_matches),
             keyword_count=len(keywords),
@@ -96,6 +100,7 @@ class RiskEngine:
             urlhaus_stats=urlhaus_stats,
             dread_stats=dread_stats,
         )
+        confidence = confidence_details["confidence"]
 
         explanations = [f"Base risk derived from CVSS ({cvss_version}) score: {cvss_score}."]
         if age_days is not None:
@@ -147,6 +152,7 @@ class RiskEngine:
             "risk_score": final_score,
             "risk_level": risk_level,
             "confidence": confidence,
+            "confidence_breakdown": confidence_details["breakdown"],
             "diagnosis": f"{cve_id} evaluated as {risk_level} (dynamic score={final_score}, base CVSS={cvss_score}).",
             "explanation": explanations,
             "evidence": {
@@ -388,6 +394,18 @@ class RiskEngine:
             # actionable vulnerability evidence and must not appear as
             # high-confidence LOW findings.
             "confidence": 0.25,
+            "confidence_breakdown": {
+                "base_confidence": 0.0,
+                "metadata_confidence": 0.0,
+                "entity_confidence": 0.0,
+                "external_evidence_confidence": 0.0,
+                "correlation_confidence": 0.0,
+                "freshness_confidence": 0.0,
+                "penalties": -0.25,
+                "raw_confidence": 0.25,
+                "final_confidence": 0.25,
+                "signals": {"validity_status": "invalid_or_rejected"},
+            },
             "diagnosis": f"{cve_id} excluded from dynamic prioritization as an invalid CVE record.",
             "explanation": [note, "Risk confidence is intentionally low because the record is not actionable vulnerability evidence."],
             "evidence": {"keywords": [], "cvss_score": 0.0, "age_days": None, "related_urlhaus_count": 0, "related_dread_count": 0, "validity_status": "invalid_or_rejected"},
@@ -484,6 +502,194 @@ class RiskEngine:
 
         return min(round(score, 2), 1.20), explanations
 
+    def _calculate_confidence_details(
+        self,
+        has_cvss: bool,
+        urlhaus_match_count: int,
+        dread_match_count: int,
+        keyword_count: int,
+        llm_fields_count: int,
+        graph_score: float,
+        *,
+        cvss_score: float = 0.0,
+        cvss_version: str = "Unknown",
+        description: str = "",
+        age_days: Optional[int] = None,
+        nlp_entities: Optional[Dict[str, Any]] = None,
+        urlhaus_stats: Optional[Dict[str, Any]] = None,
+        dread_stats: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Return component-based confidence for the current risk assessment.
+
+        Confidence is evidence reliability, not risk severity. High technical
+        severity may justify HIGH risk with only medium confidence, while
+        accepted external evidence should move confidence upward only when it is
+        supported by exact identifiers, meaningful shared terms, high-signal
+        malware/exploit context, or semantic corroboration.
+        """
+        urlhaus_stats = urlhaus_stats or {}
+        dread_stats = dread_stats or {}
+        nlp_entities = nlp_entities or {}
+
+        accepted_external = urlhaus_match_count + dread_match_count
+        exact_hits = int(urlhaus_stats.get("exact_cve_hits", 0) or 0) + int(dread_stats.get("exact_cve_hits", 0) or 0)
+        high_signal_hits = int(urlhaus_stats.get("high_signal_hits", 0) or 0) + int(dread_stats.get("high_signal_hits", 0) or 0)
+        entity_hits = int(urlhaus_stats.get("entity_overlap_hits", 0) or 0) + int(dread_stats.get("entity_overlap_hits", 0) or 0)
+        shared_terms = set(urlhaus_stats.get("shared_terms") or []) | set(dread_stats.get("shared_terms") or [])
+        acceptance_reasons = set(urlhaus_stats.get("acceptance_reasons") or []) | set(dread_stats.get("acceptance_reasons") or [])
+        semantic_signal = max(
+            float(urlhaus_stats.get("avg_semantic_score", 0.0) or 0.0),
+            float(dread_stats.get("avg_semantic_score", 0.0) or 0.0),
+        )
+        entity_alignment_only = bool(
+            accepted_external > 0
+            and acceptance_reasons
+            and acceptance_reasons <= {"entity_alignment"}
+            and exact_hits == 0
+            and high_signal_hits == 0
+        )
+
+        # Stable floor for valid, analyzable CVE records. Invalid/rejected CVEs
+        # bypass this path and receive a low fixed confidence.
+        base_confidence = 0.12
+
+        metadata_confidence = 0.0
+        if has_cvss:
+            metadata_confidence += 0.22
+            if cvss_version in {"CVSS v4.0", "CVSS v3.1", "CVSS v3.0"}:
+                metadata_confidence += 0.04
+            elif cvss_version == "CVSS v2.0":
+                metadata_confidence += 0.02
+            if cvss_score >= 9.0:
+                metadata_confidence += 0.02
+        desc_len = len((description or "").strip())
+        if desc_len >= 180:
+            metadata_confidence += 0.10
+        elif desc_len >= 80:
+            metadata_confidence += 0.07
+        elif desc_len >= 30:
+            metadata_confidence += 0.03
+        if age_days is not None:
+            metadata_confidence += 0.04
+        metadata_confidence = min(metadata_confidence, 0.42)
+
+        entity_confidence = 0.0
+        products = nlp_entities.get("products") or []
+        vuln_types = nlp_entities.get("vuln_types") or []
+        impacts = nlp_entities.get("impacts") or []
+        threat_terms = nlp_entities.get("threat_terms") or []
+        cve_ids = nlp_entities.get("cve_ids") or []
+        if products:
+            entity_confidence += min(len(products) * 0.012, 0.07)
+        if vuln_types:
+            entity_confidence += 0.05
+        if impacts:
+            entity_confidence += 0.04
+        if threat_terms:
+            entity_confidence += 0.04
+        if cve_ids:
+            entity_confidence += 0.02
+        entity_confidence += min(keyword_count * 0.003, 0.03)
+        entity_confidence += min(llm_fields_count * 0.02, 0.05)
+        entity_confidence = min(entity_confidence, 0.18)
+
+        external_evidence_confidence = 0.0
+        if accepted_external:
+            # Entity-alignment-only evidence is weaker than exact CVE, high-signal
+            # malware/exploit overlap, or multi-signal corroboration. It can raise
+            # confidence, but it must not make old/generic IOC matches look highly
+            # reliable by itself.
+            if entity_alignment_only:
+                external_evidence_confidence += min(accepted_external * 0.025, 0.07)
+            else:
+                external_evidence_confidence += min(accepted_external * 0.055, 0.16)
+        if exact_hits:
+            external_evidence_confidence += min(exact_hits * 0.16, 0.26)
+        if high_signal_hits:
+            external_evidence_confidence += min(high_signal_hits * 0.05, 0.12)
+        if entity_hits:
+            external_evidence_confidence += min(entity_hits * (0.015 if entity_alignment_only else 0.035), 0.08)
+        if shared_terms:
+            external_evidence_confidence += min(len(shared_terms) * (0.008 if entity_alignment_only else 0.015), 0.06)
+        if semantic_signal >= SETTINGS.semantic.similarity_floor:
+            external_evidence_confidence += min(semantic_signal * (0.045 if entity_alignment_only else 0.10), 0.08)
+        external_evidence_confidence = min(external_evidence_confidence, 0.38)
+
+        correlation_confidence = 0.0
+        if accepted_external > 0:
+            correlation_confidence += min(graph_score * 0.04, 0.05)
+        if accepted_external > 0 and (exact_hits or high_signal_hits or shared_terms or semantic_signal >= SETTINGS.semantic.similarity_floor):
+            correlation_confidence += 0.02 if entity_alignment_only else 0.04
+        correlation_confidence = min(correlation_confidence, 0.09)
+
+        freshness_confidence = 0.0
+        if age_days is not None:
+            if age_days <= 30:
+                freshness_confidence += 0.04
+            elif age_days <= 365:
+                freshness_confidence += 0.02
+
+        penalties = 0.0
+        if accepted_external == 0:
+            penalties -= 0.08
+            if exact_hits == 0 and high_signal_hits == 0 and entity_hits == 0 and semantic_signal == 0:
+                penalties -= 0.03
+        if not has_cvss:
+            penalties -= 0.12
+        if desc_len < 30:
+            penalties -= 0.05
+        if not products and not vuln_types and not impacts and not threat_terms:
+            penalties -= 0.04
+        if entity_alignment_only and semantic_signal < 0.30:
+            penalties -= 0.03
+        if age_days is not None and age_days > 3650 and accepted_external == 0:
+            penalties -= 0.04
+
+        raw_confidence = (
+            base_confidence
+            + metadata_confidence
+            + entity_confidence
+            + external_evidence_confidence
+            + correlation_confidence
+            + freshness_confidence
+            + penalties
+        )
+
+        # Hard guardrails for metadata-poor records. Text extraction can provide
+        # useful context, but missing CVSS and missing accepted external evidence
+        # should keep the reliability of CVE prioritization low.
+        if not has_cvss and accepted_external == 0:
+            raw_confidence = min(raw_confidence, 0.35)
+            if keyword_count <= 3 and llm_fields_count == 0:
+                raw_confidence = min(raw_confidence, 0.28)
+
+        confidence = round(max(0.05, min(raw_confidence, 0.95)), 3)
+        breakdown = {
+            "base_confidence": round(base_confidence, 3),
+            "metadata_confidence": round(metadata_confidence, 3),
+            "entity_confidence": round(entity_confidence, 3),
+            "external_evidence_confidence": round(external_evidence_confidence, 3),
+            "correlation_confidence": round(correlation_confidence, 3),
+            "freshness_confidence": round(freshness_confidence, 3),
+            "penalties": round(penalties, 3),
+            "raw_confidence": round(raw_confidence, 3),
+            "final_confidence": confidence,
+            "signals": {
+                "has_cvss": has_cvss,
+                "cvss_version": cvss_version,
+                "description_length": desc_len,
+                "accepted_external_evidence": accepted_external,
+                "exact_hits": exact_hits,
+                "high_signal_hits": high_signal_hits,
+                "entity_hits": entity_hits,
+                "shared_term_count": len(shared_terms),
+                "acceptance_reasons": sorted(acceptance_reasons),
+                "entity_alignment_only": entity_alignment_only,
+                "semantic_signal": round(semantic_signal, 4),
+            },
+        }
+        return {"confidence": confidence, "breakdown": breakdown}
+
     def _calculate_confidence(
         self,
         has_cvss: bool,
@@ -497,70 +703,18 @@ class RiskEngine:
         urlhaus_stats: Optional[Dict[str, Any]] = None,
         dread_stats: Optional[Dict[str, Any]] = None,
     ) -> float:
-        """Estimate confidence from accepted evidence quality, not candidate volume.
-
-        Candidate retrieval is intentionally noisy. A record should not become
-        high-confidence merely because many weak URLhaus/Dread candidates were
-        retrieved or because graph nodes were created from generic terms.
-        """
-        urlhaus_stats = urlhaus_stats or {}
-        dread_stats = dread_stats or {}
-        nlp_entities = nlp_entities or {}
-
-        accepted_external = urlhaus_match_count + dread_match_count
-        exact_hits = int(urlhaus_stats.get("exact_cve_hits", 0) or 0) + int(dread_stats.get("exact_cve_hits", 0) or 0)
-        high_signal_hits = int(urlhaus_stats.get("high_signal_hits", 0) or 0) + int(dread_stats.get("high_signal_hits", 0) or 0)
-        entity_hits = int(urlhaus_stats.get("entity_overlap_hits", 0) or 0) + int(dread_stats.get("entity_overlap_hits", 0) or 0)
-        semantic_signal = max(
-            float(urlhaus_stats.get("avg_semantic_score", 0.0) or 0.0),
-            float(dread_stats.get("avg_semantic_score", 0.0) or 0.0),
-        )
-
-        confidence = 0.35
-        if has_cvss:
-            confidence += 0.20
-
-        # Intrinsic extraction quality: useful, but capped because it is not
-        # independent corroboration.
-        nlp_quality = 0.0
-        for key in ("cve_ids", "products", "vuln_types", "impacts", "threat_terms"):
-            if nlp_entities.get(key):
-                nlp_quality += 0.025
-        confidence += min(nlp_quality, 0.12)
-
-        confidence += min(keyword_count * 0.004, 0.04)
-        confidence += min(llm_fields_count * 0.025, 0.07)
-
-        # External evidence only counts after the correlation gate accepts it.
-        confidence += min(urlhaus_match_count * 0.035, 0.14)
-        confidence += min(dread_match_count * 0.04, 0.14)
-        if exact_hits:
-            confidence += min(exact_hits * 0.10, 0.18)
-        if high_signal_hits:
-            confidence += min(high_signal_hits * 0.04, 0.10)
-        if entity_hits:
-            confidence += min(entity_hits * 0.04, 0.10)
-        if semantic_signal >= SETTINGS.semantic.similarity_floor:
-            confidence += min(semantic_signal * 0.12, 0.08)
-
-        if accepted_external > 0:
-            confidence += min(graph_score * 0.05, 0.08)
-        else:
-            confidence -= 0.10
-            if exact_hits == 0 and high_signal_hits == 0 and entity_hits == 0 and semantic_signal == 0:
-                confidence -= 0.03
-
-        # Missing CVSS plus no accepted external evidence is intrinsically weak
-        # for CVE prioritization. NLP/keyword extraction can provide context,
-        # but it should not turn metadata-poor CVEs into high-confidence
-        # findings. This also guards reserved/rejected-like records that slip
-        # past invalid marker checks.
-        if not has_cvss and accepted_external == 0:
-            confidence = min(confidence, 0.42)
-            if keyword_count <= 3 and llm_fields_count == 0:
-                confidence = min(confidence, 0.32)
-
-        return round(max(0.05, min(confidence, 0.98)), 3)
+        """Backward-compatible confidence API for non-CVE paths and tests."""
+        return self._calculate_confidence_details(
+            has_cvss=has_cvss,
+            urlhaus_match_count=urlhaus_match_count,
+            dread_match_count=dread_match_count,
+            keyword_count=keyword_count,
+            llm_fields_count=llm_fields_count,
+            graph_score=graph_score,
+            nlp_entities=nlp_entities,
+            urlhaus_stats=urlhaus_stats,
+            dread_stats=dread_stats,
+        )["confidence"]
 
     def _count_non_empty_llm_fields(self, llm_info: Dict[str, Any]) -> int:
         count = 0

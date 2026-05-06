@@ -147,3 +147,39 @@ The following patterns are rejected or kept diagnostic-only:
 - offline IOC artifacts that only overlap through broad vulnerability/impact labels such as DoS or crash
 
 This prevents weak URLhaus candidates from inflating `related_urlhaus_count`, confidence, or active threat evidence.
+
+## v9 Confidence Breakdown Note
+
+Confidence is now stored with a component-level breakdown so analysts can see why a risk assessment is more or less reliable. The top-level `confidence` value remains a single normalized number, but `confidence_breakdown` explains the contribution of each evidence family.
+
+Main components:
+
+- `base_confidence`: stable floor for analyzable CVE records
+- `metadata_confidence`: CVSS availability/version, description length, publication date, and severity metadata quality
+- `entity_confidence`: NLP/entity extraction quality, including products, vulnerability types, impacts, threat terms, CVE IDs, keywords, and optional LLM fields
+- `external_evidence_confidence`: accepted URLhaus/Dread evidence, exact CVE hits, high-signal malware/exploit terms, meaningful shared terms, and semantic signal
+- `correlation_confidence`: graph/correlation support after evidence has passed the acceptance gate
+- `freshness_confidence`: small boost for recent CVE records
+- `penalties`: missing CVSS, weak text, no accepted external evidence, stale records without activity, and weak/generic entity extraction
+
+The intended behavior is:
+
+```text
+High CVSS + good intrinsic context + no external evidence
+→ high/medium risk, medium confidence
+
+High CVSS + accepted high-quality external evidence
+→ high risk, high confidence
+
+Missing CVSS + no accepted external evidence
+→ low confidence
+
+Rejected or invalid CVE record
+→ low risk, low confidence
+```
+
+This makes confidence auditable without changing the calibrated v6/v8 risk score distribution.
+
+### v9.1 Generic URLhaus term filtering
+
+The confidence breakdown exposed that URLhaus correlations based only on broad platform/CMS terms such as `windows` or `wordpress` could still be treated as accepted evidence. v9.1 treats these low-specificity terms as correlation noise for URLhaus matching. Entity-alignment-only URLhaus evidence is also down-weighted in confidence unless it is supported by exact CVE references, high-signal malware/exploit overlap, or stronger shared context.
