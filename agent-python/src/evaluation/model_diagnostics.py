@@ -108,15 +108,36 @@ def summarize_documents(docs: List[Dict[str, Any]]) -> Dict[str, Any]:
     accepted_urlhaus = sum(int(_get_nested(doc, "analysis.evidence.related_urlhaus_count", 0) or 0) for doc in analyzed)
     accepted_dread = sum(int(_get_nested(doc, "analysis.evidence.related_dread_count", 0) or 0) for doc in analyzed)
 
-    confidence_component_keys = [
+    default_confidence_component_keys = [
         "base_confidence",
         "metadata_confidence",
         "entity_confidence",
         "external_evidence_confidence",
         "correlation_confidence",
         "freshness_confidence",
+        "feed_confidence",
+        "status_confidence",
+        "threat_label_confidence",
+        "tag_confidence",
+        "payload_confidence",
+        "family_confidence",
+        "cross_source_confidence",
+        "graph_confidence",
         "penalties",
+        "final_confidence",
     ]
+    discovered_component_keys = set(default_confidence_component_keys)
+    for doc in analyzed:
+        breakdown = _get_nested(doc, "analysis.confidence_breakdown", {}) or {}
+        if isinstance(breakdown, dict):
+            discovered_component_keys.update(
+                key for key, value in breakdown.items()
+                if isinstance(value, (int, float)) and key not in {"raw_confidence"}
+            )
+    confidence_component_keys = [
+        key for key in default_confidence_component_keys
+        if key in discovered_component_keys
+    ] + sorted(discovered_component_keys - set(default_confidence_component_keys))
     confidence_breakdown_averages = {
         key: round(
             mean([_safe_float(_get_nested(doc, f"analysis.confidence_breakdown.{key}")) for doc in analyzed]),

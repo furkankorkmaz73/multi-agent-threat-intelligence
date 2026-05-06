@@ -62,6 +62,7 @@ Thumbs.db
 *.tar
 *.tar.gz
 *.tgz
+.log
 
 # Mongo / local db dumps
 dump/

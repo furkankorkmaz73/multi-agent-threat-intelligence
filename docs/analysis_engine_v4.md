@@ -183,3 +183,42 @@ This makes confidence auditable without changing the calibrated v6/v8 risk score
 ### v9.1 Generic URLhaus term filtering
 
 The confidence breakdown exposed that URLhaus correlations based only on broad platform/CMS terms such as `windows` or `wordpress` could still be treated as accepted evidence. v9.1 treats these low-specificity terms as correlation noise for URLhaus matching. Entity-alignment-only URLhaus evidence is also down-weighted in confidence unless it is supported by exact CVE references, high-signal malware/exploit overlap, or stronger shared context.
+
+## URLhaus IOC scoring recalibration
+
+The URLhaus path now uses a source-specific IOC model instead of reusing the CVE-oriented confidence semantics.
+
+### Risk components
+
+URLhaus risk is composed from:
+
+- `base_feed_component`: malicious IOC feed presence.
+- `threat_type_score`: URLhaus threat label, primarily `malware_download`.
+- `status_score`: online IOCs receive higher operational priority than offline IOCs.
+- `payload_score`: executable, script, archive, and living-off-the-land delivery indicators.
+- `malware_family_score`: known family tags such as Mirai, Mozi, ClearFake, NetSupport, ACRStealer, SmartLoader, and GuLoader.
+- `delivery_pattern_score`: staging paths, script loaders, automated retrieval tags, and plain HTTP.
+- `tag_density_score`: metadata richness from multiple URLhaus tags.
+- `freshness_score`: recent `date_added` values when available.
+- `cross_source_score`: conservative CVE/Dread support when available.
+- `graph_bonus`: bounded graph context for analyst pivoting.
+
+The URLhaus model uses the same final score bands as the rest of the system, so IOC scores in the 4.0+ range are now reported as `MEDIUM` rather than appearing as high-scoring `LOW` findings.
+
+### Confidence components
+
+URLhaus confidence now reports a source-specific breakdown:
+
+- `feed_confidence`
+- `status_confidence`
+- `threat_label_confidence`
+- `tag_confidence`
+- `payload_confidence`
+- `family_confidence`
+- `freshness_confidence`
+- `cross_source_confidence`
+- `graph_confidence`
+- `penalties`
+- `final_confidence`
+
+This keeps IOC confidence tied to evidence quality and metadata richness rather than severity.

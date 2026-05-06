@@ -91,7 +91,7 @@ export default function FindingDetail({ detail, loading }) {
 
       <div className="detail-grid">
         <BreakdownPanel title="Primary score drivers" data={detail.feature_breakdown} type="risk" />
-        <BreakdownPanel title="Confidence breakdown" data={confidenceBreakdown} type="confidence" emptyLabel={detail.source === "cve" ? "No confidence breakdown available." : "Confidence breakdown is currently available for CVE analysis only."} />
+        <BreakdownPanel title="Confidence breakdown" data={confidenceBreakdown} type="confidence" emptyLabel="No source-specific confidence breakdown available. Re-run analysis with the latest model to generate it." />
         <EvidenceQuality evidence={evidence} />
         <NlpPanel entities={evidence.nlp_entities || {}} />
         <TextList title="Explanation" items={detail.explanation} />
