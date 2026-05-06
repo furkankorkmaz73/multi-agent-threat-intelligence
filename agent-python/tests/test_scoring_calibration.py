@@ -79,3 +79,31 @@ def test_low_cvss_without_evidence_stays_low():
 
     assert result["risk_level"] == "LOW"
     assert result["risk_score"] < 4.0
+
+
+def test_invalid_cve_record_has_low_risk_confidence():
+    result = RiskEngine().evaluate_cve(
+        {
+            "_id": "CVE-2026-REJECTED",
+            "published": "2026-01-01T00:00:00+00:00",
+            "descriptions": [{"lang": "en", "value": "Rejected reason: this candidate was issued in error."}],
+            "metrics": {},
+        },
+        db=EmptyDB(),
+    )
+
+    assert result["risk_score"] == 0.0
+    assert result["risk_level"] == "LOW"
+    assert result["confidence"] <= 0.35
+    assert result["evidence"]["validity_status"] == "invalid_or_rejected"
+
+
+def test_zero_cvss_without_external_evidence_has_low_confidence():
+    result = RiskEngine().evaluate_cve(
+        _cve(0.0, "Unspecified vulnerability in a legacy component."),
+        db=EmptyDB(),
+    )
+
+    assert result["evidence"]["cvss_score"] == 0.0
+    assert result["evidence"]["related_urlhaus_count"] == 0
+    assert result["confidence"] <= 0.42

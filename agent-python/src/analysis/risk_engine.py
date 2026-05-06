@@ -383,10 +383,14 @@ class RiskEngine:
             "entity_id": cve_id,
             "risk_score": 0.0,
             "risk_level": "LOW",
-            "confidence": 0.95,
+            # Confidence represents risk-scoring reliability, not certainty that
+            # the record is invalid. Rejected/reserved CVE records carry no
+            # actionable vulnerability evidence and must not appear as
+            # high-confidence LOW findings.
+            "confidence": 0.25,
             "diagnosis": f"{cve_id} excluded from dynamic prioritization as an invalid CVE record.",
-            "explanation": [note],
-            "evidence": {"keywords": [], "cvss_score": 0.0, "age_days": None, "related_urlhaus_count": 0, "related_dread_count": 0},
+            "explanation": [note, "Risk confidence is intentionally low because the record is not actionable vulnerability evidence."],
+            "evidence": {"keywords": [], "cvss_score": 0.0, "age_days": None, "related_urlhaus_count": 0, "related_dread_count": 0, "validity_status": "invalid_or_rejected"},
             "feature_breakdown": {
                 "base_cvss_component": 0.0, "recentness_bonus": 0.0, "urlhaus_correlation_bonus": 0.0,
                 "dread_correlation_bonus": 0.0, "llm_context_bonus": 0.0, "age_penalty": 0.0,
@@ -545,6 +549,16 @@ class RiskEngine:
             confidence -= 0.10
             if exact_hits == 0 and high_signal_hits == 0 and entity_hits == 0 and semantic_signal == 0:
                 confidence -= 0.03
+
+        # Missing CVSS plus no accepted external evidence is intrinsically weak
+        # for CVE prioritization. NLP/keyword extraction can provide context,
+        # but it should not turn metadata-poor CVEs into high-confidence
+        # findings. This also guards reserved/rejected-like records that slip
+        # past invalid marker checks.
+        if not has_cvss and accepted_external == 0:
+            confidence = min(confidence, 0.42)
+            if keyword_count <= 3 and llm_fields_count == 0:
+                confidence = min(confidence, 0.32)
 
         return round(max(0.05, min(confidence, 0.98)), 3)
 

@@ -109,3 +109,21 @@ report_outputs/model_diagnostics_cve_after.md
 ```
 
 Use this to compare distribution shifts after recalibration.
+
+## v7 Confidence Calibration Note
+
+The confidence score represents reliability of the risk assessment, not certainty about a record's administrative status. Invalid, rejected, or reserved CVE records are assigned low risk and low confidence because they do not contain actionable vulnerability evidence.
+
+Additional guardrails were added for metadata-poor CVE records:
+
+- CVSS missing or zero with no accepted external evidence is capped to low/medium confidence.
+- Invalid or rejected CVE records no longer appear as high-confidence LOW findings.
+- Accepted URLhaus/Dread evidence remains the main path to high confidence.
+- High technical severity can still produce high risk, but without corroborating evidence confidence remains moderate.
+
+This keeps the model distinction clear:
+
+```text
+risk_score = prioritization / severity-driven urgency
+confidence = reliability of the evidence supporting that prioritization
+```
