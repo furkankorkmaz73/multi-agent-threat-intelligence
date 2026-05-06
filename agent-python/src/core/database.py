@@ -130,9 +130,13 @@ class DatabaseManager:
             analyzed = int(collection.count_documents({"analysis": {"$exists": True}}))
             unprocessed = max(total - processed, 0)
             avg_risk = 0.0
-            docs = list(collection.find({"analysis.risk_score": {"$exists": True}}, {"analysis.risk_score": 1}).limit(250))
-            if docs:
-                avg_risk = round(sum(float((d.get("analysis", {}) or {}).get("risk_score", 0.0) or 0.0) for d in docs) / len(docs), 4)
+            if hasattr(collection, "aggregate"):
+                avg_cursor = list(collection.aggregate([
+                    {"$match": {"analysis.risk_score": {"$exists": True}}},
+                    {"$group": {"_id": None, "avg_risk_score": {"$avg": "$analysis.risk_score"}}},
+                ]))
+                if avg_cursor:
+                    avg_risk = round(float(avg_cursor[0].get("avg_risk_score") or 0.0), 4)
             sources[source] = {
                 "total": total,
                 "processed": processed,

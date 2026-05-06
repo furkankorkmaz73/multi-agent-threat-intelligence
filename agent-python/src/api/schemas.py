@@ -19,6 +19,10 @@ class FindingSummary(BaseModel):
     analyzed_at: Optional[str] = None
     pipeline_version: Optional[str] = None
     persistence_meta: Dict[str, Any] = Field(default_factory=dict)
+    cvss_score: Optional[float] = None
+    age_days: Optional[int] = None
+    published: Optional[str] = None
+    evidence_summary: Dict[str, Any] = Field(default_factory=dict)
 
 
 class FindingDetail(BaseModel):
@@ -41,6 +45,7 @@ class FindingDetail(BaseModel):
     execution_plan: List[Dict[str, Any]] = Field(default_factory=list)
     critic_review: Dict[str, Any] = Field(default_factory=dict)
     agent_outputs: Dict[str, Any] = Field(default_factory=dict)
+    confidence_breakdown: Dict[str, Any] = Field(default_factory=dict)
     pipeline_version: Optional[str] = None
     persistence_meta: Dict[str, Any] = Field(default_factory=dict)
     analyzed_at: Optional[str] = None
@@ -65,6 +70,7 @@ class AnalyzeResponse(BaseModel):
     execution_plan: List[Dict[str, Any]] = Field(default_factory=list)
     critic_review: Dict[str, Any] = Field(default_factory=dict)
     agent_outputs: Dict[str, Any] = Field(default_factory=dict)
+    confidence_breakdown: Dict[str, Any] = Field(default_factory=dict)
     pipeline_version: Optional[str] = None
     persistence_meta: Dict[str, Any] = Field(default_factory=dict)
 

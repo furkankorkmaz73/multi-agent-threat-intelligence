@@ -9,12 +9,13 @@ class FakeCursor(list):
 
 
 class FakeCollection:
-    def __init__(self, total=0, processed=0, analyzed=0):
+    def __init__(self, total=0, processed=0, analyzed=0, avg_risk_score=0.0):
         self.created_indexes = []
         self.last_update = None
         self.total = total
         self.processed = processed
         self.analyzed = analyzed
+        self.avg_risk_score = avg_risk_score
 
     def create_index(self, spec):
         self.created_indexes.append(spec)
@@ -35,6 +36,11 @@ class FakeCollection:
         if "analysis.risk_score" in query:
             return FakeCursor([{"analysis": {"risk_score": 8.0}} for _ in range(max(self.analyzed, 1))])
         return FakeCursor([])
+
+    def aggregate(self, pipeline):
+        if not self.analyzed:
+            return []
+        return [{"_id": None, "avg_risk_score": self.avg_risk_score}]
 
 
 class FakeDBManager(DatabaseManager):
@@ -108,11 +114,13 @@ def test_persist_analysis_result_uses_upsert_and_doc_resolution():
 def test_status_overview_aggregates_source_counts():
     db = FakeDBManager()
     db.collections = {
-        "cve": FakeCollection(total=10, processed=6, analyzed=5),
-        "urlhaus": FakeCollection(total=4, processed=4, analyzed=4),
-        "dread": FakeCollection(total=2, processed=1, analyzed=1),
+        "cve": FakeCollection(total=10, processed=6, analyzed=5, avg_risk_score=4.25),
+        "urlhaus": FakeCollection(total=4, processed=4, analyzed=4, avg_risk_score=6.5),
+        "dread": FakeCollection(total=2, processed=1, analyzed=1, avg_risk_score=2.0),
     }
     overview = db.get_status_overview()
     assert overview["totals"]["total"] == 16
     assert overview["totals"]["analyzed"] == 10
     assert overview["sources"]["cve"]["analysis_coverage"] == 0.5
+    assert overview["sources"]["cve"]["avg_risk_score"] == 4.25
+

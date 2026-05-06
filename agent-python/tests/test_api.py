@@ -20,11 +20,12 @@ class FakeRepo:
                     "confidence": 0.91,
                     "diagnosis": "High-risk CVE finding.",
                     "analyzed_at": datetime(2026, 4, 23, 1, 0, 0, tzinfo=timezone.utc),
+                    "evidence": {"cvss_score": 9.8, "age_days": 1, "urlhaus_match_stats": {"accepted_match_count": 1, "rejected_match_count": 2, "exact_cve_hits": 0, "high_signal_hits": 0, "shared_terms": ["example"]}},
                 },
             }
         ][:limit]
 
-    def get_top_risky_findings(self, source=None, limit: int = 10):
+    def get_top_risky_findings(self, source=None, limit: int = 10, mode: str = "top"):
         docs = [
             {
                 "_source": "urlhaus",
@@ -48,6 +49,7 @@ class FakeRepo:
                     "confidence": 0.91,
                     "diagnosis": "High-risk CVE finding.",
                     "analyzed_at": datetime(2026, 4, 23, 1, 0, 0, tzinfo=timezone.utc),
+                    "evidence": {"cvss_score": 9.8, "age_days": 1, "urlhaus_match_stats": {"accepted_match_count": 1, "rejected_match_count": 2, "exact_cve_hits": 0, "high_signal_hits": 0, "shared_terms": ["example"]}},
                 },
             },
         ]
@@ -177,6 +179,18 @@ def test_top_findings(monkeypatch):
     assert len(data) >= 1
     assert "source" in data[0]
     assert "risk_score" in data[0]
+    assert "evidence_summary" in data[0]
+
+
+def test_top_findings_supports_triage_modes(monkeypatch):
+    client = build_client(monkeypatch)
+
+    response = client.get("/findings/top", params={"limit": 5, "mode": "needs_review"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert len(data) >= 1
 
 
 def test_top_findings_filtered(monkeypatch):

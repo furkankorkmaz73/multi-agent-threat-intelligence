@@ -48,14 +48,39 @@ class APIRepository:
     def get_recent_findings(self, source: str, limit: int = 10) -> List[Dict[str, Any]]:
         return list(self.collections[source].find({"analysis": {"$exists": True}}).sort([("analysis.analyzed_at", pymongo.DESCENDING), ("_id", pymongo.DESCENDING)]).limit(limit))
 
-    def get_top_risky_findings(self, source: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_top_risky_findings(self, source: Optional[str] = None, limit: int = 10, mode: str = "top") -> List[Dict[str, Any]]:
         collections = [source] if source else ["cve", "urlhaus", "dread"]
         all_docs: List[Dict[str, Any]] = []
         for src in collections:
             for doc in self.collections[src].find({"analysis": {"$exists": True}}):
                 doc["_source"] = src
                 all_docs.append(doc)
-        all_docs.sort(key=lambda x: (float(x.get("analysis", {}).get("risk_score", 0.0)), float(x.get("analysis", {}).get("confidence", 0.0))), reverse=True)
+
+        def risk(doc: Dict[str, Any]) -> float:
+            return float((doc.get("analysis", {}) or {}).get("risk_score", 0.0) or 0.0)
+
+        def confidence(doc: Dict[str, Any]) -> float:
+            return float((doc.get("analysis", {}) or {}).get("confidence", 0.0) or 0.0)
+
+        def evidence_strength(doc: Dict[str, Any]) -> int:
+            return int(sum(1 for item in _evidence_summary(doc.get("analysis", {}) or {}).values() if item is True) * 10) + int((_evidence_summary(doc.get("analysis", {}) or {}).get("urlhaus_accepted") or 0) * 4) + int((_evidence_summary(doc.get("analysis", {}) or {}).get("exact_cve_hits") or 0) * 8) + int((_evidence_summary(doc.get("analysis", {}) or {}).get("high_signal_hits") or 0) * 6)
+
+        def analyzed_ts(doc: Dict[str, Any]) -> float:
+            return _parse_datetime_sort_value((doc.get("analysis", {}) or {}).get("analyzed_at"))
+
+        def published_ts(doc: Dict[str, Any]) -> float:
+            return _parse_datetime_sort_value(doc.get("published") or doc.get("date_added") or doc.get("created_at"))
+
+        if mode == "highest_confidence":
+            all_docs.sort(key=lambda doc: (confidence(doc), risk(doc), analyzed_ts(doc)), reverse=True)
+        elif mode == "active_evidence":
+            all_docs.sort(key=lambda doc: (evidence_strength(doc), risk(doc), confidence(doc)), reverse=True)
+        elif mode == "needs_review":
+            all_docs.sort(key=lambda doc: (risk(doc) >= 6.5, risk(doc), 1.0 - confidence(doc), evidence_strength(doc)), reverse=True)
+        elif mode == "recent_high":
+            all_docs.sort(key=lambda doc: (published_ts(doc), risk(doc), confidence(doc)), reverse=True)
+        else:
+            all_docs.sort(key=lambda doc: (risk(doc), confidence(doc), analyzed_ts(doc)), reverse=True)
         return all_docs[:limit]
 
     def get_cve_analysis_docs(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -119,6 +144,40 @@ def _serialize_datetime(value: Any) -> Optional[str]:
     return str(value)
 
 
+def _parse_datetime_sort_value(value: Any) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, datetime):
+        return value.timestamp()
+    try:
+        text = str(value).replace("Z", "+00:00")
+        return datetime.fromisoformat(text).timestamp()
+    except Exception:
+        return 0.0
+
+
+def _evidence_summary(analysis: Dict[str, Any]) -> Dict[str, Any]:
+    evidence = analysis.get("evidence", {}) or {}
+    stats = evidence.get("urlhaus_match_stats", {}) or {}
+    accepted = int(stats.get("accepted_match_count") or evidence.get("related_urlhaus_count") or 0)
+    rejected = int(stats.get("rejected_match_count") or 0)
+    exact = int(stats.get("exact_cve_hits") or 0)
+    high_signal = int(stats.get("high_signal_hits") or 0)
+    shared_terms = stats.get("shared_terms") if isinstance(stats.get("shared_terms"), list) else []
+    related_dread = int(evidence.get("related_dread_count") or 0)
+    return {
+        "cvss_score": evidence.get("cvss_score"),
+        "age_days": evidence.get("age_days"),
+        "urlhaus_accepted": accepted,
+        "urlhaus_rejected": rejected,
+        "exact_cve_hits": exact,
+        "high_signal_hits": high_signal,
+        "shared_terms_count": len(shared_terms),
+        "related_dread_count": related_dread,
+        "has_active_evidence": bool(accepted > 0 or exact > 0 or high_signal > 0 or related_dread > 0),
+    }
+
+
 def _resolve_entity_id(source: str, doc: Dict[str, Any], analysis: Dict[str, Any]) -> str:
     if source == "cve":
         return str(doc.get("_id", analysis.get("entity_id", "unknown-cve")))
@@ -131,6 +190,7 @@ def _resolve_entity_id(source: str, doc: Dict[str, Any], analysis: Dict[str, Any
 
 def _to_finding_summary(source: str, doc: Dict[str, Any]) -> FindingSummary:
     analysis = doc.get("analysis", {})
+    evidence_summary = _evidence_summary(analysis)
     return FindingSummary(
         source=source,
         entity_id=_resolve_entity_id(source, doc, analysis),
@@ -141,6 +201,10 @@ def _to_finding_summary(source: str, doc: Dict[str, Any]) -> FindingSummary:
         analyzed_at=_serialize_datetime(analysis.get("analyzed_at")),
         pipeline_version=analysis.get("pipeline_version") or (analysis.get("persistence_meta") or {}).get("pipeline_version"),
         persistence_meta=dict(analysis.get("persistence_meta", {})),
+        cvss_score=evidence_summary.get("cvss_score"),
+        age_days=evidence_summary.get("age_days"),
+        published=_serialize_datetime(doc.get("published") or doc.get("date_added")),
+        evidence_summary=evidence_summary,
     )
 
 
@@ -166,6 +230,7 @@ def _to_finding_detail(source: str, doc: Dict[str, Any]) -> FindingDetail:
         execution_plan=list(analysis.get("execution_plan", [])),
         critic_review=dict(analysis.get("critic_review", {})),
         agent_outputs=dict(analysis.get("agent_outputs", {})),
+        confidence_breakdown=dict(analysis.get("confidence_breakdown", {}) or (analysis.get("agent_outputs", {}) or {}).get("confidence_breakdown", {})),
         analyzed_at=_serialize_datetime(analysis.get("analyzed_at")),
         pipeline_version=analysis.get("pipeline_version") or (analysis.get("persistence_meta") or {}).get("pipeline_version"),
         persistence_meta=dict(analysis.get("persistence_meta", {})),
@@ -254,8 +319,12 @@ def recent_findings(source: str = Query(..., pattern="^(cve|urlhaus|dread)$"), l
 
 
 @app.get("/findings/top", response_model=List[FindingSummary])
-def top_findings(source: Optional[str] = Query(None, pattern="^(cve|urlhaus|dread)$"), limit: int = Query(10, ge=1, le=100)) -> List[FindingSummary]:
-    docs = repo.get_top_risky_findings(source=source, limit=limit)
+def top_findings(
+    source: Optional[str] = Query(None, pattern="^(cve|urlhaus|dread)$"),
+    limit: int = Query(10, ge=1, le=100),
+    mode: str = Query("top", pattern="^(top|recent_high|highest_confidence|active_evidence|needs_review)$"),
+) -> List[FindingSummary]:
+    docs = repo.get_top_risky_findings(source=source, limit=limit, mode=mode)
     return [_to_finding_summary(str(doc.get("_source")), doc) for doc in docs]
 
 

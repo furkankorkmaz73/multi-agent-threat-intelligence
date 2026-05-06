@@ -1,821 +1,363 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   analyzeInput,
+  getEvaluationDiagnostics,
+  getEvaluationSnapshot,
   getFindingDetail,
   getHealth,
+  getRecentFindings,
+  getStatusOverview,
   getTopFindings,
-  getCveEvaluationSnapshot,
+  searchFindings,
 } from "./api";
-import GraphView from "./GraphView";
+import FindingTable from "./components/FindingTable";
+import FindingDetail from "./components/FindingDetail";
+import MetricCard from "./components/MetricCard";
+import JsonBlock from "./components/JsonBlock";
+import { RiskBadge, StatusPill } from "./components/Badges";
+import { formatNumber, formatPercent } from "./utils/format";
 import "./App.css";
 
 const SOURCES = ["", "cve", "urlhaus", "dread"];
 const ANALYZE_SOURCES = ["cve", "urlhaus", "dread"];
+const TABS = [
+  { id: "findings", label: "Findings" },
+  { id: "evaluation", label: "Evaluation" },
+  { id: "adhoc", label: "Ad-hoc analysis" },
+];
 
-const DEFAULT_PAYLOADS = {
+const SAMPLE_PAYLOADS = {
   cve: `{
-  "_id": "CVE-TEST-1234",
+  "_id": "CVE-DEMO-0001",
   "published": "2026-04-23T00:00:00+00:00",
-  "descriptions": [
-    {
-      "lang": "en",
-      "value": "Remote code execution vulnerability in Example Product."
-    }
-  ],
-  "metrics": {
-    "cvss_metric_v31": [
-      {
-        "cvss_data": {
-          "base_score": 9.8
-        }
-      }
-    ]
-  }
+  "descriptions": [{ "lang": "en", "value": "Remote code execution vulnerability in a public-facing VPN gateway." }],
+  "metrics": { "cvss_metric_v31": [{ "cvss_data": { "base_score": 9.8 } }] }
 }`,
   urlhaus: `{
-  "url": "http://test.com/a.exe",
-  "threat": "malware",
-  "tags": ["loader"],
+  "url": "https://example.com/payload.exe",
+  "threat": "malware_download",
+  "tags": ["loader", "exe"],
   "url_status": "online"
 }`,
   dread: `{
-  "_id": "dread-test-1",
+  "_id": "thread-demo-1",
   "title": "Exploit sale thread",
-  "content": "Selling exploit for CVE-2026-1111 with RCE access",
-  "author": "user1",
+  "content": "Selling exploit for CVE-2026-1111 with remote code execution access",
   "category": "market"
 }`,
 };
 
-function downloadJSON(filename, data) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], {
-    type: "application/json",
-  });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
+function useAsyncState(initialValue) {
+  const [value, setValue] = useState(initialValue);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  return { value, setValue, loading, setLoading, error, setError };
 }
 
-function RiskBadge({ level }) {
+function Section({ title, description, actions, children }) {
   return (
-    <span className="badge" data-level={level || "LOW"}>
-      {level || "LOW"}
-    </span>
-  );
-}
-
-function SectionCard({ title, description, children, action = null }) {
-  return (
-    <section className="section-card glass-card">
-      <div className="section-header">
-        <div className="section-title-wrap">
+    <section className="section-card">
+      <div className="section-heading">
+        <div>
           <h2>{title}</h2>
           {description ? <p>{description}</p> : null}
         </div>
-        {action}
+        {actions ? <div className="section-actions">{actions}</div> : null}
       </div>
       {children}
     </section>
   );
 }
 
-function StatCard({ label, value, tone = "default" }) {
+function TabNav({ activeTab, setActiveTab }) {
   return (
-    <div className="stat-card glass-card" data-tone={tone}>
-      <div className="stat-label">{label}</div>
-      <div className="stat-value">{value}</div>
-    </div>
-  );
-}
-
-function MiniStat({ label, value, note }) {
-  return (
-    <div className="mini-stat glass-card">
-      <div className="mini-stat-label">{label}</div>
-      <div className="mini-stat-value">{value}</div>
-      {note ? <div className="mini-stat-note">{note}</div> : null}
-    </div>
-  );
-}
-
-function KeyValueGrid({ items }) {
-  return (
-    <div className="key-grid">
-      {items.map((item) => (
-        <div key={item.label} className="key-item">
-          <div className="key-label">{item.label}</div>
-          <div className="key-value">{item.value}</div>
-        </div>
+    <div className="tab-nav">
+      {TABS.map((tab) => (
+        <button key={tab.id} className={activeTab === tab.id ? "active" : ""} onClick={() => setActiveTab(tab.id)}>
+          {tab.label}
+        </button>
       ))}
     </div>
   );
 }
 
-function MetricCard({ label, value }) {
+function SourceControls({ source, setSource, limit, setLimit, mode, setMode, query, setQuery, onRefresh }) {
   return (
-    <div className="metric-card">
-      <div className="metric-label">{label}</div>
-      <div className="metric-value">{value}</div>
+    <div className="control-grid">
+      <label>
+        <span>Mode</span>
+        <select value={mode} onChange={(event) => setMode(event.target.value)}>
+          <option value="top">Top risk</option>
+          <option value="recent_high">Recent high risk</option>
+          <option value="needs_review">Needs review</option>
+          <option value="highest_confidence">Highest confidence</option>
+          <option value="active_evidence">Active evidence</option>
+          <option value="recent">Recent analyzed</option>
+          <option value="search">Search</option>
+        </select>
+      </label>
+      <label>
+        <span>Source</span>
+        <select value={source} onChange={(event) => setSource(event.target.value)}>
+          {SOURCES.map((item) => <option key={item || "all"} value={item}>{item ? item.toUpperCase() : "ALL"}</option>)}
+        </select>
+      </label>
+      <label>
+        <span>Limit</span>
+        <select value={limit} onChange={(event) => setLimit(Number(event.target.value))}>
+          {[10, 25, 50, 100].map((item) => <option key={item} value={item}>{item}</option>)}
+        </select>
+      </label>
+      {mode === "search" ? (
+        <label className="wide-control">
+          <span>Search query</span>
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="CVE id, product, keyword…" />
+        </label>
+      ) : null}
+      <button className="primary-button" onClick={onRefresh}>Refresh</button>
     </div>
   );
 }
 
-function titleCase(value) {
-  return String(value || "")
-    .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, (ch) => ch.toUpperCase());
-}
+function Overview({ health, status, evaluationDiagnostics }) {
+  const totals = status?.totals || {};
+  const sources = status?.sources || {};
+  const cve = sources.cve || {};
+  const dbHealthy = health?.database === "ok";
 
-function compactValue(value) {
-  if (value === null || value === undefined || value === "") return "-";
-  if (Array.isArray(value)) return value.length ? value.join(", ") : "-";
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
-}
-
-function scoreTone(value) {
-  const n = Number(value);
-  if (Number.isNaN(n)) return "neutral";
-  if (n < 0) return "negative";
-  if (n >= 20) return "critical";
-  if (n >= 8) return "high";
-  if (n > 0) return "positive";
-  return "neutral";
-}
-
-function BreakdownBar({ label, value, maxAbs }) {
-  const numeric = Number(value || 0);
-  const width = maxAbs > 0 ? Math.min(100, Math.abs(numeric / maxAbs) * 100) : 0;
   return (
-    <div className="breakdown-row" data-tone={scoreTone(numeric)}>
-      <div className="breakdown-row-head">
-        <span>{titleCase(label)}</span>
-        <strong>{formatNumber(numeric)}</strong>
-      </div>
-      <div className="breakdown-track">
-        <div className="breakdown-fill" style={{ width: `${width}%` }} />
-      </div>
+    <div className="overview-grid">
+      <MetricCard label="API status" value={health?.status || "unknown"} note={dbHealthy ? "Database reachable" : "Database degraded"} tone={dbHealthy ? "good" : "bad"} />
+      <MetricCard label="Analyzed findings" value={totals.analyzed ?? "-"} note={`${totals.total ?? "-"} total records`} />
+      <MetricCard label="CVE coverage" value={formatPercent(cve.analysis_coverage)} note={`${cve.analyzed ?? 0}/${cve.total ?? 0}`} />
+      <MetricCard label="Avg analyzed CVE risk" value={`${formatNumber(cve.avg_risk_score)} / 10`} note="Corpus-level persisted analysis" />
+      <MetricCard label="Pipeline" value={status?.pipeline_version || "-"} note="Backend version" />
+      <MetricCard label="Diagnostic rows" value={evaluationDiagnostics?.record_count ?? "-"} note="Sample only" />
     </div>
   );
 }
 
-function ScoreBreakdown({ breakdown = {} }) {
-  const entries = Object.entries(breakdown || {}).filter(([key, value]) => {
-    if (["pre_graph_score", "final_score"].includes(key)) return false;
-    return typeof value === "number" || (typeof value === "string" && value !== "" && !Number.isNaN(Number(value)));
-  });
-
-  const maxAbs = Math.max(1, ...entries.map(([, value]) => Math.abs(Number(value || 0))));
-  const finalScore = breakdown?.final_score;
-  const preGraphScore = breakdown?.pre_graph_score;
-
+function EvaluationPanel({ snapshot, diagnostics }) {
+  const summary = snapshot?.summary;
+  const rows = snapshot?.rows || [];
   return (
-    <div className="score-breakdown">
-      <div className="score-summary-row">
-        <MetricCard label="Pre-graph score" value={formatNumber(preGraphScore)} />
-        <MetricCard label="Final score" value={formatNumber(finalScore)} />
-      </div>
-      <div className="breakdown-bars">
-        {entries.length ? entries.map(([key, value]) => (
-          <BreakdownBar key={key} label={key} value={Number(value)} maxAbs={maxAbs} />
-        )) : <div className="empty-state">No numeric breakdown available.</div>}
-      </div>
+    <div className="evaluation-grid">
+      <section className="panel-card">
+        <div className="panel-title-row">
+          <div>
+            <h3>Diagnostic sample</h3>
+            <p className="panel-subtitle">Sample only, not full corpus.</p>
+          </div>
+        </div>
+        <div className="kv-grid">
+          <div><span>Sample dynamic avg</span><strong>{formatNumber(summary?.avg_final_dynamic_score)}</strong></div>
+          <div><span>Sample CVSS-only avg</span><strong>{formatNumber(summary?.avg_cvss_only_score)}</strong></div>
+          <div><span>Reprioritized</span><strong>{summary?.reprioritized_count_lift_ge_1_5 ?? "-"}</strong></div>
+          <div><span>Graph supported</span><strong>{summary?.graph_supported_count ?? "-"}</strong></div>
+        </div>
+      </section>
+      <section className="panel-card">
+        <div className="panel-title-row">
+          <div>
+            <h3>Sample risk distribution</h3>
+            <p className="panel-subtitle">Computed from diagnostics rows.</p>
+          </div>
+        </div>
+        <div className="risk-distribution">
+          {Object.entries(diagnostics?.risk_level_distribution || {}).map(([level, count]) => (
+            <div key={level} className="distribution-row">
+              <RiskBadge level={level} />
+              <div className="distribution-track"><span style={{ width: `${Math.min(100, count)}%` }} /></div>
+              <strong>{count}</strong>
+            </div>
+          ))}
+        </div>
+      </section>
+      <section className="panel-card wide-panel">
+        <div className="panel-title-row"><h3>Top reprioritized CVEs</h3></div>
+        {rows.length ? (
+          <div className="compact-table-shell">
+            <table className="compact-table">
+              <thead><tr><th>CVE</th><th>Dynamic</th><th>CVSS baseline</th><th>Lift</th><th>Level</th></tr></thead>
+              <tbody>
+                {rows.slice(0, 8).map((row) => (
+                  <tr key={row.cve_id}>
+                    <td className="mono">{row.cve_id}</td>
+                    <td>{formatNumber(row.final_dynamic_score)}</td>
+                    <td>{formatNumber(row.baseline_cvss_only_score)}</td>
+                    <td>{formatNumber(row.lift_from_cvss_only)}</td>
+                    <td><RiskBadge level={row.risk_level} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : <p className="empty-state">No evaluation rows.</p>}
+      </section>
     </div>
   );
 }
 
-function EntityGroup({ label, values }) {
-  const safeValues = Array.isArray(values) ? values.filter(Boolean) : [];
-  if (!safeValues.length) return null;
+function AnalyzeSandbox() {
+  const [source, setSource] = useState("cve");
+  const [payload, setPayload] = useState(SAMPLE_PAYLOADS.cve);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  return (
-    <div className="entity-group">
-      <div className="entity-label">{titleCase(label)}</div>
-      <div className="entity-chip-row">
-        {safeValues.slice(0, 14).map((value) => (
-          <span key={`${label}-${value}`} className="entity-chip">{value}</span>
-        ))}
-        {safeValues.length > 14 ? <span className="entity-chip muted-chip">+{safeValues.length - 14}</span> : null}
-      </div>
-    </div>
-  );
-}
+  function updateSource(nextSource) {
+    setSource(nextSource);
+    setPayload(SAMPLE_PAYLOADS[nextSource]);
+    setResult(null);
+    setError("");
+  }
 
-function NlpEntityPanel({ entities = {} }) {
-  const preferredOrder = [
-    "cve_ids",
-    "cwe_ids",
-    "products",
-    "versions",
-    "vuln_types",
-    "impacts",
-    "threat_terms",
-    "iocs",
-    "domains",
-    "keywords",
-    "salient_phrases",
-  ];
-  const keys = preferredOrder.filter((key) => Array.isArray(entities?.[key]) && entities[key].length);
-
-  if (!keys.length) {
-    return <div className="empty-state">No NLP entities were extracted for this record.</div>;
+  async function runAnalysis() {
+    setLoading(true);
+    setError("");
+    try {
+      const parsed = JSON.parse(payload);
+      setResult(await analyzeInput(source, parsed));
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
-    <div className="entity-panel">
-      {keys.map((key) => <EntityGroup key={key} label={key} values={entities[key]} />)}
-    </div>
-  );
-}
-
-function EvidenceMetricGrid({ evidence = {}, relationSummary = {} }) {
-  const nlp = evidence?.nlp_entities || {};
-  const highSignalTerms = [
-    ...(nlp.vuln_types || []),
-    ...(nlp.impacts || []),
-    ...(nlp.threat_terms || []),
-  ];
-
-  return (
-    <div className="metric-strip">
-      <MetricCard label="CVSS" value={formatNumber(evidence.cvss_score)} />
-      <MetricCard label="URLhaus links" value={evidence.related_urlhaus_count ?? 0} />
-      <MetricCard label="Dread links" value={evidence.related_dread_count ?? 0} />
-      <MetricCard label="Evidence relations" value={relationSummary.total_relations ?? 0} />
-      <MetricCard label="Extracted entities" value={Object.values(nlp).reduce((sum, values) => sum + (Array.isArray(values) ? values.length : 0), 0)} />
-      <MetricCard label="High-signal terms" value={highSignalTerms.length} />
-    </div>
-  );
-}
-
-function SourceContributionPanel({ contributions = {} }) {
-  const rows = Object.entries(contributions || {}).filter(([, value]) => value !== null && value !== undefined);
-  if (!rows.length) return <div className="empty-state">No source contribution detail available.</div>;
-
-  return (
-    <div className="contribution-grid">
-      {rows.map(([key, value]) => (
-        <div key={key} className="contribution-card">
-          <span>{titleCase(key)}</span>
-          <strong>{compactValue(value)}</strong>
+    <Section title="Ad-hoc analyzer" description="Run one payload through the analysis engine without writing it to MongoDB.">
+      <div className="sandbox-grid">
+        <div className="sandbox-editor">
+          <label>
+            <span>Source</span>
+            <select value={source} onChange={(event) => updateSource(event.target.value)}>
+              {ANALYZE_SOURCES.map((item) => <option key={item} value={item}>{item.toUpperCase()}</option>)}
+            </select>
+          </label>
+          <textarea value={payload} onChange={(event) => setPayload(event.target.value)} spellCheck="false" />
+          <button className="primary-button" onClick={runAnalysis} disabled={loading}>{loading ? "Analyzing…" : "Analyze payload"}</button>
+          {error ? <div className="error-banner">{error}</div> : null}
         </div>
-      ))}
-    </div>
+        <div className="sandbox-result">
+          {result ? <JsonBlock title="Analysis result" data={result} /> : <div className="empty-state large">Run a payload to see score, confidence, and evidence output.</div>}
+        </div>
+      </div>
+    </Section>
   );
-}
-
-function formatNumber(value, digits = 2) {
-  if (value === null || value === undefined || value === "") return "-";
-  const n = Number(value);
-  if (Number.isNaN(n)) return String(value);
-  return n.toFixed(digits);
 }
 
 export default function App() {
-  const [health, setHealth] = useState(null);
+  const health = useAsyncState(null);
+  const status = useAsyncState(null);
+  const findings = useAsyncState([]);
+  const detail = useAsyncState(null);
+  const evaluation = useAsyncState(null);
+  const diagnostics = useAsyncState(null);
   const [source, setSource] = useState("");
+  const [limit, setLimit] = useState(25);
+  const [mode, setMode] = useState("top");
   const [query, setQuery] = useState("");
-  const [findings, setFindings] = useState([]);
-  const [selected, setSelected] = useState(null);
-  const [detail, setDetail] = useState(null);
-  const [error, setError] = useState("");
-  const [loadingList, setLoadingList] = useState(false);
-  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [activeTab, setActiveTab] = useState("findings");
+  const selectedKey = detail.value ? `${detail.value.source}:${detail.value.entity_id}` : "";
 
-  const [analyzeSource, setAnalyzeSource] = useState("urlhaus");
-  const [analyzeText, setAnalyzeText] = useState(DEFAULT_PAYLOADS.urlhaus);
-  const [analyzeLoading, setAnalyzeLoading] = useState(false);
-  const [evaluation, setEvaluation] = useState(null);
-  const [evaluationLoading, setEvaluationLoading] = useState(false);
+  async function loadOverview() {
+    health.setError("");
+    status.setError("");
+    try {
+      const [healthPayload, statusPayload, evaluationPayload, diagnosticsPayload] = await Promise.all([
+        getHealth(),
+        getStatusOverview(),
+        getEvaluationSnapshot({ limit: 50, topK: 10 }).catch(() => null),
+        getEvaluationDiagnostics({ limit: 500 }).catch(() => null),
+      ]);
+      health.setValue(healthPayload);
+      status.setValue(statusPayload);
+      evaluation.setValue(evaluationPayload);
+      diagnostics.setValue(diagnosticsPayload);
+    } catch (err) {
+      health.setError(err.message || String(err));
+    }
+  }
 
-  useEffect(() => {
-    getHealth()
-      .then(setHealth)
-      .catch((err) => setError(err.message));
-  }, []);
-
-  useEffect(() => {
-    setEvaluationLoading(true);
-    getCveEvaluationSnapshot(12, 10)
-      .then(setEvaluation)
-      .catch((err) => setError(err.message))
-      .finally(() => setEvaluationLoading(false));
-  }, []);
-
-  useEffect(() => {
-    setLoadingList(true);
-    setError("");
-
-    getTopFindings(20, source)
-      .then((data) => {
-        setFindings(data);
-      })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoadingList(false));
-  }, [source]);
-
-  const filteredFindings = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return findings;
-
-    return findings.filter((item) => {
-      return (
-        item.entity_id.toLowerCase().includes(q) ||
-        item.source.toLowerCase().includes(q) ||
-        item.risk_level.toLowerCase().includes(q) ||
-        item.diagnosis.toLowerCase().includes(q)
-      );
-    });
-  }, [findings, query]);
-
-  useEffect(() => {
-    if (filteredFindings.length === 0) {
-      setSelected(null);
-      if (!detail?.__live) {
-        setDetail(null);
+  async function loadFindings() {
+    findings.setLoading(true);
+    findings.setError("");
+    try {
+      let payload;
+      if (mode === "recent") {
+        payload = await getRecentFindings({ source: source || "cve", limit });
+      } else if (mode === "search") {
+        payload = query.trim() ? await searchFindings({ source: source || "cve", query: query.trim(), limit }) : [];
+      } else {
+        payload = await getTopFindings({ source, limit, mode });
       }
-      return;
-    }
-
-    const stillVisible = filteredFindings.find(
-      (item) =>
-        item.source === selected?.source && item.entity_id === selected?.entity_id
-    );
-
-    if (!stillVisible && !detail?.__live) {
-      setSelected(filteredFindings[0]);
-    }
-  }, [filteredFindings, selected, detail]);
-
-  useEffect(() => {
-    if (!selected) return;
-
-    setLoadingDetail(true);
-    setError("");
-
-    getFindingDetail(selected.source, selected.entity_id)
-      .then((data) => setDetail(data))
-      .catch((err) => setError(err.message))
-      .finally(() => setLoadingDetail(false));
-  }, [selected?.source, selected?.entity_id]);
-
-  const stats = useMemo(() => {
-    const total = filteredFindings.length;
-    const critical = filteredFindings.filter((x) => x.risk_level === "CRITICAL").length;
-    const high = filteredFindings.filter((x) => x.risk_level === "HIGH").length;
-    const medium = filteredFindings.filter((x) => x.risk_level === "MEDIUM").length;
-    const low = filteredFindings.filter((x) => x.risk_level === "LOW").length;
-
-    return { total, critical, high, medium, low };
-  }, [filteredFindings]);
-
-  const healthTone = useMemo(() => {
-    if (!health) return "warn";
-    return health.status === "ok" ? "good" : "warn";
-  }, [health]);
-
-  const evaluationSummary = useMemo(() => evaluation?.summary || null, [evaluation]);
-
-  const priorityHeadline = useMemo(() => {
-    if (!detail) return "Select a finding to inspect risk drivers, graph context, and analyst guidance.";
-    const relationCount = detail.relation_summary?.total_relations ?? detail.graph_edges?.length ?? 0;
-    const sourceCount = detail.graph_summary?.source_breakdown
-      ? Object.keys(detail.graph_summary.source_breakdown).length
-      : 0;
-    return `${relationCount} linked relation${relationCount === 1 ? "" : "s"} across ${sourceCount || 1} source${sourceCount === 1 ? "" : "s"}.`;
-  }, [detail]);
-
-  function handleAnalyzeSourceChange(nextSource) {
-    setAnalyzeSource(nextSource);
-    setAnalyzeText(DEFAULT_PAYLOADS[nextSource]);
-  }
-
-  async function handleAnalyzeSubmit() {
-    setAnalyzeLoading(true);
-    setError("");
-
-    try {
-      const payload = JSON.parse(analyzeText);
-      const result = await analyzeInput(analyzeSource, payload);
-
-      setSelected(null);
-      setDetail({
-        ...result,
-        source: analyzeSource,
-        analyzed_at: new Date().toISOString(),
-        __live: true,
-      });
+      findings.setValue(payload);
+      if (!payload.some((item) => `${item.source}:${item.entity_id}` === selectedKey)) detail.setValue(null);
     } catch (err) {
-      setError(err.message);
+      findings.setError(err.message || String(err));
     } finally {
-      setAnalyzeLoading(false);
+      findings.setLoading(false);
     }
   }
 
-  function handleLoadSample() {
-    setAnalyzeText(DEFAULT_PAYLOADS[analyzeSource]);
-    setError("");
-  }
-
-  function handleClearInput() {
-    setAnalyzeText("");
-    setError("");
-  }
-
-  function handlePrettyFormat() {
+  async function selectFinding(finding) {
+    detail.setLoading(true);
+    detail.setError("");
     try {
-      const parsed = JSON.parse(analyzeText);
-      setAnalyzeText(JSON.stringify(parsed, null, 2));
-      setError("");
-    } catch {
-      setError("Invalid JSON: unable to format input.");
-    }
-  }
-
-  function handleExportResult() {
-    if (!detail) return;
-
-    const rawName = `${detail.source || "analysis"}-${detail.entity_id || "result"}.json`;
-    const filename = rawName.replace(/[^\w.-]+/g, "_");
-    downloadJSON(filename, detail);
-  }
-
-  async function refreshFindings() {
-    setLoadingList(true);
-    try {
-      const data = await getTopFindings(20, source);
-      setFindings(data);
+      detail.setValue(await getFindingDetail({ source: finding.source, entityId: finding.entity_id }));
     } catch (err) {
-      setError(err.message);
+      detail.setError(err.message || String(err));
     } finally {
-      setLoadingList(false);
+      detail.setLoading(false);
     }
   }
 
-  async function refreshEvaluation() {
-    setEvaluationLoading(true);
-    try {
-      const data = await getCveEvaluationSnapshot(12, 10);
-      setEvaluation(data);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setEvaluationLoading(false);
-    }
-  }
+  useEffect(() => { loadOverview(); }, []);
+  useEffect(() => { loadFindings(); }, [source, limit, mode]);
+
+  const globalError = useMemo(() => health.error || status.error || findings.error || detail.error, [health.error, status.error, findings.error, detail.error]);
 
   return (
-    <div className="app-shell">
-      <div className="app-container">
-        <section className="hero">
-          <div className="hero-grid">
-            <div>
-              <span className="eyebrow">Multi-source CTI workbench</span>
-              <h1 className="hero-title">Threat prioritization with evidence, graph context, and analyst workflow.</h1>
-              <div className="hero-copy">
-                Correlate CVEs, malicious URLs, and dark-web intelligence in one place. The dashboard now emphasizes decision support: what matters first, why it was prioritized, and which supporting relations changed the score.
-              </div>
-              <div className="hero-chips">
-                <span className="hero-chip">Graph-supported context</span>
-                <span className="hero-chip">Explainable dynamic scoring</span>
-                <span className="hero-chip">NLP entity extraction</span>
-                <span className="hero-chip">Comparative evaluation</span>
-                <span className="hero-chip">Live payload analysis</span>
-              </div>
-            </div>
+    <main className="app-shell">
+      <header className="hero-section">
+        <div>
+          <StatusPill label="Threat intelligence analyst console" status="info" />
+          <h1>Multi-source risk triage</h1>
+          <p>Review CVE, URLhaus, and dark-web intelligence with explicit risk, confidence, evidence quality, and model diagnostics.</p>
+        </div>
+        <button className="secondary-button" onClick={() => { loadOverview(); loadFindings(); }}>Refresh all</button>
+      </header>
 
-            <div className="hero-mini-grid">
-              <MiniStat
-                label="System"
-                value={health ? String(health.status).toUpperCase() : "LOADING"}
-                note="API and scoring services"
-              />
-              <MiniStat
-                label="Priority queue"
-                value={stats.critical + stats.high}
-                note="critical + high findings"
-              />
-              <MiniStat
-                label="Graph support"
-                value={evaluationSummary?.graph_supported_count ?? "-"}
-                note="CVE records with graph lift"
-              />
-              <MiniStat
-                label="Avg dynamic score"
-                value={formatNumber(evaluationSummary?.avg_final_dynamic_score)}
-                note="evaluation sample"
-              />
-            </div>
-          </div>
-          {error ? <div className="error-banner">{error}</div> : null}
+      {globalError ? <div className="error-banner">{globalError}</div> : null}
+
+      <Overview health={health.value} status={status.value} evaluationDiagnostics={diagnostics.value} />
+
+      <div className="workspace-grid">
+        <section className="main-column">
+          <TabNav activeTab={activeTab} setActiveTab={setActiveTab} />
+
+          {activeTab === "findings" ? (
+            <Section
+              title="Findings"
+              description="Prioritized records from persisted analysis results. Select a row to inspect evidence and scoring details."
+              actions={<SourceControls source={source} setSource={setSource} limit={limit} setLimit={setLimit} mode={mode} setMode={setMode} query={query} setQuery={setQuery} onRefresh={loadFindings} />}
+            >
+              {findings.loading ? <div className="empty-state large">Loading findings…</div> : <FindingTable findings={findings.value} selectedKey={selectedKey} onSelect={selectFinding} />}
+            </Section>
+          ) : null}
+
+          {activeTab === "evaluation" ? (
+            <Section title="Evaluation" description="CVE model diagnostics and reprioritization snapshot from the API. Metrics in this tab are sample-scoped unless explicitly labeled corpus-level.">
+              <EvaluationPanel snapshot={evaluation.value} diagnostics={diagnostics.value} />
+            </Section>
+          ) : null}
+
+          {activeTab === "adhoc" ? <AnalyzeSandbox /> : null}
         </section>
 
-        <div className="stats-grid">
-          <StatCard label="API status" value={health ? `${health.status}` : "loading"} tone={healthTone} />
-          <StatCard label="Visible findings" value={stats.total} tone="info" />
-          <StatCard label="Critical" value={stats.critical} tone="warn" />
-          <StatCard label="High" value={stats.high} tone="warn" />
-          <StatCard label="Medium / low" value={`${stats.medium} / ${stats.low}`} />
-        </div>
-
-        <div className="layout-grid">
-          <div className="stack">
-            <SectionCard
-              title="Priority Queue"
-              description="Browse the highest-risk findings, filter by source, and jump into the analyst workspace."
-              action={<button className="button" onClick={refreshFindings}>Refresh</button>}
-            >
-              <div className="field-grid" style={{ marginBottom: 14 }}>
-                <div className="field">
-                  <label>Source filter</label>
-                  <select value={source} onChange={(e) => setSource(e.target.value)}>
-                    {SOURCES.map((s) => (
-                      <option key={s} value={s}>
-                        {s || "all sources"}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="field">
-                  <label>Search</label>
-                  <input
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder="entity id, diagnosis, source, risk level..."
-                  />
-                </div>
-              </div>
-
-              {loadingList ? (
-                <div className="empty-state">Loading findings...</div>
-              ) : filteredFindings.length === 0 ? (
-                <div className="empty-state">No findings available for the current filter.</div>
-              ) : (
-                <div className="finding-list">
-                  {filteredFindings.map((item) => {
-                    const active =
-                      selected?.source === item.source &&
-                      selected?.entity_id === item.entity_id &&
-                      !detail?.__live;
-
-                    return (
-                      <button
-                        key={`${item.source}-${item.entity_id}`}
-                        className={`finding-item ${active ? "active" : ""}`}
-                        onClick={() => {
-                          setDetail(null);
-                          setSelected(item);
-                        }}
-                      >
-                        <div className="finding-top">
-                          <div className="finding-title">{item.entity_id}</div>
-                          <RiskBadge level={item.risk_level} />
-                        </div>
-                        <div className="finding-meta">{item.source}</div>
-                        <div className="finding-scoreline">
-                          <span>dynamic {formatNumber(item.risk_score)}</span>
-                          <span>confidence {formatNumber(item.confidence)}</span>
-                        </div>
-                        <div className="finding-diagnosis">{item.diagnosis}</div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </SectionCard>
-
-            <SectionCard
-              title="Evaluation Snapshot"
-              description="Show how dynamic scoring moves beyond CVSS-only ranking and where graph support changes priority."
-              action={<button className="button" onClick={refreshEvaluation}>Refresh</button>}
-            >
-              {evaluationLoading ? (
-                <div className="empty-state">Loading comparison snapshot...</div>
-              ) : !evaluationSummary ? (
-                <div className="empty-state">No CVE evaluation snapshot available.</div>
-              ) : (
-                <div className="stack" style={{ gap: 16 }}>
-                  <div className="metric-strip">
-                    <MetricCard label="Records" value={evaluationSummary.record_count} />
-                    <MetricCard label="Avg dynamic" value={formatNumber(evaluationSummary.avg_final_dynamic_score)} />
-                    <MetricCard label="Avg lift vs CVSS" value={formatNumber(evaluationSummary.avg_lift_from_cvss_only)} />
-                    <MetricCard label="Graph supported" value={evaluationSummary.graph_supported_count} />
-                    <MetricCard label="Top overlap" value={`${evaluationSummary.top_overlap_cvss_vs_dynamic}/${evaluationSummary.top_k}`} />
-                    <MetricCard label="Reprioritized ≥1.5" value={evaluationSummary.reprioritized_count_lift_ge_1_5} />
-                  </div>
-
-                  <div className="table-wrap">
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          <th>CVE</th>
-                          <th>CVSS-only</th>
-                          <th>+Corr</th>
-                          <th>+Graph</th>
-                          <th>Dynamic</th>
-                          <th>Lift</th>
-                          <th>Links</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(evaluation?.rows || []).map((row) => (
-                          <tr key={row.cve_id}>
-                            <td style={{ fontWeight: 800 }}>{row.cve_id}</td>
-                            <td>{formatNumber(row.baseline_cvss_only_score)}</td>
-                            <td>{formatNumber(row.baseline_plus_correlation)}</td>
-                            <td>{formatNumber(row.baseline_plus_graph)}</td>
-                            <td>
-                              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                                <span>{formatNumber(row.final_dynamic_score)}</span>
-                                <RiskBadge level={row.risk_level || "LOW"} />
-                              </div>
-                            </td>
-                            <td style={{ fontWeight: 800, color: Number(row.lift_from_cvss_only) >= 1.5 ? "#86efac" : undefined }}>
-                              {formatNumber(row.lift_from_cvss_only)}
-                            </td>
-                            <td>U:{row.related_urlhaus_count || 0} / D:{row.related_dread_count || 0}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </SectionCard>
-
-            <SectionCard
-              title="Live Analysis"
-              description="Paste a raw object from any supported source to preview scoring, evidence, and graph relationships immediately."
-            >
-              <div className="field-grid">
-                <div className="field">
-                  <label>Analyze source</label>
-                  <select value={analyzeSource} onChange={(e) => handleAnalyzeSourceChange(e.target.value)}>
-                    {ANALYZE_SOURCES.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="field">
-                  <label>JSON payload</label>
-                  <textarea value={analyzeText} onChange={(e) => setAnalyzeText(e.target.value)} rows={16} />
-                </div>
-
-                <div className="button-row">
-                  <button className="button" onClick={handleLoadSample}>Load Sample</button>
-                  <button className="ghost-button" onClick={handlePrettyFormat}>Pretty Format</button>
-                  <button className="ghost-button danger-button" onClick={handleClearInput}>Clear</button>
-                  <button className="secondary-button success-button" onClick={handleAnalyzeSubmit} disabled={analyzeLoading}>
-                    {analyzeLoading ? "Analyzing..." : "Analyze Now"}
-                  </button>
-                </div>
-              </div>
-            </SectionCard>
-          </div>
-
-          <div className="stack">
-            <SectionCard
-              title={detail?.__live ? "Live Analysis Result" : "Analyst Workspace"}
-              description={priorityHeadline}
-              action={detail ? <button className="button" onClick={handleExportResult}>Export JSON</button> : null}
-            >
-              {loadingDetail ? (
-                <div className="empty-state">Loading detail...</div>
-              ) : !detail ? (
-                <div className="empty-state">Select a finding from the queue or run a live analysis payload.</div>
-              ) : (
-                <div className="stack">
-                  <div className="detail-hero">
-                    <div className="detail-title-row">
-                      <div>
-                        <h2 className="detail-title">{detail.entity_id}</h2>
-                        <div className="badge-row">
-                          <RiskBadge level={detail.risk_level} />
-                          <span className="info-chip">source {detail.source}</span>
-                          <span className="info-chip">dynamic {formatNumber(detail.risk_score)}</span>
-                          <span className="info-chip">confidence {formatNumber(detail.confidence)}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="detail-subtitle">{detail.diagnosis}</div>
-                  </div>
-
-                  <KeyValueGrid
-                    items={[
-                      { label: "Analyzed at", value: detail.analyzed_at || "-" },
-                      { label: "Graph nodes", value: detail.graph_summary?.node_count ?? "-" },
-                      { label: "Graph edges", value: detail.graph_summary?.edge_count ?? "-" },
-                      { label: "Centrality score", value: detail.graph_summary?.centrality_score ?? "-" },
-                    ]}
-                  />
-
-                  <div className="analysis-overview-panel">
-                    <h3>Evidence Overview</h3>
-                    <EvidenceMetricGrid evidence={detail.evidence || {}} relationSummary={detail.relation_summary || {}} />
-                  </div>
-
-                  <div className="panel">
-                    <div className="panel-heading-row">
-                      <div>
-                        <h3>Explainable Score Breakdown</h3>
-                        <p>Shows which analysis signals moved the dynamic risk score up or down.</p>
-                      </div>
-                    </div>
-                    <ScoreBreakdown breakdown={detail.feature_breakdown || {}} />
-                  </div>
-
-                  <div className="panel">
-                    <div className="panel-heading-row">
-                      <div>
-                        <h3>NLP Entity Extraction</h3>
-                        <p>Security entities extracted from the raw record and used by retrieval, correlation, and scoring.</p>
-                      </div>
-                    </div>
-                    <NlpEntityPanel entities={detail.evidence?.nlp_entities || {}} />
-                  </div>
-
-                  <div className="two-col">
-                    <div className="panel">
-                      <h3>Source Contributions</h3>
-                      <SourceContributionPanel contributions={detail.source_contributions || {}} />
-                    </div>
-                    <div className="panel">
-                      <h3>Counterfactuals</h3>
-                      <pre className="pre-block">{JSON.stringify(detail.counterfactuals || {}, null, 2)}</pre>
-                    </div>
-                  </div>
-
-                  <div className="panel">
-                    <h3>Graph Summary</h3>
-                    <pre className="pre-block">{JSON.stringify(detail.graph_summary, null, 2)}</pre>
-                  </div>
-
-                  <div className="two-col">
-                    <div className="panel list-panel">
-                      <h3>Explanation</h3>
-                      <ul>
-                        {detail.explanation.map((line, idx) => (
-                          <li key={idx}>{line}</li>
-                        ))}
-                      </ul>
-                    </div>
-                    <div className="panel list-panel">
-                      <h3>Recommendations</h3>
-                      <ul>
-                        {detail.recommendations.map((line, idx) => (
-                          <li key={idx}>{line}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </SectionCard>
-
-            <SectionCard
-              title="Relationship Graph"
-              description="Inspect the surrounding evidence network and the strongest linked indicators or dark-web references."
-            >
-              {!detail ? (
-                <div className="empty-state">No graph available yet.</div>
-              ) : (
-                <GraphView source={detail.source} entityId={detail.entity_id} edges={detail.graph_edges || []} />
-              )}
-            </SectionCard>
-
-            <SectionCard
-              title="Evidence Ledger"
-              description="Review the top graph edges with confidence, provenance, and machine-readable relation labels."
-            >
-              {!detail || !detail.graph_edges?.length ? (
-                <div className="empty-state">No graph edges available for this selection.</div>
-              ) : (
-                <div className="edge-grid">
-                  {detail.graph_edges.slice(0, 12).map((edge, idx) => (
-                    <div key={idx} className="edge-card">
-                      <div className="edge-relation">{edge.relation}</div>
-                      <div><strong>source:</strong> {edge.source}</div>
-                      <div><strong>target:</strong> {edge.target}</div>
-                      <div><strong>weight:</strong> {edge.weight}</div>
-                      <div><strong>confidence:</strong> {edge.confidence ?? "-"}</div>
-                      <div><strong>evidence:</strong> {edge.evidence_type || "-"}</div>
-                      <div><strong>provenance:</strong> {edge.provenance || "-"}</div>
-                      <div><strong>why linked:</strong> {edge.explanation || "-"}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </SectionCard>
-          </div>
-        </div>
+        <FindingDetail detail={detail.value} loading={detail.loading} />
       </div>
-    </div>
+    </main>
   );
 }

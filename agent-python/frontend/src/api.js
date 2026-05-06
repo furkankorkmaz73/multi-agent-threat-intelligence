@@ -1,62 +1,64 @@
 const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 
 async function fetchJSON(path, options = {}) {
-  const res = await fetch(`${API_BASE}${path}`, options);
-
-  if (!res.ok) {
-    let message = `API request failed: ${res.status}`;
+  const response = await fetch(`${API_BASE}${path}`, options);
+  if (!response.ok) {
+    let message = `API request failed: ${response.status}`;
     try {
-      const data = await res.json();
-      if (data?.detail) {
-        message = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
-      }
+      const payload = await response.json();
+      if (payload?.detail) message = typeof payload.detail === "string" ? payload.detail : JSON.stringify(payload.detail);
     } catch {
-      // ignore json parse failure
+      // ignore invalid error body
     }
     throw new Error(message);
   }
-
-  return res.json();
+  return response.json();
 }
 
-export async function getHealth() {
+function params(query) {
+  const search = new URLSearchParams();
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") search.set(key, String(value));
+  });
+  return search.toString();
+}
+
+export function getHealth() {
   return fetchJSON("/health");
 }
 
-export async function getTopFindings(limit = 10, source = "") {
-  const params = new URLSearchParams();
-  params.set("limit", String(limit));
-  if (source) params.set("source", source);
-  return fetchJSON(`/findings/top?${params.toString()}`);
+export function getStatusOverview() {
+  return fetchJSON("/status/overview");
 }
 
-export async function getRecentFindings(source, limit = 10) {
-  const params = new URLSearchParams();
-  params.set("source", source);
-  params.set("limit", String(limit));
-  return fetchJSON(`/findings/recent?${params.toString()}`);
+export function getTopFindings({ source = "", limit = 25, mode = "top" } = {}) {
+  return fetchJSON(`/findings/top?${params({ source, limit, mode })}`);
 }
 
-export async function getFindingDetail(source, entityId) {
-  const params = new URLSearchParams();
-  params.set("source", source);
-  params.set("entity_id", entityId);
-  return fetchJSON(`/findings/detail?${params.toString()}`);
+export function getRecentFindings({ source = "cve", limit = 25 } = {}) {
+  return fetchJSON(`/findings/recent?${params({ source, limit })}`);
 }
 
-export async function analyzeInput(source, payload) {
+export function searchFindings({ source = "cve", query, limit = 25 }) {
+  return fetchJSON(`/findings/search?${params({ source, query, limit })}`);
+}
+
+export function getFindingDetail({ source, entityId }) {
+  return fetchJSON(`/findings/detail?${params({ source, entity_id: entityId })}`);
+}
+
+export function getEvaluationSnapshot({ limit = 50, topK = 10 } = {}) {
+  return fetchJSON(`/evaluation/cve?${params({ limit, top_k: topK })}`);
+}
+
+export function getEvaluationDiagnostics({ limit = 500 } = {}) {
+  return fetchJSON(`/evaluation/cve/diagnostics?${params({ limit })}`);
+}
+
+export function analyzeInput(source, payload) {
   return fetchJSON(`/analyze/${source}`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-}
-
-export async function getCveEvaluationSnapshot(limit = 25, topK = 10) {
-  const params = new URLSearchParams();
-  params.set("limit", String(limit));
-  params.set("top_k", String(topK));
-  return fetchJSON(`/evaluation/cve?${params.toString()}`);
 }
