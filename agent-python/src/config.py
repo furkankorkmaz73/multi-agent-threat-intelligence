@@ -50,7 +50,7 @@ class RuntimeConfig:
 
 @dataclass(frozen=True)
 class ScoreWeights:
-    base_cvss_multiplier: float = float(os.getenv("BASE_CVSS_MULTIPLIER", "0.55"))
+    base_cvss_multiplier: float = float(os.getenv("BASE_CVSS_MULTIPLIER", "0.72"))
     zero_cvss_fallback: float = float(os.getenv("ZERO_CVSS_FALLBACK", "1.5"))
     graph_bonus_multiplier: float = float(os.getenv("GRAPH_BONUS_MULTIPLIER", "0.55"))
     graph_bonus_cap: float = float(os.getenv("GRAPH_BONUS_CAP", "0.6"))
@@ -66,13 +66,13 @@ class ScoreWeights:
     recentness_0_3_days: float = float(os.getenv("RECENTNESS_0_3_DAYS", "1.2"))
     recentness_4_14_days: float = float(os.getenv("RECENTNESS_4_14_DAYS", "0.8"))
     recentness_15_30_days: float = float(os.getenv("RECENTNESS_15_30_DAYS", "0.4"))
-    age_penalty_90_plus: float = float(os.getenv("AGE_PENALTY_90_PLUS", "0.8"))
-    age_penalty_365_plus: float = float(os.getenv("AGE_PENALTY_365_PLUS", "1.8"))
-    age_penalty_1825_plus: float = float(os.getenv("AGE_PENALTY_1825_PLUS", "2.5"))
-    age_penalty_3650_plus: float = float(os.getenv("AGE_PENALTY_3650_PLUS", "3.0"))
+    age_penalty_90_plus: float = float(os.getenv("AGE_PENALTY_90_PLUS", "0.15"))
+    age_penalty_365_plus: float = float(os.getenv("AGE_PENALTY_365_PLUS", "0.45"))
+    age_penalty_1825_plus: float = float(os.getenv("AGE_PENALTY_1825_PLUS", "0.75"))
+    age_penalty_3650_plus: float = float(os.getenv("AGE_PENALTY_3650_PLUS", "1.0"))
     critical_threshold: float = float(os.getenv("CRITICAL_THRESHOLD", "8.5"))
-    high_threshold: float = float(os.getenv("HIGH_THRESHOLD", "7.0"))
-    medium_threshold: float = float(os.getenv("MEDIUM_THRESHOLD", "4.5"))
+    high_threshold: float = float(os.getenv("HIGH_THRESHOLD", "6.5"))
+    medium_threshold: float = float(os.getenv("MEDIUM_THRESHOLD", "4.0"))
 
 
 @dataclass(frozen=True)

@@ -632,3 +632,17 @@ Do not use this project to access, distribute, or interact with malicious infras
 ## Author
 
 Furkan Korkmaz
+
+## Risk Model Recalibration
+
+The CVE risk model now separates risk priority from evidence confidence. CVSS is treated as the severity anchor, accepted URLhaus/Dread evidence contributes to active threat scoring, and missing external corroboration primarily lowers confidence instead of forcing high-severity CVEs into LOW risk.
+
+A diagnostics utility is available for before/after model comparison:
+
+```bash
+cd agent-python
+PYTHONPATH=src python src/evaluation/model_diagnostics.py --source cve --suffix before
+PYTHONPATH=src python src/evaluation/model_diagnostics.py --source cve --suffix after
+```
+
+See `docs/analysis_engine_v4.md` for the recalibrated model details.

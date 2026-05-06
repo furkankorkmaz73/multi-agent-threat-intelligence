@@ -37,7 +37,7 @@ class RiskEngine:
         keywords = nlp_features.all_terms[:18]
         age_days = calculate_age_days(data.get("published"))
         recentness_bonus = calculate_recentness_bonus(age_days)
-        age_penalty = calculate_age_penalty(age_days)
+        raw_age_penalty = calculate_age_penalty(age_days)
 
         urlhaus_matches = db.find_related_urlhaus(keywords, limit=SETTINGS.retrieval.candidate_limit) if db else []
         dread_matches = db.find_related_dread(keywords, limit=SETTINGS.retrieval.candidate_limit) if db else []
@@ -49,9 +49,12 @@ class RiskEngine:
         llm_bonus, llm_explanations = self._score_llm_cve_info(llm_info)
         nlp_bonus, nlp_explanations = self._score_nlp_context(nlp_features.to_dict())
 
-        base_score = self.weights.zero_cvss_fallback if cvss_score == 0 else cvss_score * self.weights.base_cvss_multiplier
-        # Transparent 0-10 scoring: base CVSS is the anchor, NLP adds intrinsic exploitability
-        # context, cross-source matches add observed threat activity, and age/graph refine priority.
+        active_evidence_count = len(accepted_urlhaus_matches) + len(accepted_dread_matches)
+        age_penalty = self._adjust_age_penalty(raw_age_penalty, active_evidence_count=active_evidence_count)
+        base_score = self._score_cvss_severity(cvss_score)
+        # Calibrated scoring: CVSS remains the severity anchor. External evidence and
+        # NLP context adjust priority, while missing corroboration primarily affects
+        # confidence rather than forcing high-severity CVEs into LOW risk.
         cross_source_score = urlhaus_score + dread_score
         pre_graph_score = base_score + recentness_bonus + cross_source_score + llm_bonus + nlp_bonus - age_penalty
 
@@ -100,7 +103,10 @@ class RiskEngine:
         if recentness_bonus > 0:
             explanations.append("Recently published or updated vulnerability increased priority.")
         if age_penalty > 0:
-            explanations.append("Older vulnerability record reduced current priority score.")
+            if raw_age_penalty > age_penalty:
+                explanations.append("Older vulnerability record reduced current priority score, but active evidence capped the age penalty.")
+            else:
+                explanations.append("Older vulnerability record modestly reduced current priority score.")
         explanations.extend(urlhaus_explanations)
         explanations.extend(dread_explanations)
         explanations.extend(nlp_explanations)
@@ -172,6 +178,11 @@ class RiskEngine:
                 "llm_context_bonus": round(llm_bonus, 2),
                 "cross_source_bonus": round(cross_source_score, 2),
                 "age_penalty": round(age_penalty, 2),
+                "raw_age_penalty": round(raw_age_penalty, 2),
+                "severity_score": round(base_score, 2),
+                "exploitability_score": round(nlp_bonus + llm_bonus, 2),
+                "active_threat_score": round(cross_source_score, 2),
+                "temporal_score": round(recentness_bonus - age_penalty, 2),
                 "graph_centrality_score": round(float(graph_summary.get("centrality_score", 0.0)), 4),
                 "graph_bonus": round(graph_bonus, 2),
                 "urlhaus_avg_overlap_ratio": round(urlhaus_stats.get("avg_overlap_ratio", 0.0), 4),
@@ -238,7 +249,6 @@ class RiskEngine:
         return {
             "entity_type": "urlhaus",
             "entity_id": entity_id,
-            "risk_score": final_score,
             "risk_score": final_score,
             "risk_level": risk_level,
             "confidence": confidence,
@@ -393,6 +403,18 @@ class RiskEngine:
             "orchestration_trace": [{"agent": "risk", "action": "skip-invalid-cve", "status": "completed", "details": {"reason": "invalid_cve_marker"}}],
         }
 
+    def _score_cvss_severity(self, cvss_score: float) -> float:
+        if cvss_score <= 0:
+            return self.weights.zero_cvss_fallback
+        return round(min(cvss_score * self.weights.base_cvss_multiplier, 7.4), 2)
+
+    def _adjust_age_penalty(self, raw_penalty: float, *, active_evidence_count: int) -> float:
+        if raw_penalty <= 0:
+            return 0.0
+        if active_evidence_count > 0:
+            return round(min(raw_penalty * 0.35, 0.35), 2)
+        return round(min(raw_penalty, 1.0), 2)
+
     def _get_primary_description(self, data: Dict[str, Any]) -> str:
         descriptions = data.get("descriptions", []) or []
         for item in descriptions:
@@ -431,24 +453,32 @@ class RiskEngine:
         products = set(entities.get("products") or [])
 
         if {"remote_code_execution", "authentication_bypass", "privilege_escalation"} & vuln_types:
-            score += 0.45
+            score += 0.65
             explanations.append("NLP identified a high-impact vulnerability type in the CVE description.")
         elif vuln_types:
-            score += 0.20
+            score += 0.30
             explanations.append("NLP identified a concrete vulnerability type in the CVE description.")
 
         if {"takeover", "credential_theft", "initial_access", "data_leak"} & impacts:
-            score += 0.30
+            score += 0.40
             explanations.append("NLP extracted attacker-impact context from the description.")
+        elif impacts:
+            score += 0.15
+            explanations.append("NLP extracted operational impact context from the description.")
 
         if {"exploit", "zero-day", "0day", "rce", "ransomware", "malware"} & threat_terms:
-            score += 0.25
+            score += 0.35
             explanations.append("Threat/exploit terminology in the text increased intrinsic prioritization.")
 
+        critical_product_terms = {"vpn", "firewall", "identity", "exchange", "sharepoint", "router", "gateway", "remote access"}
         if products:
-            score += min(len(products) * 0.03, 0.12)
+            product_text = " ".join(products)
+            score += min(len(products) * 0.04, 0.16)
+            if any(term in product_text for term in critical_product_terms):
+                score += 0.18
+                explanations.append("Affected product context suggests exposed or security-critical infrastructure.")
 
-        return min(round(score, 2), 0.85), explanations
+        return min(round(score, 2), 1.20), explanations
 
     def _calculate_confidence(
         self,
