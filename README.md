@@ -1,183 +1,437 @@
-# Multi-Agent Cyber Threat Intelligence & Risk Analysis System
+# Multi-Agent Threat Intelligence Platform
 
-A multi-agent cyber threat intelligence (CTI) prototype that collects signals from CVE/NVD, URLhaus, and Dread-like open-source threat sources, stores them in MongoDB, and produces explainable dynamic risk scores through a Python analysis pipeline.
+An explainable threat intelligence platform for collecting, analyzing, prioritizing, and reviewing CVE and URLhaus intelligence.
 
-The project combines:
-
-- Go-based threat intelligence collectors
-- MongoDB persistence
-- Python analysis and orchestration
-- FastAPI service layer
-- React/Vite dashboard
-- NLP-assisted evidence extraction
-- Cross-source correlation
-- Graph-based context analysis
-- Explainable risk scoring and recommendations
-
-This is intended as an academic/prototype-grade CTI analysis system. It is suitable for demonstrations and portfolio use, but additional work is required before production use.
+The project combines a Go-based collector, a Python analysis engine, MongoDB persistence, FastAPI APIs, and a React analyst console. It demonstrates practical security engineering patterns: multi-source ingestion, explainable risk scoring, evidence-quality confidence, model diagnostics, and analyst-oriented triage workflows.
 
 ---
 
-## Current Status
+## What This Project Does
 
-The project is no longer only a proposal. The current codebase includes:
+This platform collects and analyzes threat intelligence from multiple sources:
 
-- Go collectors for external intelligence feeds
-- MongoDB-backed persistence
-- Python worker for analysis orchestration
-- FastAPI API for findings and analysis results
-- React/Vite dashboard
-- Risk scoring, correlation, graph analysis, reporting, and evaluation modules
-- Python tests for the analysis layer and API-related behavior
-- Docker Compose development environment
-- GitHub Actions CI workflow
+- **CVE / NVD** vulnerability intelligence
+- **URLhaus** malicious URL / IOC intelligence
+- Optional experimental forum-style intelligence records through the Dread pipeline
 
-The end-to-end flow has been verified locally:
+The system persists raw intelligence records in MongoDB, runs an explainable analysis pipeline, and exposes the results through an analyst console.
 
-```text
-Go collectors
-  → MongoDB
-  → Python analysis worker
-  → FastAPI
-  → React dashboard
-```
+The analyst console supports:
+
+- Source-level coverage and health metrics
+- Prioritized findings
+- CVSS and evidence summaries
+- Risk score and risk level
+- Confidence score and confidence breakdown
+- Primary score drivers
+- NLP-extracted entities
+- Evidence-quality inspection
+- Model diagnostics
+- Ad-hoc payload analysis
+
+---
+
+## Current Project Status
+
+This project is currently best described as:
+
+> **MVP+ / portfolio-grade analyst console**
+
+It is not production-ready or SOC-grade yet, but it is beyond a simple demo. The system can collect real intelligence data, persist it, analyze tens of thousands of records, and explain how prioritization decisions were made.
+
+Validated local dataset snapshot:
+
+| Metric | Value |
+|---|---:|
+| Total records | ~53k |
+| CVE records | ~25k |
+| URLhaus records | ~28k |
+| CVE analyzed coverage | ~99.9% |
+| URLhaus records analyzed | ~28k local run |
+| Average analyzed CVE risk | ~3.85 / 10 |
 
 ---
 
 ## Architecture
 
 ```text
-Threat Sources
-  ├─ NVD / CVE
-  ├─ URLhaus
-  └─ Dread-like source
-        ↓
-Go Collectors
-        ↓
-MongoDB
-        ↓
-Python Worker / Analysis Pipeline
-  ├─ Planner
-  ├─ Correlator
-  ├─ Graph Builder
-  ├─ Risk Engine
-  ├─ Critic
-  └─ Recommender
-        ↓
-FastAPI
-        ↓
-React Dashboard
++-------------------+        +-------------------+
+|   Go Collector    |        |  Python Analyzer  |
+|-------------------|        |-------------------|
+| NVD / CVE fetch   | -----> | Risk scoring      |
+| URLhaus fetch     |        | Confidence model  |
+| Optional Dread    |        | Correlation       |
++-------------------+        | NLP extraction    |
+          |                  | Graph context     |
+          v                  +-------------------+
++-------------------+                  |
+|      MongoDB      | <----------------+
+|-------------------|
+| raw intel records |
+| analysis results  |
++-------------------+
+          |
+          v
++-------------------+        +-------------------+
+|     FastAPI       | -----> | React Dashboard   |
+|-------------------|        |-------------------|
+| health/status     |        | Analyst console   |
+| findings API      |        | Triage modes      |
+| evaluation API    |        | Detail inspector  |
+| ad-hoc analysis   |        | Diagnostics view  |
++-------------------+        +-------------------+
 ```
 
 ---
 
-## Repository Structure
+## Repository Layout
 
 ```text
-agent-go/                  Go-based data collection agents
-agent-python/src/          Python analysis, API, core, evaluation and reporting modules
-agent-python/tests/        Python tests
-agent-python/frontend/     React/Vite dashboard
-docs/                      Analysis engine and architecture notes
-docker-compose.yml         MongoDB + API + frontend development environment
-Makefile                   Common setup, test and run commands
-.github/workflows/ci.yml   CI workflow for Python, Go and frontend validation
-.env.example               Safe environment variable template
+.
+├── agent-go/
+│   ├── cmd/agent-go/              # Go CLI entrypoint
+│   └── internal/
+│       ├── fetch/                 # CVE, URLhaus, Dread collectors
+│       ├── db/                    # MongoDB persistence
+│       └── models/                # Collector data models
+│
+├── agent-python/
+│   ├── src/
+│   │   ├── analysis/              # Risk engine, correlation, NLP, graph context
+│   │   ├── agents/                # Orchestration and optional LLM helper
+│   │   ├── api/                   # FastAPI application and schemas
+│   │   ├── core/                  # Database and persistence logic
+│   │   ├── evaluation/            # Diagnostics and model evaluation utilities
+│   │   └── main.py                # Analysis worker entrypoint
+│   │
+│   ├── tests/                     # Python test suite
+│   └── frontend/                  # React analyst console
+│
+├── docs/                          # Model and engineering documentation
+├── docker-compose.yml
+├── Makefile
+└── README.md
 ```
 
 ---
 
-## Security Notice
+## Core Concepts
 
-Do not commit a real `.env` file.
+### Risk Score
 
-Only `.env.example` should be stored in the repository. Real API keys, database credentials, and connection strings must stay local.
+`risk_score` answers:
 
-Recommended setup:
+> How operationally important is this finding?
+
+It is a priority score between `0` and `10`.
+
+Risk score considers different signals depending on the source.
+
+For CVEs:
+
+- CVSS severity
+- vulnerability type
+- impact context
+- exploitation-related NLP signals
+- accepted cross-source evidence
+- temporal age penalty
+- graph context
+
+For URLhaus IOCs:
+
+- malicious feed presence
+- online/offline status
+- malware-download classification
+- payload indicators
+- malware family tags
+- delivery pattern
+- tag density
+- graph context
+
+---
+
+### Confidence Score
+
+`confidence` answers:
+
+> How well supported is this risk score by evidence?
+
+Confidence is intentionally separate from risk.
+
+A finding can be:
+
+```text
+High risk + medium confidence
+```
+
+This means:
+
+```text
+The intrinsic severity is high, but external corroboration is limited.
+```
+
+The platform stores confidence breakdowns to explain why a confidence value was produced.
+
+For CVEs:
+
+```text
+base_confidence
+metadata_confidence
+entity_confidence
+external_evidence_confidence
+correlation_confidence
+freshness_confidence
+penalties
+final_confidence
+```
+
+For URLhaus:
+
+```text
+feed_confidence
+status_confidence
+threat_label_confidence
+tag_confidence
+payload_confidence
+family_confidence
+freshness_confidence
+cross_source_confidence
+graph_confidence
+penalties
+final_confidence
+```
+
+---
+
+## CVE Risk Model
+
+The CVE risk model was recalibrated to avoid suppressing high-severity vulnerabilities too aggressively.
+
+Key design decisions:
+
+- CVSS is treated as the primary severity anchor.
+- Age penalties are capped and do not destroy high technical severity.
+- Active external evidence increases priority.
+- Missing external corroboration lowers confidence more than it lowers risk.
+- NLP extraction contributes exploitability and impact context.
+- Risk and confidence are separate outputs.
+
+Example behavior:
+
+```text
+CVSS 10 + RCE/buffer overflow + no active external evidence
+→ HIGH risk
+→ medium confidence
+```
+
+This is intentional. It means the vulnerability is technically severe but still needs analyst validation or environment context.
+
+---
+
+## URLhaus IOC Risk Model
+
+URLhaus scoring is source-specific because IOCs are different from CVEs.
+
+The URLhaus model considers:
+
+```text
+base_feed_component
+threat_type_score
+status_score
+payload_score
+malware_family_score
+delivery_pattern_score
+tag_density_score
+freshness_score
+cross_source_score
+graph_bonus
+```
+
+Example behavior:
+
+```text
+online + malware_download + bin.sh + ELF + Mirai/Mozi tags
+→ HIGH IOC risk
+→ high confidence
+```
+
+```text
+offline + weak tags + no payload signal
+→ LOW IOC risk
+```
+
+The model aligns score and level consistently:
+
+```text
+0.0 – 3.9   LOW
+4.0 – 6.4   MEDIUM
+6.5 – 8.4   HIGH
+8.5 – 10.0  CRITICAL
+```
+
+---
+
+## Optional LLM Support
+
+The project includes optional OpenAI-compatible LLM support.
+
+LLM usage is not required for the pipeline to work.
+
+If `OPENAI_API_KEY` is configured, the Python analyzer can use the LLM helper for:
+
+- CVE structured field extraction
+- Dread post classification
+- short analyst-style explanation generation
+
+If no API key is configured:
+
+- the LLM client is disabled
+- LLM helper functions return empty values
+- deterministic NLP, scoring, graph context, and correlation still run normally
+
+Environment variables:
 
 ```bash
-cp .env.example .env
+OPENAI_API_KEY=your_key_here
+OPENAI_BASE_URL=
+LLM_MODEL=gpt-4o-mini
 ```
 
-Then edit `.env` with your local values:
+This makes the project:
+
+> **LLM-optional, not LLM-dependent**
+
+---
+
+## Data Sources
+
+### CVE / NVD
+
+The Go collector can fetch CVE records from NVD.
+
+Example:
+
+```bash
+cd agent-go
+go run ./cmd/agent-go -source cve -mode full -limit 25000
+```
+
+Incremental example:
+
+```bash
+go run ./cmd/agent-go -source cve -mode incremental -days 30 -limit 500
+```
+
+### URLhaus
+
+The Go collector can fetch URLhaus IOC records.
+
+```bash
+cd agent-go
+go run ./cmd/agent-go -source urlhaus -limit 30000
+```
+
+### Dread
+
+A Dread collector path exists, but this source should be treated as optional / experimental in the current project state.
+
+---
+
+## Running With Docker
+
+Start MongoDB, API, and frontend:
+
+```bash
+docker compose up -d
+```
+
+Check containers:
+
+```bash
+docker ps
+```
+
+Expected services:
 
 ```text
-CVE_KEY=your-nvd-api-key
-MONGO_URI=mongodb://localhost:27017
-DB_NAME=threat_intel
+threat-agent-mongodb
+threat-agent-api
+threat-agent-frontend
 ```
 
-If real keys or database credentials were previously exposed, rotate them before pushing the project publicly.
+API:
+
+```text
+http://localhost:8000
+```
+
+Frontend:
+
+```text
+http://localhost:5173
+```
 
 ---
 
-## Requirements
+## Running Locally
 
-Recommended local tooling:
+### 1. Start MongoDB
 
-- Python 3.11+
-- Go 1.22+
-- Node.js 20+
-- Docker and Docker Compose
-- MongoDB, either local or Docker-based
+```bash
+docker compose up -d mongodb
+```
+
+Check MongoDB:
+
+```bash
+mongosh mongodb://localhost:27017
+```
+
+```js
+use threat_intel
+```
+
+```js
+db.cve_intel.countDocuments()
+```
 
 ---
 
-## Local Setup
-
-### 1. Python API and Worker
+### 2. Install Python Dependencies
 
 ```bash
 cd agent-python
 python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-Run the API:
+---
+
+### 3. Run the API
 
 ```bash
+cd agent-python
+source .venv/bin/activate
 PYTHONPATH=src uvicorn api.app:app --reload
 ```
 
-Run the worker once:
+Health check:
 
 ```bash
-PYTHONPATH=src python src/main.py --source all --run-once
+curl http://localhost:8000/health
+```
+
+Status overview:
+
+```bash
+curl http://localhost:8000/status/overview
 ```
 
 ---
 
-### 2. Go Collectors
-
-```bash
-cd agent-go
-go test ./...
-```
-
-Fetch a small CVE batch:
-
-```bash
-go run ./cmd/agent-go -source cve -limit 20 -mode incremental -days 2
-```
-
-Fetch URLhaus records:
-
-```bash
-go run ./cmd/agent-go -source urlhaus -limit 50
-```
-
-Supported sources:
-
-```text
-cve
-urlhaus
-dread
-```
-
----
-
-### 3. Frontend
+### 4. Run the Frontend
 
 ```bash
 cd agent-python/frontend
@@ -185,163 +439,7 @@ npm install
 npm run dev
 ```
 
-The dashboard runs at:
-
-```text
-http://localhost:5173
-```
-
-By default, the frontend talks to:
-
-```text
-http://127.0.0.1:8000
-```
-
-To override this, create `agent-python/frontend/.env`:
-
-```text
-VITE_API_BASE=http://127.0.0.1:8000
-```
-
----
-
-## Docker Compose
-
-Docker is mainly used to simplify the development/demo environment. It is not mandatory for every component, but it makes MongoDB, the API, and the frontend easier to run consistently.
-
-Start the stack:
-
-```bash
-docker compose up --build
-```
-
-Expected services:
-
-```text
-MongoDB   → http://localhost:27017
-API       → http://localhost:8000
-Frontend  → http://localhost:5173
-```
-
-The API and frontend containers are built from dedicated Dockerfiles, so dependencies are not installed from scratch every time the containers start.
-
-To stop the stack:
-
-```bash
-docker compose down
-```
-
-To run the optional worker profile:
-
-```bash
-docker compose --profile worker up --build worker
-```
-
----
-
-## Recommended Development Mode
-
-For day-to-day development, the most practical setup is hybrid:
-
-```text
-Docker:
-  - MongoDB
-
-Local:
-  - Go collector
-  - Python API
-  - Python worker
-  - React frontend
-```
-
-Start only MongoDB:
-
-```bash
-docker compose up mongodb
-```
-
-Then run the API, worker, frontend, and collectors locally. This keeps development faster while still avoiding local MongoDB installation issues.
-
----
-
-## Makefile Commands
-
-From the repository root:
-
-```bash
-make setup-python
-make test-python
-make run-api
-make run-worker
-make setup-frontend
-make run-frontend
-make build-frontend
-make test-go
-make docker-up
-```
-
----
-
-## API Examples
-
-Health check:
-
-```bash
-curl http://127.0.0.1:8000/health
-```
-
-Top analyzed findings:
-
-```bash
-curl "http://127.0.0.1:8000/findings/top?limit=10"
-```
-
-Manual CVE analysis:
-
-```bash
-curl -X POST http://127.0.0.1:8000/analyze/cve \
-  -H "Content-Type: application/json" \
-  -d '{"_id":"CVE-2026-DEMO","descriptions":[{"value":"remote code execution in vpn appliance"}]}'
-```
-
----
-
-## End-to-End Demo Flow
-
-1. Start MongoDB, API, and frontend:
-
-```bash
-docker compose up --build
-```
-
-2. In a separate terminal, collect CVE data:
-
-```bash
-cd agent-go
-go run ./cmd/agent-go -source cve -limit 20 -mode incremental -days 2
-```
-
-3. Collect URLhaus records:
-
-```bash
-go run ./cmd/agent-go -source urlhaus -limit 50
-```
-
-4. Run the Python analysis worker:
-
-```bash
-cd ../agent-python
-source .venv/bin/activate
-PYTHONPATH=src python src/main.py --source all --run-once
-```
-
-5. Check API results:
-
-```bash
-curl "http://localhost:8000/findings/top?limit=5"
-```
-
-6. Open the dashboard:
+Open:
 
 ```text
 http://localhost:5173
@@ -349,300 +447,271 @@ http://localhost:5173
 
 ---
 
-## Analysis Engine
+## Running the Analysis Worker
 
-The analysis engine is the core value of the project. It is designed to produce explainable prioritization, not a black-box prediction.
-
-The pipeline evaluates several signal groups:
-
-- Base technical severity from CVSS
-- NLP-derived vulnerability context
-- Source correlation from URLhaus and Dread-like records
-- Entity and keyword alignment
-- Graph structure and centrality
-- Recency and age effects
-- Evidence quality and confidence
-- Counterfactual score comparisons
-
-The main analysis modules are:
-
-```text
-agent-python/src/analysis/
-  correlator.py
-  graph_builder.py
-  keyword_extractor.py
-  nlp_features.py
-  risk_engine.py
-  scoring.py
-  semantic_similarity.py
-```
-
-The runtime path is:
-
-```text
-src/main.py
-  → agents/orchestrator.py
-    → analysis/risk_engine.py
-      → correlator / graph_builder / scoring / nlp_features
-```
-
----
-
-## NLP and Evidence Extraction
-
-The lightweight NLP layer extracts security-relevant entities such as:
-
-- CVE identifiers
-- CWE identifiers
-- affected products
-- versions
-- vulnerability types
-- impact terms
-- exploit/threat terms
-- IOCs
-- domains
-- salient phrases
-
-This extraction is used to reduce raw keyword noise and improve correlation quality.
-
-Example extracted entities:
-
-```text
-products:
-  - cisco secure firewall
-  - remote access ssl vpn
-
-vulnerability types:
-  - denial_of_service
-
-impacts:
-  - service_disruption
-  - initial_access
-
-threat terms:
-  - exploit
-  - access
-```
-
----
-
-## Evidence-Gated Correlation
-
-Correlation is intentionally conservative.
-
-Retrieved candidates are not automatically treated as accepted evidence. A URLhaus or Dread candidate must pass an evidence gate before it can influence risk scoring, confidence, or graph context.
-
-Accepted evidence may be based on:
-
-- exact CVE match
-- strong entity alignment
-- high-signal exploit or malware terms
-- meaningful lexical overlap
-- semantic and temporal support
-
-Rejected candidates remain diagnostic information only. They must not:
-
-- increase the risk score
-- create risk-relevant graph edges
-- increase confidence
-- appear as accepted related evidence
-
-This prevents weak keyword overlap from producing misleading risk increases.
-
----
-
-## Risk Score Breakdown
-
-The risk engine separates score components for explainability:
-
-```text
-base_cvss_component
-nlp_context_bonus
-urlhaus_correlation_bonus
-dread_correlation_bonus
-cross_source_bonus
-graph_bonus
-age_penalty
-final_score
-```
-
-The model also stores counterfactuals, for example:
-
-```text
-score_without_graph
-score_without_urlhaus
-score_without_dread
-score_without_llm_context
-```
-
-This makes it easier to explain why a score changed.
-
----
-
-## Confidence Model
-
-Risk score and confidence are treated separately.
-
-A high score means the item should be prioritized. High confidence means the system has strong evidence for that score.
-
-Confidence is based on evidence quality, including:
-
-- presence of CVSS metadata
-- quality of normalized entities
-- accepted external evidence
-- exact CVE hits
-- high-signal terms
-- entity overlap
-- semantic signal
-- graph support
-
-Rejected evidence and generic keyword overlap should not inflate confidence.
-
----
-
-## Dashboard Analysis Visibility
-
-The dashboard renders the analysis layer directly instead of hiding it in raw JSON.
-
-It includes:
-
-- evidence overview metrics
-- score breakdown bars
-- NLP entity chips
-- source contribution cards
-- counterfactual output
-- source-level evidence panels
-
-This makes the NLP/correlation/risk-engine behavior visible during demos and manual review.
-
----
-
-## Tests
-
-Run Python tests:
+### Analyze CVEs
 
 ```bash
 cd agent-python
+source .venv/bin/activate
+PYTHONPATH=src python src/main.py --source cve --run-once --batch-size 25000
+```
+
+### Analyze URLhaus
+
+```bash
+cd agent-python
+source .venv/bin/activate
+PYTHONPATH=src python src/main.py --source urlhaus --run-once --batch-size 28414
+```
+
+---
+
+## Resetting Analysis State
+
+### Reset CVE Analysis
+
+```bash
+mongosh mongodb://localhost:27017
+```
+
+```js
+use threat_intel
+```
+
+```js
+db.cve_intel.updateMany(
+  {},
+  {
+    $unset: { analysis: "" },
+    $set: { processed: false }
+  }
+)
+```
+
+### Reset URLhaus Analysis
+
+```js
+db.urlhaus_intel.updateMany(
+  {},
+  {
+    $unset: { analysis: "" },
+    $set: { processed: false }
+  }
+)
+```
+
+---
+
+## API Endpoints
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/health` | API and database health |
+| `GET` | `/status/overview` | Source coverage and analysis status |
+| `GET` | `/findings/top` | Prioritized findings |
+| `GET` | `/findings/{source}/{entity_id}` | Detailed finding inspection |
+| `GET` | `/evaluation/cve` | CVE evaluation snapshot |
+| `GET` | `/evaluation/cve/diagnostics` | CVE diagnostic rows |
+| `POST` | `/analyze/{source}` | Ad-hoc payload analysis |
+
+Example:
+
+```bash
+curl "http://localhost:8000/findings/top?mode=needs_review&limit=10"
+```
+
+Supported finding modes:
+
+```text
+top
+recent_high
+highest_confidence
+active_evidence
+needs_review
+recent
+search
+```
+
+---
+
+## Frontend Analyst Console
+
+The frontend is designed as an analyst triage console, not just a static dashboard.
+
+Main views:
+
+```text
+Findings
+Evaluation
+Ad-hoc analysis
+```
+
+Finding triage modes:
+
+```text
+Top risk
+Recent high risk
+Needs review
+Highest confidence
+Active evidence
+Recent analyzed
+Search
+```
+
+The detail inspector shows:
+
+```text
+Risk score
+Confidence
+Primary score drivers
+Advanced signals
+Confidence breakdown
+Evidence quality
+NLP entities
+Explanations
+Recommendations
+Full payload
+```
+
+---
+
+## Model Diagnostics
+
+Generate diagnostics from persisted MongoDB analysis results:
+
+```bash
+cd agent-python
+source .venv/bin/activate
+PYTHONPATH=src python src/evaluation/model_diagnostics.py --source cve --suffix full_cve
+```
+
+URLhaus:
+
+```bash
+PYTHONPATH=src python src/evaluation/model_diagnostics.py --source urlhaus --suffix full_urlhaus
+```
+
+Diagnostics include:
+
+```text
+risk level distribution
+risk score buckets
+confidence buckets
+CVSS buckets
+accepted / rejected cross-source evidence summaries
+confidence breakdown averages
+high-CVSS suppressed examples
+low-CVSS boosted examples
+```
+
+---
+
+## Testing
+
+### Python Tests
+
+```bash
+cd agent-python
+source .venv/bin/activate
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src pytest -q -p no:ddtrace
 ```
 
-or from the repository root:
+### Go Tests
 
 ```bash
-make test-python
+cd agent-go
+go test ./...
 ```
 
-Run a minimal API smoke test while the API is running:
+### Frontend Build
 
 ```bash
-cd agent-python
-python3 scripts/smoke_api.py http://127.0.0.1:8000
+cd agent-python/frontend
+npm run build
 ```
-
-Some test environments include external pytest plugins such as `ddtrace`, which may slow down test shutdown. The `-p no:ddtrace` flag disables that plugin for the test run.
 
 ---
 
-## Validation Status
+## Current Limitations
 
-The Python test suite has been verified after the latest analysis semantics changes.
+This project is not production-ready yet.
 
-Latest expected result:
+Known limitations:
+
+- No authentication or authorization layer
+- MongoDB runs without access control in local development
+- API error handling can be improved when MongoDB is unavailable
+- No CISA KEV or EPSS integration yet
+- No asset inventory or organization-specific exposure context
+- No VirusTotal, passive DNS, ASN, or geolocation enrichment
+- No campaign clustering for URLhaus IOCs
+- Dread pipeline should be treated as experimental
+- LLM support is optional and not required for deterministic operation
+
+---
+
+## Roadmap
+
+High-value next steps:
+
+1. **CISA KEV integration**
+   - Add known-exploited vulnerability signal.
+   - Improve CRITICAL risk decisions.
+
+2. **EPSS integration**
+   - Add exploitation probability signal.
+   - Improve CVE prioritization quality.
+
+3. **API robustness**
+   - Return graceful degraded responses when MongoDB is unavailable.
+   - Improve frontend degraded-state handling.
+
+4. **Dashboard charts**
+   - Risk distribution
+   - Confidence distribution
+   - Source coverage
+   - URLhaus online/offline split
+   - Top malware families
+
+5. **URLhaus enrichment**
+   - Domain reputation
+   - ASN/geolocation
+   - Passive DNS
+   - Malware family clustering
+
+6. **CI pipeline**
+   - Python tests
+   - Go tests
+   - Frontend build
+
+---
+
+## Engineering Notes
+
+The system intentionally separates:
 
 ```text
-54 passed
+risk_score  = operational priority
+confidence  = evidence quality
 ```
 
-Go and frontend validation should be run in an internet-enabled environment because they may need to download dependencies:
-
-```bash
-make test-go
-make setup-frontend
-make build-frontend
-```
-
----
-
-## Known Limitations
-
-This is a prototype. Important limitations remain:
-
-- Risk scoring is heuristic and requires real-world validation.
-- The current NLP layer is lightweight and rule-based.
-- Dread-like source handling depends on available data and ethical/legal constraints.
-- URLhaus correlation must be interpreted carefully; weak or rejected candidates should not be treated as confirmed relationships.
-- The system does not include authentication, TLS, rate limiting, or production observability.
-- The dashboard is intended for demonstration and analyst support, not as a SOC production console.
-
----
-
-## Possible Improvements
-
-### Short Term
-
-- Split large FastAPI route logic into separate route modules.
-- Add date and severity filters to the dashboard.
-- Improve API response models for full analysis inspection.
-- Add a “re-run analysis” endpoint for selected findings.
-- Add seeded demo data for easier showcase setup.
-
-### Medium Term
-
-- Introduce repository interfaces to reduce direct MongoDB coupling.
-- Add structured logging and metrics.
-- Improve graph scoring with stricter evidence-quality weights.
-- Add benchmark datasets for risk model validation.
-- Add frontend export and comparison views.
-
-### Long Term
-
-- Add authentication, TLS, and rate limiting.
-- Add scheduled ingestion and alerting.
-- Tune model weights using real analyst feedback.
-- Add production-grade semantic model support.
-- Integrate with SIEM/SOAR or ticketing workflows.
-
----
-
-## Suggested Commit Order
-
-If this project is being pushed to GitHub from the staged versions, a clean commit history would be:
+This allows the platform to represent cases like:
 
 ```text
-chore: initialize project with safe configuration
-chore: add developer tooling and CI
-refactor: add NLP-driven evidence analysis
-feat: show explainable analysis in dashboard
-fix: enforce accepted evidence gating in risk analysis
-docs: rewrite README in English
+HIGH risk + MEDIUM confidence
 ```
+
+That means:
+
+```text
+The finding is technically important, but external corroboration or contextual evidence is limited.
+```
+
+This is more useful for analyst triage than forcing every high-severity item to have high confidence.
 
 ---
 
-## License and Ethical Use
+## Example Project Summary
 
-This project is for academic, research, and prototype purposes.
-
-When working with third-party intelligence feeds, dark-web-like sources, malware URLs, or threat infrastructure, follow applicable laws, source terms of service, and ethical research practices.
-
-Do not use this project to access, distribute, or interact with malicious infrastructure beyond safe defensive analysis.
-
----
-
-## Author
-
-Furkan Korkmaz
-
-## Risk Model Recalibration
-
-The CVE risk model now separates risk priority from evidence confidence. CVSS is treated as the severity anchor, accepted URLhaus/Dread evidence contributes to active threat scoring, and missing external corroboration primarily lowers confidence instead of forcing high-severity CVEs into LOW risk.
-
-A diagnostics utility is available for before/after model comparison:
-
-```bash
-cd agent-python
-PYTHONPATH=src python src/evaluation/model_diagnostics.py --source cve --suffix before
-PYTHONPATH=src python src/evaluation/model_diagnostics.py --source cve --suffix after
-```
-
-See `docs/analysis_engine_v4.md` for the recalibrated model details.
+> Multi-source threat intelligence platform that collects CVE and URLhaus intelligence, persists it in MongoDB, and runs an explainable risk analysis pipeline. The system separates risk priority from evidence confidence, performs NLP-assisted context extraction, applies evidence-quality gating for cross-source correlations, and exposes findings through an analyst-focused dashboard with risk, confidence, evidence, and model diagnostic views.
