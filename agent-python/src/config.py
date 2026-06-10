@@ -156,6 +156,14 @@ class APIConfig:
 
 
 @dataclass(frozen=True)
+class SecurityConfig:
+    auth_mode: str = field(default_factory=lambda: os.getenv("API_AUTH_MODE", "development").strip().lower())
+    api_keys: List[str] = field(default_factory=lambda: _csv_env("API_KEYS", ""))
+    development_actor_id: str = field(default_factory=lambda: os.getenv("API_DEV_ACTOR_ID", "local-dev"))
+    development_role_name: str = field(default_factory=lambda: os.getenv("API_DEV_ROLE", "admin").strip().lower())
+
+
+@dataclass(frozen=True)
 class AppSettings:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     api: APIConfig = field(default_factory=APIConfig)
@@ -164,6 +172,7 @@ class AppSettings:
     scoring: ScoreWeights = field(default_factory=ScoreWeights)
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
     semantic: SemanticConfig = field(default_factory=SemanticConfig)
+    security: SecurityConfig = field(default_factory=SecurityConfig)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

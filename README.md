@@ -115,6 +115,39 @@ Validated local dataset snapshot:
 
 ---
 
+## Security Configuration
+
+Local development defaults to explicit development authentication:
+
+```text
+API_AUTH_MODE=development
+API_DEV_ACTOR_ID=local-dev
+API_DEV_ROLE=admin
+```
+
+For protected deployments, enable API-key authentication and provide keys only through environment variables:
+
+```text
+API_AUTH_MODE=api_key
+API_KEYS=devkey1:analyst:analyst-1,adminkey1:admin:admin-1
+```
+
+Supported roles are `viewer`, `analyst`, `operator`, and `admin`. Health and source discovery remain public; analysis reads, analysis triggers, job/status views, and configuration-sensitive actions are checked through centralized API permissions. Audit events are structured and omit authorization headers, API keys, tokens, passwords, and secret-like fields.
+
+## CI Validation
+
+The GitHub Actions workflow runs:
+
+```bash
+cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m pytest -q -p no:ddtrace
+cd agent-python/frontend && npm ci && npm run build && npm audit --omit=dev
+cd agent-go && GOTOOLCHAIN=go1.24.0 go test ./... && go mod verify
+```
+
+It also runs lightweight dependency sanity and tracked-file secret checks without external paid services.
+
+---
+
 ## Core Concepts
 
 ### Risk Score

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -9,7 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from agents.diagnostic import DiagnosticAgent
 from agents.recommender import RecommenderAgent
+from api.audit import AuditEvent, AuditOutcome, StructuredAuditLogger
 from api.schemas import AnalyzeResponse, BatchAnalyzeItem, BatchAnalyzeResponse, CaseStudyResponse, ComparisonRow, EvaluationDiagnosticsResponse, EvaluationExportResponse, EvaluationSnapshotResponse, EvaluationSummaryResponse, ExecutionPlanResponse, FindingDetail, FindingSummary, HealthResponse, MethodologySummaryResponse, RefinementSummaryResponse, ReportBriefResponse, SettingsResponse, StatusOverviewResponse
+from api.security import APIKeyAuthenticator, AuthenticatedActor, Authorizer, Permission, permission_dependency
 from config import APP_VERSION, DB_NAME, MONGO_URI, get_settings
 from core.database import DatabaseManager
 from evaluation.comparative import build_case_study_rows, build_comparison_summary, build_cve_comparison_frame, build_cve_rows_from_docs
@@ -30,6 +33,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+audit_logger = StructuredAuditLogger()
+authenticator = APIKeyAuthenticator(SETTINGS.security, audit_sink=audit_logger)
+authorizer = Authorizer(audit_sink=audit_logger)
+app.state.audit_logger = audit_logger
+app.state.authenticator = authenticator
+app.state.authorizer = authorizer
+
+READ_ANALYSES = permission_dependency(Permission.READ_ANALYSES, target="analyses")
+TRIGGER_ANALYSIS = permission_dependency(Permission.TRIGGER_ANALYSIS, target="analysis")
+VIEW_JOBS = permission_dependency(Permission.VIEW_JOBS, target="jobs")
+ADMINISTER_SYSTEM = permission_dependency(Permission.ADMINISTER_SYSTEM, target="system")
 
 
 class APIRepository:
@@ -237,8 +251,15 @@ def _to_finding_detail(source: str, doc: Dict[str, Any]) -> FindingDetail:
     )
 
 
-def _analyze(source: str, payload: dict, persist: bool = False) -> AnalyzeResponse:
+def _audit(actor: Optional[AuthenticatedActor], action: str, target: str, outcome: AuditOutcome, details: Optional[Dict[str, Any]] = None) -> None:
+    actor_id = actor.actor_id if actor else "system"
+    role = actor.role.value if actor else "system"
+    audit_logger.write(AuditEvent(actor_id=actor_id, role=role, action=action, target=target, outcome=outcome, details=details or {}))
+
+
+def _analyze(source: str, payload: dict, persist: bool = False, actor: Optional[AuthenticatedActor] = None) -> AnalyzeResponse:
     _validate_source(source)
+    _audit(actor, "analysis_trigger", source, AuditOutcome.SUCCESS, {"persist": persist})
     result = diagnostic_agent.analyze(source, payload, db=analysis_db)
     if result is None:
         raise HTTPException(status_code=400, detail="Analysis returned no result")
@@ -250,6 +271,12 @@ def _analyze(source: str, payload: dict, persist: bool = False) -> AnalyzeRespon
     return AnalyzeResponse(**result)
 
 
+def _invoke_analyze(source: str, payload: dict, *, persist: bool = False, actor: Optional[AuthenticatedActor] = None) -> AnalyzeResponse:
+    if "actor" in inspect.signature(_analyze).parameters:
+        return _analyze(source, payload, persist=persist, actor=actor)
+    return _analyze(source, payload, persist=persist)
+
+
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     db_ok = repo.ping()
@@ -257,7 +284,8 @@ def health() -> HealthResponse:
 
 
 @app.get("/settings", response_model=SettingsResponse)
-def settings() -> SettingsResponse:
+def settings(actor: AuthenticatedActor = ADMINISTER_SYSTEM) -> SettingsResponse:
+    _audit(actor, "admin_view_settings", "settings", AuditOutcome.SUCCESS)
     return SettingsResponse(**SETTINGS.to_dict())
 
 
@@ -267,27 +295,27 @@ def list_sources() -> Dict[str, List[str]]:
 
 
 @app.post("/analyze/cve", response_model=AnalyzeResponse)
-def analyze_cve(payload: dict):
-    return _analyze("cve", payload)
+def analyze_cve(payload: dict, actor: AuthenticatedActor = TRIGGER_ANALYSIS):
+    return _invoke_analyze("cve", payload, actor=actor)
 
 
 @app.post("/analyze/urlhaus", response_model=AnalyzeResponse)
-def analyze_urlhaus(payload: dict):
-    return _analyze("urlhaus", payload)
+def analyze_urlhaus(payload: dict, actor: AuthenticatedActor = TRIGGER_ANALYSIS):
+    return _invoke_analyze("urlhaus", payload, actor=actor)
 
 
 @app.post("/analyze/dread", response_model=AnalyzeResponse)
-def analyze_dread(payload: dict):
-    return _analyze("dread", payload)
+def analyze_dread(payload: dict, actor: AuthenticatedActor = TRIGGER_ANALYSIS):
+    return _invoke_analyze("dread", payload, actor=actor)
 
 
 @app.post("/analyze/{source}/persist", response_model=AnalyzeResponse)
-def analyze_and_persist(source: str, payload: dict):
-    return _analyze(source, payload, persist=True)
+def analyze_and_persist(source: str, payload: dict, actor: AuthenticatedActor = TRIGGER_ANALYSIS):
+    return _invoke_analyze(source, payload, persist=True, actor=actor)
 
 
 @app.post("/analyze/batch/{source}", response_model=BatchAnalyzeResponse)
-def analyze_batch(source: str, payloads: List[dict], persist: bool = Query(False), limit: int = Query(25, ge=1, le=250)) -> BatchAnalyzeResponse:
+def analyze_batch(source: str, payloads: List[dict], persist: bool = Query(False), limit: int = Query(25, ge=1, le=250), actor: AuthenticatedActor = TRIGGER_ANALYSIS) -> BatchAnalyzeResponse:
     _validate_source(source)
     limited = payloads[:limit]
     results: List[AnalyzeResponse] = []
@@ -295,7 +323,7 @@ def analyze_batch(source: str, payloads: List[dict], persist: bool = Query(False
     failures = 0
     for index, payload in enumerate(limited):
         try:
-            result = _analyze(source, payload, persist=persist)
+            result = _invoke_analyze(source, payload, persist=persist, actor=actor)
             results.append(result)
             items.append(BatchAnalyzeItem(index=index, success=True, entity_id=result.entity_id, risk_level=result.risk_level, risk_score=result.risk_score))
         except HTTPException as exc:
@@ -308,12 +336,12 @@ def analyze_batch(source: str, payloads: List[dict], persist: bool = Query(False
 
 
 @app.get("/status/overview", response_model=StatusOverviewResponse)
-def status_overview() -> StatusOverviewResponse:
+def status_overview(actor: AuthenticatedActor = VIEW_JOBS) -> StatusOverviewResponse:
     return StatusOverviewResponse(**analysis_db.get_status_overview())
 
 
 @app.get("/findings/recent", response_model=List[FindingSummary])
-def recent_findings(source: str = Query(..., pattern="^(cve|urlhaus|dread)$"), limit: int = Query(10, ge=1, le=100)) -> List[FindingSummary]:
+def recent_findings(source: str = Query(..., pattern="^(cve|urlhaus|dread)$"), limit: int = Query(10, ge=1, le=100), actor: AuthenticatedActor = READ_ANALYSES) -> List[FindingSummary]:
     docs = repo.get_recent_findings(source=source, limit=limit)
     return [_to_finding_summary(source, doc) for doc in docs]
 
@@ -323,19 +351,20 @@ def top_findings(
     source: Optional[str] = Query(None, pattern="^(cve|urlhaus|dread)$"),
     limit: int = Query(10, ge=1, le=100),
     mode: str = Query("top", pattern="^(top|recent_high|highest_confidence|active_evidence|needs_review)$"),
+    actor: AuthenticatedActor = READ_ANALYSES,
 ) -> List[FindingSummary]:
     docs = repo.get_top_risky_findings(source=source, limit=limit, mode=mode)
     return [_to_finding_summary(str(doc.get("_source")), doc) for doc in docs]
 
 
 @app.get("/findings/search", response_model=List[FindingSummary])
-def search_findings(source: str = Query(..., pattern="^(cve|urlhaus|dread)$"), query: str = Query(..., min_length=1), limit: int = Query(10, ge=1, le=100)) -> List[FindingSummary]:
+def search_findings(source: str = Query(..., pattern="^(cve|urlhaus|dread)$"), query: str = Query(..., min_length=1), limit: int = Query(10, ge=1, le=100), actor: AuthenticatedActor = READ_ANALYSES) -> List[FindingSummary]:
     docs = analysis_db.search_analyzed_findings(source=source, query=query, limit=limit)
     return [_to_finding_summary(source, doc) for doc in docs]
 
 
 @app.get("/findings/detail", response_model=FindingDetail)
-def finding_detail(source: str = Query(..., pattern="^(cve|urlhaus|dread)$"), entity_id: str = Query(..., min_length=1)) -> FindingDetail:
+def finding_detail(source: str = Query(..., pattern="^(cve|urlhaus|dread)$"), entity_id: str = Query(..., min_length=1), actor: AuthenticatedActor = READ_ANALYSES) -> FindingDetail:
     doc = repo.get_finding_by_entity_id(source=source, entity_id=entity_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Finding not found")
@@ -354,38 +383,39 @@ def _build_cve_evaluation_snapshot(limit: int = 50, top_k: int = 10) -> Dict[str
 
 
 @app.get("/evaluation/cve", response_model=EvaluationSnapshotResponse)
-def evaluation_cve_snapshot(limit: int = Query(25, ge=1, le=100), top_k: int = Query(10, ge=1, le=50)) -> EvaluationSnapshotResponse:
+def evaluation_cve_snapshot(limit: int = Query(25, ge=1, le=100), top_k: int = Query(10, ge=1, le=50), actor: AuthenticatedActor = READ_ANALYSES) -> EvaluationSnapshotResponse:
     return EvaluationSnapshotResponse(**_build_cve_evaluation_snapshot(limit=limit, top_k=top_k))
 
 
 @app.get("/evaluation/cve/summary", response_model=EvaluationSummaryResponse)
-def evaluation_cve_summary(limit: int = Query(100, ge=1, le=500), top_k: int = Query(10, ge=1, le=50)) -> EvaluationSummaryResponse:
+def evaluation_cve_summary(limit: int = Query(100, ge=1, le=500), top_k: int = Query(10, ge=1, le=50), actor: AuthenticatedActor = READ_ANALYSES) -> EvaluationSummaryResponse:
     payload = _build_cve_evaluation_snapshot(limit=limit, top_k=top_k)
     return EvaluationSummaryResponse(**payload["summary"])
 
 
 @app.get("/evaluation/cve/case-studies", response_model=CaseStudyResponse)
-def evaluation_cve_case_studies(limit: int = Query(12, ge=1, le=100)) -> CaseStudyResponse:
+def evaluation_cve_case_studies(limit: int = Query(12, ge=1, le=100), actor: AuthenticatedActor = READ_ANALYSES) -> CaseStudyResponse:
     docs = repo.get_cve_analysis_docs(limit=max(limit * 5, 50))
     rows = build_cve_rows_from_docs(docs)
     return CaseStudyResponse(rows=build_case_study_rows(rows, limit=limit))
 
 
 @app.get("/evaluation/cve/refinement", response_model=RefinementSummaryResponse)
-def evaluation_cve_refinement(limit: int = Query(250, ge=10, le=1000)) -> RefinementSummaryResponse:
+def evaluation_cve_refinement(limit: int = Query(250, ge=10, le=1000), actor: AuthenticatedActor = READ_ANALYSES) -> RefinementSummaryResponse:
     docs = repo.get_cve_analysis_docs(limit=limit)
     rows = build_cve_rows_from_docs(docs)
     return RefinementSummaryResponse(**summarize_refinement_model(rows))
 
 
 @app.post("/analyze/plan/{source}", response_model=ExecutionPlanResponse)
-def analyze_plan(source: str, payload: dict) -> ExecutionPlanResponse:
+def analyze_plan(source: str, payload: dict, actor: AuthenticatedActor = TRIGGER_ANALYSIS) -> ExecutionPlanResponse:
     _validate_source(source)
+    _audit(actor, "analysis_plan", source, AuditOutcome.SUCCESS)
     return ExecutionPlanResponse(**diagnostic_agent.plan(source, payload))
 
 
 @app.get("/evaluation/cve/report-brief", response_model=ReportBriefResponse)
-def evaluation_cve_report_brief(limit: int = Query(100, ge=10, le=1000), top_k: int = Query(10, ge=1, le=50)) -> ReportBriefResponse:
+def evaluation_cve_report_brief(limit: int = Query(100, ge=10, le=1000), top_k: int = Query(10, ge=1, le=50), actor: AuthenticatedActor = READ_ANALYSES) -> ReportBriefResponse:
     docs = repo.get_cve_analysis_docs(limit=limit)
     rows = build_cve_rows_from_docs(docs)
     brief = build_report_brief(rows, top_k=top_k)
@@ -395,7 +425,7 @@ def evaluation_cve_report_brief(limit: int = Query(100, ge=10, le=1000), top_k: 
 
 
 @app.get("/evaluation/cve/methodology", response_model=MethodologySummaryResponse)
-def evaluation_cve_methodology(limit: int = Query(100, ge=10, le=1000), top_k: int = Query(10, ge=1, le=50)) -> MethodologySummaryResponse:
+def evaluation_cve_methodology(limit: int = Query(100, ge=10, le=1000), top_k: int = Query(10, ge=1, le=50), actor: AuthenticatedActor = READ_ANALYSES) -> MethodologySummaryResponse:
     docs = repo.get_cve_analysis_docs(limit=limit)
     rows = build_cve_rows_from_docs(docs)
     summary = build_methodology_summary(rows, top_k=top_k)
@@ -445,7 +475,7 @@ def _build_cve_evaluation_diagnostics(limit: int = 250) -> Dict[str, Any]:
 
 
 @app.get("/evaluation/cve/export", response_model=EvaluationExportResponse)
-def evaluation_cve_export(limit: int = Query(100, ge=10, le=1000), top_k: int = Query(10, ge=1, le=50)) -> EvaluationExportResponse:
+def evaluation_cve_export(limit: int = Query(100, ge=10, le=1000), top_k: int = Query(10, ge=1, le=50), actor: AuthenticatedActor = READ_ANALYSES) -> EvaluationExportResponse:
     docs = repo.get_cve_analysis_docs(limit=limit)
     rows = build_cve_rows_from_docs(docs)
     frame = build_cve_comparison_frame(rows)
@@ -459,5 +489,5 @@ def evaluation_cve_export(limit: int = Query(100, ge=10, le=1000), top_k: int = 
 
 
 @app.get("/evaluation/cve/diagnostics", response_model=EvaluationDiagnosticsResponse)
-def evaluation_cve_diagnostics(limit: int = Query(250, ge=10, le=2000)) -> EvaluationDiagnosticsResponse:
+def evaluation_cve_diagnostics(limit: int = Query(250, ge=10, le=2000), actor: AuthenticatedActor = READ_ANALYSES) -> EvaluationDiagnosticsResponse:
     return EvaluationDiagnosticsResponse(**_build_cve_evaluation_diagnostics(limit=limit))

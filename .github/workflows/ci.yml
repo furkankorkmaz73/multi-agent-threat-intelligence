@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    name: Python tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent-python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: agent-python/requirements.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Dependency sanity
+        run: python -m pip check
+      - name: Run tests
+        run: PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m pytest -q -p no:ddtrace
+
+  frontend:
+    name: Frontend build and audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent-python/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: agent-python/frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Production dependency audit
+        run: npm audit --omit=dev
+
+  go:
+    name: Go tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.0"
+          cache-dependency-path: agent-go/go.sum
+      - name: Verify modules
+        run: GOTOOLCHAIN=go1.24.0 go mod verify
+      - name: Run tests
+        run: GOTOOLCHAIN=go1.24.0 go test ./...
+
+  repository-security:
+    name: Repository security checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Accidental secret scan
+        run: |
+          ! git grep -nE '(AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|OPENAI_API_KEY=sk-|LLM_API_KEY=sk-|API_KEYS=.*[A-Za-z0-9_-]{20,})' -- ':!*.lock' ':!agent-python/frontend/package-lock.json' ':!agent-go/go.sum'
