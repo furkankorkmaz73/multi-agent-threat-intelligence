@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from main import process_source
-from worker.executor import WorkerJobExecutor
+from worker.executor import WorkerJobExecutor, resolve_entity_identifier
 from worker.job_lifecycle import InvalidJobTransition, JobState, RetryPolicy, generate_idempotency_key, new_job
 from worker.job_repository import DatabaseJobRepositoryAdapter, InMemoryJobRepository
 from worker.observability import StructuredJobLogger, WorkerMetrics
@@ -97,6 +97,12 @@ def test_idempotency_key_is_stable_and_versioned():
 
     assert first == second
     assert first != changed
+
+
+def test_urlhaus_entity_identifier_prefers_stable_source_identifier():
+    doc = {"_id": object(), "urlhaus_id": "UH-E2E-9101", "url": "https://malware.invalid/payload.exe"}
+
+    assert resolve_entity_identifier("urlhaus", doc) == "UH-E2E-9101"
 
 
 def test_successful_job_updates_analysis_logs_and_metrics():

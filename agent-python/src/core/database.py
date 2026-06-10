@@ -5,12 +5,25 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import pymongo
+from bson import ObjectId
+from bson.errors import InvalidId
 from pymongo.errors import PyMongoError
 
 from config import APP_VERSION, DB_NAME, MONGO_URI, get_settings
 
 
 SETTINGS = get_settings()
+
+
+def _object_id_candidate(value: Any) -> Optional[ObjectId]:
+    if isinstance(value, ObjectId):
+        return None
+    if not isinstance(value, str):
+        return None
+    try:
+        return ObjectId(value)
+    except (InvalidId, TypeError):
+        return None
 
 
 class DatabaseManager:
@@ -50,7 +63,7 @@ class DatabaseManager:
         now = datetime.now(timezone.utc)
         processed = job_lifecycle.get("state") in {"completed", "completed_with_warnings", "failed", "dead_letter"}
         self.collections[source].update_one(
-            {"_id": doc_id},
+            self._job_lifecycle_filter(source, doc_id),
             {
                 "$set": {
                     "job_lifecycle": job_lifecycle,
@@ -72,6 +85,29 @@ class DatabaseManager:
                 },
             },
         )
+
+    def _job_lifecycle_filter(self, source: str, doc_id: Any) -> Dict[str, Any]:
+        identities: List[Dict[str, Any]] = [{"_id": doc_id}]
+        object_id = _object_id_candidate(doc_id)
+        if object_id is not None:
+            identities.append({"_id": object_id})
+
+        text_id = str(doc_id)
+        if source == "urlhaus":
+            identities.extend([{"urlhaus_id": text_id}, {"url": text_id}])
+        elif source == "dread":
+            identities.extend([{"url": text_id}, {"title": text_id}])
+
+        deduped: List[Dict[str, Any]] = []
+        seen = set()
+        for identity in identities:
+            key = tuple((field, str(value), type(value).__name__) for field, value in identity.items())
+            if key not in seen:
+                deduped.append(identity)
+                seen.add(key)
+        if len(deduped) == 1:
+            return deduped[0]
+        return {"$or": deduped}
 
     def get_job_lifecycle_by_idempotency(self, idempotency_key: str) -> Optional[Dict[str, Any]]:
         for collection in self.collections.values():

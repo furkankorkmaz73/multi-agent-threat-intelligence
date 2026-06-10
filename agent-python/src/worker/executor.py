@@ -120,7 +120,7 @@ def resolve_entity_identifier(source: str, doc: Dict[str, Any]) -> str:
     if source == "cve":
         return str(doc.get("_id") or "unknown-cve")
     if source == "urlhaus":
-        return str(doc.get("_id") or doc.get("urlhaus_id") or doc.get("url") or "unknown-urlhaus")
+        return str(doc.get("urlhaus_id") or doc.get("url") or doc.get("_id") or "unknown-urlhaus")
     if source == "dread":
         return str(doc.get("_id") or doc.get("title") or doc.get("url") or "unknown-dread")
     return str(doc.get("_id") or "unknown")

@@ -31,6 +31,7 @@ DEFAULT_MONGO_URI = "mongodb://127.0.0.1:27017"
 ANALYST_KEY = "e2e-analyst-key"
 VIEWER_KEY = "e2e-viewer-key"
 OPERATOR_KEY = "e2e-operator-key"
+TERMINAL_JOB_STATES = {"completed", "completed_with_warnings", "failed", "dead_letter"}
 
 
 @dataclass
@@ -162,10 +163,13 @@ def run_e2e_system(
                 "Correlation decisions are reported from existing policy without threshold changes.",
             ],
         }
+        report["validation"] = _validation_summary(report)
+        report["status"] = "passed" if report["validation"]["valid"] else "failed"
         write_report_json(report, output / "e2e_system_report.json")
         write_report_json(api_checks, output / "e2e_http_responses.json")
         write_report_json(database_snapshot, output / "e2e_database_snapshot.json")
         write_report_json(process_log, output / "e2e_process_log.json")
+        _assert_report_valid(report)
         return _stable(report)
     finally:
         if api_process is not None:
@@ -291,6 +295,7 @@ def _run_api_checks(port: int) -> dict[str, Any]:
         "recent_count": len(checks["authorized_recent"].get("json") or []),
         "detail_keys": sorted((checks["authorized_detail"].get("json") or {}).keys()),
         "detail_has_risk_score": "risk_score" in (checks["authorized_detail"].get("json") or {}),
+        "detail_has_evidence": "evidence" in (checks["authorized_detail"].get("json") or {}),
         "detail_has_evidence_summary": "evidence_summary" in (checks["authorized_detail"].get("json") or {}),
     }
     return checks
@@ -360,10 +365,33 @@ def _worker_snapshot(db: Any) -> dict[str, Any]:
                     "critic_status": (analysis.get("critic_review") or {}).get("status"),
                 }
             )
-    return {
+    snapshot = {
         "records": docs,
         "processed_result_count": sum(1 for item in docs if item["has_analysis"]),
         "terminal_states": sorted({str(item["job_state"]) for item in docs if item.get("job_state")}),
+    }
+    snapshot["lifecycle_validation"] = _lifecycle_validation(docs)
+    return snapshot
+
+
+def _lifecycle_validation(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    violations = []
+    for item in records:
+        if not (item.get("processed") or item.get("has_analysis")):
+            continue
+        source = str(item.get("source"))
+        document_id = str(item.get("document_id"))
+        if item.get("job_state") not in TERMINAL_JOB_STATES:
+            violations.append({"source": source, "document_id": document_id, "reason": "missing_terminal_job_state", "job_state": item.get("job_state")})
+        if not item.get("idempotency_key_present"):
+            violations.append({"source": source, "document_id": document_id, "reason": "missing_idempotency_key"})
+        if not item.get("transition_states"):
+            violations.append({"source": source, "document_id": document_id, "reason": "missing_lifecycle_transition_history"})
+    return {
+        "valid": not violations,
+        "processed_record_count": sum(1 for item in records if item.get("processed") or item.get("has_analysis")),
+        "violations": violations,
+        "terminal_states_expected": sorted(TERMINAL_JOB_STATES),
     }
 
 
@@ -405,11 +433,58 @@ def _database_snapshot(db: Any) -> dict[str, Any]:
                     "processed": bool(doc.get("processed")),
                     "has_analysis": bool(analysis),
                     "job_state": (doc.get("job_lifecycle") or {}).get("state"),
+                    "idempotency_key_present": bool((doc.get("job_lifecycle") or {}).get("idempotency_key")),
                     "risk_score": analysis.get("risk_score"),
                     "risk_level": analysis.get("risk_level"),
                 }
             )
     return snapshot
+
+
+def _validation_summary(report: Mapping[str, Any]) -> dict[str, Any]:
+    failures = []
+    counts = report.get("ingestion", {}).get("counts_after_ingest", {})
+    worker = report.get("worker", {})
+    api_checks = report.get("api_checks", {})
+    correlation = report.get("correlation_summary", {})
+
+    for source in ("cve", "urlhaus"):
+        source_counts = counts.get(source, {})
+        if int(source_counts.get("total") or 0) < 2:
+            failures.append({"check": f"{source}_ingested_count", "expected": ">=2", "actual": source_counts.get("total")})
+    if int(worker.get("processed_result_count") or 0) < 4:
+        failures.append({"check": "processed_result_count", "expected": ">=4", "actual": worker.get("processed_result_count")})
+    lifecycle = worker.get("lifecycle_validation", {})
+    if lifecycle.get("valid") is not True:
+        failures.append({"check": "processed_record_lifecycle_persistence", "violations": lifecycle.get("violations", [])})
+    if report.get("duplicate_suppression", {}).get("analysis_history_unchanged") is not True:
+        failures.append({"check": "duplicate_suppression"})
+    if int(correlation.get("accepted_match_count") or 0) < 1 or int(correlation.get("exact_cve_hits") or 0) < 1:
+        failures.append({"check": "accepted_urlhaus_correlation", "correlation_summary": correlation})
+
+    expected_statuses = {
+        "health": 200,
+        "unauthorized_recent": 401,
+        "authorized_recent": 200,
+        "authorized_detail": 200,
+        "viewer_forbidden_status": 403,
+        "operator_status": 200,
+    }
+    for name, expected in expected_statuses.items():
+        actual = (api_checks.get(name) or {}).get("status_code")
+        if actual != expected:
+            failures.append({"check": f"api_{name}", "expected": expected, "actual": actual})
+    shape = api_checks.get("response_shape") or {}
+    if shape.get("detail_has_risk_score") is not True or not (shape.get("detail_has_evidence") or shape.get("detail_has_evidence_summary")):
+        failures.append({"check": "api_detail_response_shape", "response_shape": shape})
+
+    return {"valid": not failures, "failures": failures}
+
+
+def _assert_report_valid(report: Mapping[str, Any]) -> None:
+    validation = report.get("validation") or {}
+    if validation.get("valid") is not True:
+        raise RuntimeError(f"E2E validation failed: {json.dumps(validation.get('failures', []), sort_keys=True, default=str)}")
 
 
 def _collections() -> dict[str, str]:
@@ -467,6 +542,7 @@ def main() -> None:
     except Exception as exc:
         output = Path(args.output_dir).expanduser()
         output.mkdir(parents=True, exist_ok=True)
+        report_path = output / "e2e_system_report.json"
         failure = {
             "generated_at": args.generated_at or datetime.now(timezone.utc).isoformat(),
             "status": "failed",
@@ -475,8 +551,9 @@ def main() -> None:
             "environment": {"mongo_uri": _redact_uri(args.mongo_uri), "db_name": args.db_name},
             "limitations": ["E2E system execution requires a usable Docker/MongoDB runtime."],
         }
-        write_report_json(failure, output / "e2e_system_report.json")
-        print(json.dumps({"output": str(output / "e2e_system_report.json"), "status": "failed", "error": failure["error"]}, sort_keys=True), file=sys.stderr)
+        if not report_path.exists():
+            write_report_json(failure, report_path)
+        print(json.dumps({"output": str(report_path), "status": "failed", "error": failure["error"]}, sort_keys=True), file=sys.stderr)
         raise SystemExit(2) from exc
     print(
         json.dumps(

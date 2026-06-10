@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from bson import ObjectId
+
 from core.database import DatabaseManager
 
 
@@ -51,6 +53,30 @@ class FakeDBManager(DatabaseManager):
         self._ensure_indexes()
 
 
+class MatchingCollection(FakeCollection):
+    def __init__(self, docs):
+        super().__init__(total=len(docs), processed=0, analyzed=0)
+        self.docs = docs
+
+    def update_one(self, flt, update, upsert=False):
+        super().update_one(flt, update, upsert=upsert)
+        for doc in self.docs:
+            if self._matches(doc, flt):
+                for key, value in update.get("$set", {}).items():
+                    doc[key] = value
+                for key, value in update.get("$push", {}).items():
+                    entries = value.get("$each", [value]) if isinstance(value, dict) else [value]
+                    doc.setdefault(key, []).extend(entries)
+                    if isinstance(value, dict) and "$slice" in value:
+                        doc[key] = doc[key][value["$slice"] :]
+                break
+
+    def _matches(self, doc, flt):
+        if "$or" in flt:
+            return any(self._matches(doc, clause) for clause in flt["$or"])
+        return all(doc.get(key) == value for key, value in flt.items())
+
+
 def test_update_analysis_persists_history_and_meta():
     db = FakeDBManager()
     analysis = {
@@ -82,6 +108,28 @@ def test_update_analysis_persists_history_and_meta():
     assert history_entry["risk_score"] == 8.7
     assert history_entry["semantic_signal"] == 0.61
     assert history_entry["graph_centrality"] == 0.44
+
+
+def test_update_job_lifecycle_persists_urlhaus_state_by_stable_identifier():
+    db = FakeDBManager()
+    mongo_id = ObjectId("64f000000000000000000001")
+    db.collections["urlhaus"] = MatchingCollection(
+        [{"_id": mongo_id, "urlhaus_id": "UH-E2E-9101", "url": "https://malware.invalid/e2e/CVE-2026-9101/payload.exe"}]
+    )
+    lifecycle = {
+        "state": "completed",
+        "attempt_count": 1,
+        "idempotency_key": "stable-key",
+        "transition_history": [{"from_state": "running", "to_state": "completed"}],
+    }
+
+    db.update_job_lifecycle("urlhaus", "UH-E2E-9101", lifecycle)
+
+    saved = db.collections["urlhaus"].docs[0]
+    assert saved["processed"] is True
+    assert saved["job_lifecycle"]["state"] == "completed"
+    assert saved["job_lifecycle"]["idempotency_key"] == "stable-key"
+    assert saved["job_lifecycle_history"][-1]["state"] == "completed"
 
 
 def test_ensure_indexes_runs_for_all_sources():
@@ -123,4 +171,3 @@ def test_status_overview_aggregates_source_counts():
     assert overview["totals"]["analyzed"] == 10
     assert overview["sources"]["cve"]["analysis_coverage"] == 0.5
     assert overview["sources"]["cve"]["avg_risk_score"] == 4.25
-

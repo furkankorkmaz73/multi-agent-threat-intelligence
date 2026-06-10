@@ -43,6 +43,47 @@ def test_api_checks_capture_auth_and_response_shape(monkeypatch):
     assert checks["response_shape"]["detail_has_risk_score"] is True
 
 
+def test_lifecycle_validation_rejects_processed_records_without_persisted_lifecycle():
+    validation = e2e_system._lifecycle_validation(
+        [
+            {
+                "source": "urlhaus",
+                "document_id": "mongo-object-id",
+                "processed": True,
+                "has_analysis": True,
+                "job_state": None,
+                "idempotency_key_present": False,
+                "transition_states": [],
+            }
+        ]
+    )
+
+    assert validation["valid"] is False
+    assert {item["reason"] for item in validation["violations"]} == {
+        "missing_terminal_job_state",
+        "missing_idempotency_key",
+        "missing_lifecycle_transition_history",
+    }
+
+
+def test_lifecycle_validation_accepts_processed_records_with_terminal_lifecycle():
+    validation = e2e_system._lifecycle_validation(
+        [
+            {
+                "source": "urlhaus",
+                "document_id": "mongo-object-id",
+                "processed": True,
+                "has_analysis": True,
+                "job_state": "completed",
+                "idempotency_key_present": True,
+                "transition_states": ["pending", "running", "completed"],
+            }
+        ]
+    )
+
+    assert validation["valid"] is True
+
+
 def test_full_e2e_system_opt_in(tmp_path):
     if os.getenv("RUN_E2E_SYSTEM") != "1":
         pytest.skip("Set RUN_E2E_SYSTEM=1 to run Docker/Mongo-backed E2E system test")
