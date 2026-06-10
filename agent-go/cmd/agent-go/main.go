@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"github.com/furkankorkmaz309/threat-agent/internal/app"
 	"github.com/furkankorkmaz309/threat-agent/internal/db"
 	"github.com/furkankorkmaz309/threat-agent/internal/fetch"
+	"github.com/furkankorkmaz309/threat-agent/internal/models"
 	"github.com/joho/godotenv"
 )
 
@@ -25,6 +27,7 @@ func main() {
 	limit := flag.Int("limit", 20, "limit records to save (0 = no limit)")
 	mode := flag.String("mode", "incremental", "cve fetch mode: incremental or full")
 	days := flag.Int("days", 2, "how many days back to fetch in incremental mode")
+	fixtureFile := flag.String("fixture-file", "", "optional local fixture JSON file for deterministic ingestion")
 	flag.Parse()
 
 	appInstance := app.New()
@@ -44,15 +47,21 @@ func main() {
 
 	switch *source {
 	case "cve":
-		var (
-			data interface{}
-			err  error
-		)
-
-		cveData, fetchErr := fetch.FetchCVE(appInstance, os.Getenv("CVE_KEY"), *mode, *days)
-		if fetchErr != nil {
-			fmt.Printf("[ERROR] CVE: %v\n", fetchErr)
-			os.Exit(2)
+		var cveData *models.CVEList
+		if strings.TrimSpace(*fixtureFile) != "" {
+			loaded, loadErr := loadCVEFixture(*fixtureFile)
+			if loadErr != nil {
+				fmt.Printf("[ERROR] CVE fixture: %v\n", loadErr)
+				os.Exit(2)
+			}
+			cveData = loaded
+		} else {
+			loaded, fetchErr := fetch.FetchCVE(appInstance, os.Getenv("CVE_KEY"), *mode, *days)
+			if fetchErr != nil {
+				fmt.Printf("[ERROR] CVE: %v\n", fetchErr)
+				os.Exit(2)
+			}
+			cveData = loaded
 		}
 
 		toSave := cveData.Vulnerabilities
@@ -60,19 +69,29 @@ func main() {
 			toSave = toSave[:*limit]
 		}
 
-		if err = db.SaveCVEMany(appInstance, toSave); err != nil {
+		if err := db.SaveCVEMany(appInstance, toSave); err != nil {
 			fmt.Printf("[ERROR] Save CVE: %v\n", err)
 			os.Exit(3)
 		}
 
-		_ = data
 		fmt.Printf("[SUCCESS] Saved %d CVE records\n", len(toSave))
 
 	case "urlhaus":
-		data, err := fetch.FetchURLHaus(appInstance)
-		if err != nil {
-			fmt.Printf("[ERROR] URLhaus: %v\n", err)
-			os.Exit(2)
+		var data []models.URLhausResponse
+		if strings.TrimSpace(*fixtureFile) != "" {
+			loaded, loadErr := loadURLhausFixture(*fixtureFile)
+			if loadErr != nil {
+				fmt.Printf("[ERROR] URLhaus fixture: %v\n", loadErr)
+				os.Exit(2)
+			}
+			data = loaded
+		} else {
+			loaded, err := fetch.FetchURLHaus(appInstance)
+			if err != nil {
+				fmt.Printf("[ERROR] URLhaus: %v\n", err)
+				os.Exit(2)
+			}
+			data = loaded
 		}
 		if *limit > 0 && len(data) > *limit {
 			data = data[:*limit]
@@ -94,4 +113,42 @@ func main() {
 		fmt.Printf("[ERROR] Unknown source: %s\n", *source)
 		os.Exit(1)
 	}
+}
+
+func loadCVEFixture(path string) (*models.CVEList, error) {
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var wrapped models.CVEList
+	if err := json.Unmarshal(payload, &wrapped); err == nil && len(wrapped.Vulnerabilities) > 0 {
+		return &wrapped, nil
+	}
+	var vulnerabilities []struct {
+		CVE models.CVE `json:"cve" bson:"cve"`
+	}
+	if err := json.Unmarshal(payload, &vulnerabilities); err != nil {
+		return nil, err
+	}
+	return &models.CVEList{ResultsPerPage: len(vulnerabilities), TotalResults: len(vulnerabilities), Vulnerabilities: vulnerabilities}, nil
+}
+
+func loadURLhausFixture(path string) ([]models.URLhausResponse, error) {
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var wrapped map[string][]models.URLhausResponse
+	if err := json.Unmarshal(payload, &wrapped); err == nil && len(wrapped) > 0 {
+		var rows []models.URLhausResponse
+		for _, values := range wrapped {
+			rows = append(rows, values...)
+		}
+		return rows, nil
+	}
+	var flat []models.URLhausResponse
+	if err := json.Unmarshal(payload, &flat); err != nil {
+		return nil, err
+	}
+	return flat, nil
 }

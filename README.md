@@ -156,6 +156,18 @@ make thesis-scenario
 
 The command writes `agent-python/reports/thesis_scenario_report.json`.
 
+## Production-like E2E Scenario
+
+Prerequisites: Docker, Go, and the Python virtualenv under `agent-python/.venv`.
+
+Run the disposable Go -> MongoDB -> Python worker -> FastAPI scenario:
+
+```bash
+make e2e-system
+```
+
+The scenario uses the dedicated `threat_intel_e2e` MongoDB database, resets only that database, ingests deterministic local fixtures through the Go collector, processes them with the real Python worker, verifies FastAPI health/auth/read paths, and writes `~/thesis-artifacts/e2e-system/e2e_system_report.json`.
+
 Generate thesis-ready tables, charts, and case-study artifacts from existing benchmark outputs:
 
 ```bash

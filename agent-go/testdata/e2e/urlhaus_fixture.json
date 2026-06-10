@@ -1,0 +1,22 @@
+[
+  {
+    "id": "UH-E2E-9101",
+    "date_added": "2026-06-09 10:00:00 UTC",
+    "url": "https://malware.invalid/e2e/CVE-2026-9101/payload.exe",
+    "url_status": "online",
+    "threat": "malware_download",
+    "tags": ["e2e-fixture", "CVE-2026-9101", "vpn", "rce"],
+    "urlhaus_reference": "https://urlhaus.abuse.ch/url/e2e-9101/",
+    "reporter": "integration-fixture"
+  },
+  {
+    "id": "UH-E2E-CTRL",
+    "date_added": "2026-06-09 11:00:00 UTC",
+    "url": "https://cdn.invalid/e2e/unrelated-control.bin",
+    "url_status": "online",
+    "threat": "malware_download",
+    "tags": ["e2e-fixture", "control"],
+    "urlhaus_reference": "https://urlhaus.abuse.ch/url/e2e-control/",
+    "reporter": "integration-fixture"
+  }
+]
