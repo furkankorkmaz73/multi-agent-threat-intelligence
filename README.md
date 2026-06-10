@@ -156,6 +156,24 @@ make thesis-scenario
 
 The command writes `agent-python/reports/thesis_scenario_report.json`.
 
+## Real CVE Benchmark
+
+The curated real-data benchmark compares exported CVE model results against CISA KEV and FIRST EPSS data. It requires a JSON model-results export containing analyzed CVE rows with `cve_id` or `entity_id`, `risk_score`, `confidence`, `cvss_score` or `evidence.cvss_score`, and optional feature/evidence fields.
+
+Online refresh:
+
+```bash
+make real-benchmark MODEL_RESULTS=reports/model_results.json REAL_BENCHMARK_FLAGS=--refresh
+```
+
+Offline cached run:
+
+```bash
+make real-benchmark MODEL_RESULTS=reports/model_results.json REAL_BENCHMARK_FLAGS=--offline
+```
+
+The runner writes `benchmark_summary.json`, `benchmark_records.csv`, and `baseline_metrics.csv` under `agent-python/reports/real_benchmark/`. Official datasets are cached under `agent-python/.cache/real_benchmark/`; both locations are ignored local outputs.
+
 ---
 
 ## Core Concepts

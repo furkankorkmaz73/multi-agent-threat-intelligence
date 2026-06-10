@@ -1,12 +1,13 @@
 SHELL := /bin/bash
 
-.PHONY: help setup-python test-python thesis-scenario run-api run-worker setup-frontend run-frontend build-frontend test-go docker-up docker-worker docker-down clean
+.PHONY: help setup-python test-python thesis-scenario real-benchmark run-api run-worker setup-frontend run-frontend build-frontend test-go docker-up docker-worker docker-down clean
 
 help:
 	@echo "Available targets:"
 	@echo "  setup-python    Install Python dependencies"
 	@echo "  test-python     Run Python test suite"
 	@echo "  thesis-scenario Run deterministic local thesis scenario"
+	@echo "  real-benchmark  Run curated KEV/EPSS benchmark; set MODEL_RESULTS and REAL_BENCHMARK_FLAGS"
 	@echo "  run-api         Start FastAPI on localhost:8000"
 	@echo "  run-worker      Run Python worker once for all sources"
 	@echo "  setup-frontend  Install frontend dependencies"
@@ -26,6 +27,9 @@ test-python:
 
 thesis-scenario:
 	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m integration.thesis_scenario --output reports/thesis_scenario_report.json
+
+real-benchmark:
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m evaluation.real_benchmark --model-results $(MODEL_RESULTS) --output-dir reports/real_benchmark --cache-dir .cache/real_benchmark $(REAL_BENCHMARK_FLAGS)
 
 run-api:
 	cd agent-python && PYTHONPATH=src uvicorn api.app:app --reload --host 127.0.0.1 --port 8000
