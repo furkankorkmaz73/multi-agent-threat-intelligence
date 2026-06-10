@@ -62,6 +62,7 @@ def run_model_export(
     generated_at: str | None = None,
     reference_time: str | None = None,
     cve_ids: Sequence[str] | None = None,
+    benchmark_definition_path: str | Path | None = None,
     run_benchmark: bool = False,
     benchmark_output_dir: str | Path | None = None,
     benchmark_cache_dir: str | Path | None = None,
@@ -70,7 +71,7 @@ def run_model_export(
 ) -> dict[str, Any]:
     generated = generated_at or datetime.now(timezone.utc).isoformat()
     reference = _parse_reference_time(reference_time or generated)
-    requested = list(cve_ids or curated_cve_ids())
+    requested = list(cve_ids or _cve_ids_from_definition(benchmark_definition_path) or curated_cve_ids())
     cve_load = load_nvd_cves(
         cve_ids=requested,
         cache_dir=cache_dir,
@@ -264,6 +265,13 @@ def _stable_json(value: Mapping[str, Any]) -> dict[str, Any]:
     return json.loads(json.dumps(value, sort_keys=True, default=str))
 
 
+def _cve_ids_from_definition(path: str | Path | None) -> list[str]:
+    if path is None:
+        return []
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    return [str(row.get("cve_id")) for row in payload.get("records", []) if row.get("cve_id")]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate model-result exports for the curated real-CVE benchmark")
     parser.add_argument("--cve-file", default=None, help="Local official-format NVD JSON file")
@@ -274,6 +282,7 @@ def main() -> None:
     parser.add_argument("--timeout-seconds", type=float, default=30.0, help="Download timeout for official NVD requests")
     parser.add_argument("--generated-at", default=None, help="Optional fixed timestamp for deterministic output")
     parser.add_argument("--reference-time", default=None, help="Optional fixed temporal-scoring reference timestamp")
+    parser.add_argument("--benchmark-definition", default=None, help="Optional balanced benchmark definition JSON to choose CVEs")
     parser.add_argument("--run-benchmark", action="store_true", help="Run the KEV/EPSS benchmark after exporting model results")
     parser.add_argument("--benchmark-output-dir", default=None, help="Directory for chained benchmark artifacts")
     parser.add_argument("--benchmark-cache-dir", default=None, help="Cache directory for KEV/EPSS benchmark data")
@@ -290,6 +299,7 @@ def main() -> None:
             timeout_seconds=args.timeout_seconds,
             generated_at=args.generated_at,
             reference_time=args.reference_time,
+            benchmark_definition_path=args.benchmark_definition,
             run_benchmark=args.run_benchmark,
             benchmark_output_dir=args.benchmark_output_dir,
             benchmark_cache_dir=args.benchmark_cache_dir,

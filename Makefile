@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: help setup-python test-python thesis-scenario real-cve-export real-benchmark run-api run-worker setup-frontend run-frontend build-frontend test-go docker-up docker-worker docker-down clean
+.PHONY: help setup-python test-python thesis-scenario real-cve-export real-benchmark balanced-benchmark run-api run-worker setup-frontend run-frontend build-frontend test-go docker-up docker-worker docker-down clean
 
 help:
 	@echo "Available targets:"
@@ -9,6 +9,7 @@ help:
 	@echo "  thesis-scenario Run deterministic local thesis scenario"
 	@echo "  real-cve-export Generate curated CVE model results; set REAL_CVE_FLAGS"
 	@echo "  real-benchmark  Run curated KEV/EPSS benchmark; set MODEL_RESULTS and REAL_BENCHMARK_FLAGS"
+	@echo "  balanced-benchmark Run expanded balanced benchmark; set BALANCED_FLAGS"
 	@echo "  run-api         Start FastAPI on localhost:8000"
 	@echo "  run-worker      Run Python worker once for all sources"
 	@echo "  setup-frontend  Install frontend dependencies"
@@ -34,6 +35,9 @@ real-cve-export:
 
 real-benchmark:
 	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m evaluation.real_benchmark --model-results $(MODEL_RESULTS) --output-dir reports/real_benchmark --cache-dir .cache/real_benchmark $(REAL_BENCHMARK_FLAGS)
+
+balanced-benchmark:
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m evaluation.balanced_benchmark --output-dir reports/real_benchmark/balanced $(BALANCED_FLAGS)
 
 run-api:
 	cd agent-python && PYTHONPATH=src uvicorn api.app:app --reload --host 127.0.0.1 --port 8000

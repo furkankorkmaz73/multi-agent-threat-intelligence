@@ -174,6 +174,14 @@ make real-cve-export REAL_CVE_FLAGS="--cve-file .cache/real_benchmark/nvd_curate
 
 The model export writes `model_results.json`, `model_results.csv`, `analysis_failures.json`, and `run_metadata.json` under `agent-python/reports/real_benchmark/model_export/`.
 
+Build and evaluate the expanded balanced benchmark from local official-format NVD, KEV, and EPSS files:
+
+```bash
+make balanced-benchmark BALANCED_FLAGS="--nvd-file .cache/real_benchmark/nvd_candidates.json --kev-file .cache/real_benchmark/cisa_kev.json --epss-file .cache/real_benchmark/first_epss.csv --model-results reports/real_benchmark/model_export/model_results.json"
+```
+
+The balanced runner writes `balanced_benchmark_definition.json`, `benchmark_summary.json`, `benchmark_records.csv`, `baseline_metrics.csv`, `ablation_metrics.csv`, `ablation_records.csv`, `benchmark_diagnostics.json`, and `case_candidates.json` under `agent-python/reports/real_benchmark/balanced/`.
+
 Online refresh:
 
 ```bash

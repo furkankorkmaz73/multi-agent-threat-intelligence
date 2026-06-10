@@ -46,9 +46,10 @@ class BenchmarkCve:
 
 
 CURATED_BENCHMARK_VERSION = "real-cve-benchmark-v1"
+PILOT_BENCHMARK_VERSION = CURATED_BENCHMARK_VERSION
 
 
-CURATED_BENCHMARK: tuple[BenchmarkCve, ...] = (
+PILOT_BENCHMARK: tuple[BenchmarkCve, ...] = (
     BenchmarkCve("CVE-2021-44228", "known_exploited_kev", "Apache Log4j remote code execution widely tracked by KEV."),
     BenchmarkCve("CVE-2023-34362", "known_exploited_kev", "MOVEit Transfer SQL injection and exploitation campaign case."),
     BenchmarkCve("CVE-2019-19781", "known_exploited_kev", "Citrix ADC/Gateway path traversal exploited at scale."),
@@ -60,6 +61,7 @@ CURATED_BENCHMARK: tuple[BenchmarkCve, ...] = (
     BenchmarkCve("CVE-2014-0160", "older_control", "Heartbleed selected as older vulnerability control."),
     BenchmarkCve("CVE-2017-0144", "older_known_exploited", "EternalBlue selected as older known-exploited control."),
 )
+CURATED_BENCHMARK: tuple[BenchmarkCve, ...] = PILOT_BENCHMARK
 
 
 def validate_benchmark_definition(entries: Sequence[BenchmarkCve] = CURATED_BENCHMARK) -> dict[str, Any]:
