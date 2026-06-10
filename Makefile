@@ -50,7 +50,7 @@ run-worker:
 	cd agent-python && PYTHONPATH=src python src/main.py --source all --run-once
 
 setup-frontend:
-	cd agent-python/frontend && npm install
+	cd agent-python/frontend && npm ci
 
 run-frontend:
 	cd agent-python/frontend && npm run dev
