@@ -1,11 +1,12 @@
 SHELL := /bin/bash
 
-.PHONY: help setup-python test-python run-api run-worker setup-frontend run-frontend build-frontend test-go docker-up docker-worker docker-down clean
+.PHONY: help setup-python test-python thesis-scenario run-api run-worker setup-frontend run-frontend build-frontend test-go docker-up docker-worker docker-down clean
 
 help:
 	@echo "Available targets:"
 	@echo "  setup-python    Install Python dependencies"
 	@echo "  test-python     Run Python test suite"
+	@echo "  thesis-scenario Run deterministic local thesis scenario"
 	@echo "  run-api         Start FastAPI on localhost:8000"
 	@echo "  run-worker      Run Python worker once for all sources"
 	@echo "  setup-frontend  Install frontend dependencies"
@@ -22,6 +23,9 @@ setup-python:
 
 test-python:
 	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src pytest -q -p no:ddtrace
+
+thesis-scenario:
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m integration.thesis_scenario --output reports/thesis_scenario_report.json
 
 run-api:
 	cd agent-python && PYTHONPATH=src uvicorn api.app:app --reload --host 127.0.0.1 --port 8000

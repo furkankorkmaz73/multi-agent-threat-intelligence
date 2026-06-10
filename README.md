@@ -146,6 +146,16 @@ cd agent-go && GOTOOLCHAIN=go1.24.0 go test ./... && go mod verify
 
 It also runs lightweight dependency sanity and tracked-file secret checks without external paid services.
 
+## Thesis Scenario
+
+A deterministic local end-to-end scenario exercises fixture ingestion, worker lifecycle, orchestration, API-compatible result shaping, asset-aware operational risk, and KEV/EPSS evaluation without live MongoDB, OpenAI, network access, or secrets:
+
+```bash
+make thesis-scenario
+```
+
+The command writes `agent-python/reports/thesis_scenario_report.json`.
+
 ---
 
 ## Core Concepts
