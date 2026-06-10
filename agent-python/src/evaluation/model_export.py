@@ -15,6 +15,7 @@ from agents.diagnostic import DiagnosticAgent
 import analysis.risk_engine as risk_engine_module
 from analysis.features.cve_temporal import calculate_age_days as calculate_cve_age_days
 from config import APP_VERSION
+from evaluation.evidence_inputs import build_file_evidence_provider
 from evaluation.nvd_cves import curated_cve_ids, load_nvd_cves
 from evaluation.real_benchmark import run_real_benchmark
 from evaluation.real_data import RealDataError
@@ -68,6 +69,9 @@ def run_model_export(
     benchmark_cache_dir: str | Path | None = None,
     kev_path: str | Path | None = None,
     epss_path: str | Path | None = None,
+    urlhaus_evidence_path: str | Path | None = None,
+    dread_evidence_path: str | Path | None = None,
+    refresh_urlhaus_evidence: bool = False,
 ) -> dict[str, Any]:
     generated = generated_at or datetime.now(timezone.utc).isoformat()
     reference = _parse_reference_time(reference_time or generated)
@@ -81,6 +85,17 @@ def run_model_export(
         timeout_seconds=timeout_seconds,
     )
     diagnostic = DiagnosticAgent()
+    evidence_provider = None
+    evidence_inputs: dict[str, Any] = {}
+    if urlhaus_evidence_path is not None or dread_evidence_path is not None or refresh_urlhaus_evidence:
+        evidence_provider, evidence_inputs = build_file_evidence_provider(
+            urlhaus_path=urlhaus_evidence_path,
+            dread_path=dread_evidence_path,
+            cache_dir=cache_dir,
+            refresh_urlhaus=refresh_urlhaus_evidence,
+            offline=offline,
+            timeout_seconds=timeout_seconds,
+        )
     records: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = [
         {"cve_id": cve_id, "status": "missing_cve_metadata", "reason": "not_found_in_nvd_source"}
@@ -93,7 +108,7 @@ def run_model_export(
         for cve_id in cve_load.provenance.loaded_cves:
             doc = dict(cve_load.records[cve_id])
             try:
-                analysis = diagnostic.analyze("cve", doc, db=None)
+                analysis = diagnostic.analyze("cve", doc, db=evidence_provider)
                 if analysis is None:
                     raise RuntimeError("analysis returned no result")
                 records.append(_model_record(doc, analysis, generated_at=generated))
@@ -101,7 +116,7 @@ def run_model_export(
                 failures.append({"cve_id": cve_id, "status": "analysis_failed", "reason": f"{type(exc).__name__}: {exc}"})
 
     paths = ExportPaths.in_dir(output_dir)
-    _write_export_artifacts(paths, records, failures, cve_load.provenance.to_dict(), generated_at=generated)
+    _write_export_artifacts(paths, records, failures, cve_load.provenance.to_dict(), evidence_inputs=evidence_inputs, generated_at=generated)
     report = {
         "generated_at": generated,
         "analysis_version": APP_VERSION,
@@ -114,6 +129,7 @@ def run_model_export(
             "missing_cves": list(cve_load.provenance.missing_cves),
         },
         "nvd_provenance": cve_load.provenance.to_dict(),
+        "evidence_inputs": evidence_inputs,
         "records": records,
         "failures": failures,
     }
@@ -180,6 +196,7 @@ def _write_export_artifacts(
     failures: Sequence[Mapping[str, Any]],
     nvd_provenance: Mapping[str, Any],
     *,
+    evidence_inputs: Mapping[str, Any] | None = None,
     generated_at: str,
 ) -> None:
     paths.model_results_json.parent.mkdir(parents=True, exist_ok=True)
@@ -199,6 +216,7 @@ def _write_export_artifacts(
             "generated_at": generated_at,
             "analysis_version": APP_VERSION,
             "nvd_provenance": dict(nvd_provenance),
+            "evidence_inputs": dict(evidence_inputs or {}),
             "record_count": len(records),
             "failure_count": len(failures),
         },
@@ -288,6 +306,9 @@ def main() -> None:
     parser.add_argument("--benchmark-cache-dir", default=None, help="Cache directory for KEV/EPSS benchmark data")
     parser.add_argument("--kev-file", default=None, help="Optional local official-format KEV JSON file for chained benchmark")
     parser.add_argument("--epss-file", default=None, help="Optional local official-format EPSS CSV file for chained benchmark")
+    parser.add_argument("--urlhaus-evidence-file", default=None, help="Optional local official-format URLhaus JSON evidence file")
+    parser.add_argument("--dread-evidence-file", default=None, help="Optional local Dread JSON/JSONL export")
+    parser.add_argument("--refresh-urlhaus-evidence", action="store_true", help="Refresh official URLhaus evidence when no local file is provided")
     args = parser.parse_args()
     try:
         report = run_model_export(
@@ -305,6 +326,9 @@ def main() -> None:
             benchmark_cache_dir=args.benchmark_cache_dir,
             kev_path=args.kev_file,
             epss_path=args.epss_file,
+            urlhaus_evidence_path=args.urlhaus_evidence_file,
+            dread_evidence_path=args.dread_evidence_file,
+            refresh_urlhaus_evidence=args.refresh_urlhaus_evidence,
         )
     except RealDataError as exc:
         print(json.dumps({"error": type(exc).__name__, "message": str(exc)}, sort_keys=True), file=sys.stderr)
