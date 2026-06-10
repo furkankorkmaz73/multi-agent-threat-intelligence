@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
+import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -20,6 +23,7 @@ DEFAULT_NVD_CACHE_FILENAME = "nvd_curated_cves.json"
 
 Fetcher = Callable[[str, float], bytes | str]
 Clock = Callable[[], datetime]
+Sleeper = Callable[[float], None]
 
 
 @dataclass(frozen=True)
@@ -124,6 +128,105 @@ def load_nvd_cves(
     return NvdCveLoadResult(records=selected, provenance=provenance, malformed_records=malformed)
 
 
+def download_nvd_candidate_pool(
+    *,
+    output_path: str | Path,
+    severity_levels: Sequence[str] = ("CRITICAL", "HIGH", "MEDIUM"),
+    results_per_page: int = 2000,
+    max_pages_per_severity: int = 1,
+    refresh: bool = False,
+    timeout_seconds: float = 30.0,
+    delay_seconds: float = 6.0,
+    retry_attempts: int = 3,
+    fetcher: Fetcher | None = None,
+    sleeper: Sleeper | None = None,
+    now: Clock | None = None,
+) -> dict[str, Any]:
+    path = Path(output_path)
+    if path.exists() and not refresh:
+        text = path.read_text(encoding="utf-8")
+        records, stats, malformed = parse_nvd_cve_records(text)
+        return _candidate_pool_summary(
+            path=path,
+            payload=json.loads(text),
+            stats=stats,
+            malformed=malformed,
+            cache_hit=True,
+            downloaded_at=_read_downloaded_at(path, text),
+        )
+
+    if results_per_page <= 0:
+        raise ValueError("results_per_page must be positive")
+    if max_pages_per_severity <= 0:
+        raise ValueError("max_pages_per_severity must be positive")
+
+    vulnerabilities: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    source_urls: list[str] = []
+    query_stats: dict[str, Any] = {}
+    sleep = sleeper or time.sleep
+    levels = [str(level).upper() for level in severity_levels]
+
+    for severity_index, severity in enumerate(levels):
+        start_index = 0
+        pages: list[dict[str, int]] = []
+        for page_index in range(max_pages_per_severity):
+            url = _nvd_query_url(cvssV3Severity=severity, resultsPerPage=results_per_page, startIndex=start_index)
+            source_urls.append(url)
+            payload = _download_json_with_retries(
+                url,
+                timeout_seconds=timeout_seconds,
+                fetcher=fetcher,
+                retry_attempts=retry_attempts,
+                delay_seconds=delay_seconds,
+                sleeper=sleep,
+            )
+            rows = payload.get("vulnerabilities") if isinstance(payload, Mapping) else None
+            if not isinstance(rows, list):
+                raise DataFormatError(f"NVD candidate response missing vulnerabilities list: {url}")
+            added = 0
+            for row in rows:
+                cve_payload = row.get("cve") if isinstance(row, Mapping) and isinstance(row.get("cve"), Mapping) else row
+                cve_id = normalize_cve_id(cve_payload.get("id") if isinstance(cve_payload, Mapping) else None)
+                if cve_id is None or cve_id in seen or not isinstance(row, Mapping):
+                    continue
+                seen.add(cve_id)
+                vulnerabilities.append(dict(row))
+                added += 1
+            page_size = len(rows)
+            total_results = int(payload.get("totalResults") or 0)
+            pages.append({"start_index": start_index, "returned": page_size, "added": added, "total_results": total_results})
+            if page_size == 0 or start_index + page_size >= total_results:
+                break
+            start_index += page_size
+            if delay_seconds > 0 and (page_index + 1 < max_pages_per_severity):
+                sleep(delay_seconds)
+        query_stats[severity] = {"pages": pages, "added": sum(page["added"] for page in pages)}
+        if delay_seconds > 0 and severity_index + 1 < len(levels):
+            sleep(delay_seconds)
+
+    downloaded_at = (now or _utc_now)().isoformat()
+    payload = {
+        "source": "nvd",
+        "source_url": NVD_CVE_API_URL,
+        "source_urls": source_urls,
+        "downloaded_at": downloaded_at,
+        "query": {
+            "severity_levels": levels,
+            "results_per_page": results_per_page,
+            "max_pages_per_severity": max_pages_per_severity,
+        },
+        "query_stats": query_stats,
+        "vulnerabilities": vulnerabilities,
+    }
+    text = json.dumps(payload, sort_keys=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    _write_cache_metadata(path, text, downloaded_at=downloaded_at)
+    records, stats, malformed = parse_nvd_cve_records(text)
+    return _candidate_pool_summary(path=path, payload=payload, stats=stats, malformed=malformed, cache_hit=False, downloaded_at=downloaded_at)
+
+
 def parse_nvd_cve_records(data: str | Mapping[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, int], list[dict[str, Any]]]:
     payload = json.loads(data) if isinstance(data, str) else data
     rows = payload.get("vulnerabilities") if isinstance(payload, Mapping) else None
@@ -211,6 +314,8 @@ def _download_json(url: str, *, timeout_seconds: float, fetcher: Fetcher | None)
             request = Request(url, headers={"User-Agent": "multi-agent-threat-intelligence-cve-export/1.0"})
             with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310 - official NVD URL is fixed
                 payload = response.read()
+        except HTTPError as exc:
+            raise DataUnavailableError(f"Unable to download {url}: HTTP {exc.code} {exc.reason}") from exc
         except URLError as exc:
             raise DataUnavailableError(f"Unable to download {url}: {exc}") from exc
     text = payload.decode("utf-8") if isinstance(payload, bytes) else str(payload)
@@ -225,6 +330,69 @@ def _download_json(url: str, *, timeout_seconds: float, fetcher: Fetcher | None)
 
 def _nvd_cve_url(cve_id: str) -> str:
     return f"{NVD_CVE_API_URL}?{urlencode({'cveId': cve_id})}"
+
+
+def _nvd_query_url(**params: Any) -> str:
+    return f"{NVD_CVE_API_URL}?{urlencode(params)}"
+
+
+def _download_json_with_retries(
+    url: str,
+    *,
+    timeout_seconds: float,
+    fetcher: Fetcher | None,
+    retry_attempts: int,
+    delay_seconds: float,
+    sleeper: Sleeper,
+) -> Mapping[str, Any]:
+    attempts = max(1, retry_attempts)
+    last_error: DataUnavailableError | None = None
+    for attempt in range(attempts):
+        try:
+            return _download_json(url, timeout_seconds=timeout_seconds, fetcher=fetcher)
+        except DataUnavailableError as exc:
+            last_error = exc
+            if attempt + 1 >= attempts or not _is_retryable_download_error(exc):
+                raise
+            if delay_seconds > 0:
+                sleeper(delay_seconds)
+    assert last_error is not None
+    raise last_error
+
+
+def _is_retryable_download_error(exc: DataUnavailableError) -> bool:
+    message = str(exc)
+    return any(marker in message for marker in ("HTTP 429", "HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504", "timed out"))
+
+
+def _candidate_pool_summary(
+    *,
+    path: Path,
+    payload: Mapping[str, Any],
+    stats: Mapping[str, int],
+    malformed: Sequence[Mapping[str, Any]],
+    cache_hit: bool,
+    downloaded_at: str | None,
+) -> dict[str, Any]:
+    rows = payload.get("vulnerabilities") if isinstance(payload.get("vulnerabilities"), list) else []
+    text = json.dumps(payload, sort_keys=True)
+    return {
+        "source_name": "nvd_candidate_pool",
+        "source_url": NVD_CVE_API_URL,
+        "source_urls": list(payload.get("source_urls") or []),
+        "downloaded_at": downloaded_at,
+        "content_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "file_path": str(path),
+        "byte_count": len(text.encode("utf-8")),
+        "raw_row_count": len(rows),
+        "valid_cve_count": stats.get("valid_rows", 0),
+        "duplicate_rows": stats.get("duplicate_rows", 0),
+        "malformed_rows": stats.get("malformed_rows", 0) + stats.get("missing_required_rows", 0),
+        "malformed_records": [dict(item) for item in malformed],
+        "cache_hit": cache_hit,
+        "query": dict(payload.get("query") or {}),
+        "query_stats": dict(payload.get("query_stats") or {}),
+    }
 
 
 def _metadata_path(cache_path: Path) -> Path:
@@ -254,3 +422,35 @@ def _read_downloaded_at(cache_path: Path, text: str) -> str | None:
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Download an official NVD CVE candidate pool for balanced benchmark selection")
+    parser.add_argument("--candidate-pool-output", required=True, help="Output path for official-format NVD candidate JSON")
+    parser.add_argument("--severity", action="append", dest="severity_levels", default=None, help="CVSS v3 severity query to include; repeatable")
+    parser.add_argument("--results-per-page", type=int, default=2000, help="NVD resultsPerPage value")
+    parser.add_argument("--max-pages-per-severity", type=int, default=1, help="Maximum pages to request for each severity")
+    parser.add_argument("--refresh", action="store_true", help="Refresh even when the output file already exists")
+    parser.add_argument("--timeout-seconds", type=float, default=30.0, help="NVD request timeout")
+    parser.add_argument("--delay-seconds", type=float, default=6.0, help="Delay between NVD requests")
+    parser.add_argument("--retry-attempts", type=int, default=3, help="Retry attempts for transient NVD failures")
+    args = parser.parse_args()
+    try:
+        summary = download_nvd_candidate_pool(
+            output_path=args.candidate_pool_output,
+            severity_levels=args.severity_levels or ("CRITICAL", "HIGH", "MEDIUM"),
+            results_per_page=args.results_per_page,
+            max_pages_per_severity=args.max_pages_per_severity,
+            refresh=args.refresh,
+            timeout_seconds=args.timeout_seconds,
+            delay_seconds=args.delay_seconds,
+            retry_attempts=args.retry_attempts,
+        )
+    except (DataFormatError, DataUnavailableError, ValueError) as exc:
+        print(json.dumps({"error": type(exc).__name__, "message": str(exc)}, sort_keys=True), file=sys.stderr)
+        raise SystemExit(2) from exc
+    print(json.dumps(summary, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

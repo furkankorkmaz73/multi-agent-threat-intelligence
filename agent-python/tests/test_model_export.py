@@ -5,7 +5,7 @@ import pytest
 
 from agents import llm_helper
 from evaluation.model_export import run_model_export
-from evaluation.nvd_cves import load_nvd_cves, parse_nvd_cve_records
+from evaluation.nvd_cves import download_nvd_candidate_pool, load_nvd_cves, parse_nvd_cve_records
 from evaluation.real_data import DataUnavailableError
 
 
@@ -121,6 +121,46 @@ def test_cached_cve_data_loading_records_provenance(tmp_path):
     assert result.records["CVE-2021-44228"]["metrics"]["cvss_metric_v31"][0]["cvss_data"]["base_score"] == 10.0
     assert cached.provenance.cache_hit is True
     assert cached.provenance.loaded_cves == ["CVE-2021-44228"]
+
+
+def test_nvd_candidate_pool_download_is_deterministic_and_reuses_cache(tmp_path):
+    calls = []
+
+    def fetcher(url, timeout):
+        calls.append((url, timeout))
+        return json.dumps(
+            {
+                "totalResults": 2,
+                "vulnerabilities": [
+                    _nvd_fixture()["vulnerabilities"][0],
+                    _nvd_fixture()["vulnerabilities"][0],
+                    _nvd_fixture()["vulnerabilities"][1],
+                ],
+            }
+        )
+
+    output_path = tmp_path / "nvd_candidates.json"
+    summary = download_nvd_candidate_pool(
+        output_path=output_path,
+        severity_levels=("CRITICAL",),
+        results_per_page=2,
+        max_pages_per_severity=1,
+        refresh=True,
+        delay_seconds=0,
+        fetcher=fetcher,
+        now=lambda: datetime(2026, 6, 10, tzinfo=timezone.utc),
+    )
+    cached = download_nvd_candidate_pool(output_path=output_path, refresh=False, delay_seconds=0, fetcher=fetcher)
+    records, stats, malformed = parse_nvd_cve_records(output_path.read_text(encoding="utf-8"))
+
+    assert len(calls) == 1
+    assert summary["downloaded_at"] == FIXED_NOW
+    assert summary["valid_cve_count"] == 2
+    assert summary["duplicate_rows"] == 0
+    assert cached["cache_hit"] is True
+    assert set(records) == {"CVE-2020-0796", "CVE-2021-44228"}
+    assert stats["valid_rows"] == 2
+    assert not malformed
 
 
 def test_missing_cves_and_malformed_nvd_records_are_visible(tmp_path):
