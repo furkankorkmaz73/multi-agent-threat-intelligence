@@ -160,6 +160,20 @@ The command writes `agent-python/reports/thesis_scenario_report.json`.
 
 The curated real-data benchmark compares exported CVE model results against CISA KEV and FIRST EPSS data. It requires a JSON model-results export containing analyzed CVE rows with `cve_id` or `entity_id`, `risk_score`, `confidence`, `cvss_score` or `evidence.cvss_score`, and optional feature/evidence fields.
 
+Generate curated CVE model results from local cached official-format NVD data:
+
+```bash
+make real-cve-export REAL_CVE_FLAGS="--cve-file .cache/real_benchmark/nvd_curated_cves.json --offline"
+```
+
+Generate model results and immediately run the KEV/EPSS benchmark with local official-format files:
+
+```bash
+make real-cve-export REAL_CVE_FLAGS="--cve-file .cache/real_benchmark/nvd_curated_cves.json --offline --run-benchmark --kev-file .cache/real_benchmark/cisa_kev.json --epss-file .cache/real_benchmark/first_epss.csv"
+```
+
+The model export writes `model_results.json`, `model_results.csv`, `analysis_failures.json`, and `run_metadata.json` under `agent-python/reports/real_benchmark/model_export/`.
+
 Online refresh:
 
 ```bash
