@@ -4,6 +4,11 @@ from typing import Any, Dict, List, Optional
 
 from agents.llm_helper import generate_explanation
 from analysis.correlator import DREAD_CLASSIFIERS, score_dread_matches, score_urlhaus_matches
+from analysis.features.confidence import (
+    calculate_cve_confidence,
+    calculate_rejected_cve_confidence,
+    calculate_urlhaus_confidence,
+)
 from analysis.features.cve_temporal import evaluate_cve_temporal_features
 from analysis.graph_builder import GraphBuilder
 from analysis.keyword_extractor import extract_keywords
@@ -434,6 +439,7 @@ class RiskEngine:
 
     def _build_invalid_cve_analysis(self, cve_id: str, description: str) -> Dict[str, Any]:
         note = "Record was excluded from prioritization because the CVE entry is rejected, reserved, or explicitly marked invalid."
+        confidence_details = calculate_rejected_cve_confidence().to_dict()
         return {
             "entity_type": "cve",
             "entity_id": cve_id,
@@ -443,19 +449,8 @@ class RiskEngine:
             # the record is invalid. Rejected/reserved CVE records carry no
             # actionable vulnerability evidence and must not appear as
             # high-confidence LOW findings.
-            "confidence": 0.25,
-            "confidence_breakdown": {
-                "base_confidence": 0.0,
-                "metadata_confidence": 0.0,
-                "entity_confidence": 0.0,
-                "external_evidence_confidence": 0.0,
-                "correlation_confidence": 0.0,
-                "freshness_confidence": 0.0,
-                "penalties": -0.25,
-                "raw_confidence": 0.25,
-                "final_confidence": 0.25,
-                "signals": {"validity_status": "invalid_or_rejected"},
-            },
+            "confidence": confidence_details["confidence"],
+            "confidence_breakdown": confidence_details["breakdown"],
             "diagnosis": f"{cve_id} excluded from dynamic prioritization as an invalid CVE record.",
             "explanation": [note, "Risk confidence is intentionally low because the record is not actionable vulnerability evidence."],
             "evidence": {"keywords": [], "cvss_score": 0.0, "age_days": None, "related_urlhaus_count": 0, "related_dread_count": 0, "validity_status": "invalid_or_rejected"},
@@ -562,176 +557,21 @@ class RiskEngine:
         urlhaus_stats: Optional[Dict[str, Any]] = None,
         dread_stats: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Return component-based confidence for the current risk assessment.
-
-        Confidence is evidence reliability, not risk severity. High technical
-        severity may justify HIGH risk with only medium confidence, while
-        accepted external evidence should move confidence upward only when it is
-        supported by exact identifiers, meaningful shared terms, high-signal
-        malware/exploit context, or semantic corroboration.
-        """
-        urlhaus_stats = urlhaus_stats or {}
-        dread_stats = dread_stats or {}
-        nlp_entities = nlp_entities or {}
-
-        accepted_external = urlhaus_match_count + dread_match_count
-        exact_hits = int(urlhaus_stats.get("exact_cve_hits", 0) or 0) + int(dread_stats.get("exact_cve_hits", 0) or 0)
-        high_signal_hits = int(urlhaus_stats.get("high_signal_hits", 0) or 0) + int(dread_stats.get("high_signal_hits", 0) or 0)
-        entity_hits = int(urlhaus_stats.get("entity_overlap_hits", 0) or 0) + int(dread_stats.get("entity_overlap_hits", 0) or 0)
-        shared_terms = set(urlhaus_stats.get("shared_terms") or []) | set(dread_stats.get("shared_terms") or [])
-        acceptance_reasons = set(urlhaus_stats.get("acceptance_reasons") or []) | set(dread_stats.get("acceptance_reasons") or [])
-        semantic_signal = max(
-            float(urlhaus_stats.get("avg_semantic_score", 0.0) or 0.0),
-            float(dread_stats.get("avg_semantic_score", 0.0) or 0.0),
-        )
-        entity_alignment_only = bool(
-            accepted_external > 0
-            and acceptance_reasons
-            and acceptance_reasons <= {"entity_alignment"}
-            and exact_hits == 0
-            and high_signal_hits == 0
-        )
-
-        # Stable floor for valid, analyzable CVE records. Invalid/rejected CVEs
-        # bypass this path and receive a low fixed confidence.
-        base_confidence = 0.12
-
-        metadata_confidence = 0.0
-        if has_cvss:
-            metadata_confidence += 0.22
-            if cvss_version in {"CVSS v4.0", "CVSS v3.1", "CVSS v3.0"}:
-                metadata_confidence += 0.04
-            elif cvss_version == "CVSS v2.0":
-                metadata_confidence += 0.02
-            if cvss_score >= 9.0:
-                metadata_confidence += 0.02
-        desc_len = len((description or "").strip())
-        if desc_len >= 180:
-            metadata_confidence += 0.10
-        elif desc_len >= 80:
-            metadata_confidence += 0.07
-        elif desc_len >= 30:
-            metadata_confidence += 0.03
-        if age_days is not None:
-            metadata_confidence += 0.04
-        metadata_confidence = min(metadata_confidence, 0.42)
-
-        entity_confidence = 0.0
-        products = nlp_entities.get("products") or []
-        vuln_types = nlp_entities.get("vuln_types") or []
-        impacts = nlp_entities.get("impacts") or []
-        threat_terms = nlp_entities.get("threat_terms") or []
-        cve_ids = nlp_entities.get("cve_ids") or []
-        if products:
-            entity_confidence += min(len(products) * 0.012, 0.07)
-        if vuln_types:
-            entity_confidence += 0.05
-        if impacts:
-            entity_confidence += 0.04
-        if threat_terms:
-            entity_confidence += 0.04
-        if cve_ids:
-            entity_confidence += 0.02
-        entity_confidence += min(keyword_count * 0.003, 0.03)
-        entity_confidence += min(llm_fields_count * 0.02, 0.05)
-        entity_confidence = min(entity_confidence, 0.18)
-
-        external_evidence_confidence = 0.0
-        if accepted_external:
-            # Entity-alignment-only evidence is weaker than exact CVE, high-signal
-            # malware/exploit overlap, or multi-signal corroboration. It can raise
-            # confidence, but it must not make old/generic IOC matches look highly
-            # reliable by itself.
-            if entity_alignment_only:
-                external_evidence_confidence += min(accepted_external * 0.025, 0.07)
-            else:
-                external_evidence_confidence += min(accepted_external * 0.055, 0.16)
-        if exact_hits:
-            external_evidence_confidence += min(exact_hits * 0.16, 0.26)
-        if high_signal_hits:
-            external_evidence_confidence += min(high_signal_hits * 0.05, 0.12)
-        if entity_hits:
-            external_evidence_confidence += min(entity_hits * (0.015 if entity_alignment_only else 0.035), 0.08)
-        if shared_terms:
-            external_evidence_confidence += min(len(shared_terms) * (0.008 if entity_alignment_only else 0.015), 0.06)
-        if semantic_signal >= SETTINGS.semantic.similarity_floor:
-            external_evidence_confidence += min(semantic_signal * (0.045 if entity_alignment_only else 0.10), 0.08)
-        external_evidence_confidence = min(external_evidence_confidence, 0.38)
-
-        correlation_confidence = 0.0
-        if accepted_external > 0:
-            correlation_confidence += min(graph_score * 0.04, 0.05)
-        if accepted_external > 0 and (exact_hits or high_signal_hits or shared_terms or semantic_signal >= SETTINGS.semantic.similarity_floor):
-            correlation_confidence += 0.02 if entity_alignment_only else 0.04
-        correlation_confidence = min(correlation_confidence, 0.09)
-
-        freshness_confidence = 0.0
-        if age_days is not None:
-            if age_days <= 30:
-                freshness_confidence += 0.04
-            elif age_days <= 365:
-                freshness_confidence += 0.02
-
-        penalties = 0.0
-        if accepted_external == 0:
-            penalties -= 0.08
-            if exact_hits == 0 and high_signal_hits == 0 and entity_hits == 0 and semantic_signal == 0:
-                penalties -= 0.03
-        if not has_cvss:
-            penalties -= 0.12
-        if desc_len < 30:
-            penalties -= 0.05
-        if not products and not vuln_types and not impacts and not threat_terms:
-            penalties -= 0.04
-        if entity_alignment_only and semantic_signal < 0.30:
-            penalties -= 0.03
-        if age_days is not None and age_days > 3650 and accepted_external == 0:
-            penalties -= 0.04
-
-        raw_confidence = (
-            base_confidence
-            + metadata_confidence
-            + entity_confidence
-            + external_evidence_confidence
-            + correlation_confidence
-            + freshness_confidence
-            + penalties
-        )
-
-        # Hard guardrails for metadata-poor records. Text extraction can provide
-        # useful context, but missing CVSS and missing accepted external evidence
-        # should keep the reliability of CVE prioritization low.
-        if not has_cvss and accepted_external == 0:
-            raw_confidence = min(raw_confidence, 0.35)
-            if keyword_count <= 3 and llm_fields_count == 0:
-                raw_confidence = min(raw_confidence, 0.28)
-
-        confidence = round(max(0.05, min(raw_confidence, 0.95)), 3)
-        breakdown = {
-            "base_confidence": round(base_confidence, 3),
-            "metadata_confidence": round(metadata_confidence, 3),
-            "entity_confidence": round(entity_confidence, 3),
-            "external_evidence_confidence": round(external_evidence_confidence, 3),
-            "correlation_confidence": round(correlation_confidence, 3),
-            "freshness_confidence": round(freshness_confidence, 3),
-            "penalties": round(penalties, 3),
-            "raw_confidence": round(raw_confidence, 3),
-            "final_confidence": confidence,
-            "signals": {
-                "has_cvss": has_cvss,
-                "cvss_version": cvss_version,
-                "description_length": desc_len,
-                "accepted_external_evidence": accepted_external,
-                "exact_hits": exact_hits,
-                "high_signal_hits": high_signal_hits,
-                "entity_hits": entity_hits,
-                "shared_term_count": len(shared_terms),
-                "acceptance_reasons": sorted(acceptance_reasons),
-                "entity_alignment_only": entity_alignment_only,
-                "semantic_signal": round(semantic_signal, 4),
-            },
-        }
-        return {"confidence": confidence, "breakdown": breakdown}
+        return calculate_cve_confidence(
+            has_cvss=has_cvss,
+            urlhaus_match_count=urlhaus_match_count,
+            dread_match_count=dread_match_count,
+            keyword_count=keyword_count,
+            llm_fields_count=llm_fields_count,
+            graph_score=graph_score,
+            cvss_score=cvss_score,
+            cvss_version=cvss_version,
+            description=description,
+            age_days=age_days,
+            nlp_entities=nlp_entities,
+            urlhaus_stats=urlhaus_stats,
+            dread_stats=dread_stats,
+        ).to_dict()
 
     def _calculate_confidence(
         self,
@@ -926,64 +766,18 @@ class RiskEngine:
         related_dread: int,
         graph_summary: Dict[str, Any],
     ) -> Dict[str, Any]:
-        payload_signals = self._urlhaus_payload_signals(url, tags)
-        family_signals = self._urlhaus_malware_family_signals(tags)
-        feed_confidence = 0.22
-        status_confidence = 0.10 if status in {"online", "offline"} else 0.0
-        threat_label_confidence = 0.12 if threat and threat != "unknown" else 0.0
-        tag_confidence = min(len(tags) * 0.035, 0.16)
-        payload_confidence = min(sum(1 for value in payload_signals.values() if value) * 0.045, 0.14)
-        family_confidence = min(len(family_signals) * 0.055, 0.16)
-        freshness_confidence = 0.0
-        age_days = calculate_age_days(str(date_added)) if date_added else None
-        if age_days is not None:
-            freshness_confidence = 0.08 if age_days <= 14 else 0.04 if age_days <= 30 else 0.0
-        cross_source_confidence = min((related_cves * 0.025) + (related_dread * 0.05), 0.12)
-        graph_confidence = min(float(graph_summary.get("structural_strength", 0.0) or 0.0) * 0.06, 0.06)
-        penalties = 0.0
-        if not tags:
-            penalties -= 0.08
-        if status == "offline":
-            penalties -= 0.04
-        if not date_added:
-            penalties -= 0.05
-        raw = (
-            feed_confidence
-            + status_confidence
-            + threat_label_confidence
-            + tag_confidence
-            + payload_confidence
-            + family_confidence
-            + freshness_confidence
-            + cross_source_confidence
-            + graph_confidence
-            + penalties
-        )
-        final = round(min(max(raw, 0.25), 0.92), 3)
-        breakdown = {
-            "feed_confidence": round(feed_confidence, 3),
-            "status_confidence": round(status_confidence, 3),
-            "threat_label_confidence": round(threat_label_confidence, 3),
-            "tag_confidence": round(tag_confidence, 3),
-            "payload_confidence": round(payload_confidence, 3),
-            "family_confidence": round(family_confidence, 3),
-            "freshness_confidence": round(freshness_confidence, 3),
-            "cross_source_confidence": round(cross_source_confidence, 3),
-            "graph_confidence": round(graph_confidence, 3),
-            "penalties": round(penalties, 3),
-            "raw_confidence": round(raw, 3),
-            "final_confidence": final,
-            "signals": {
-                "url_status": status or "unknown",
-                "tag_count": len(tags),
-                "payload_signals": payload_signals,
-                "malware_family_signals": family_signals,
-                "related_cves": related_cves,
-                "related_dread": related_dread,
-                "date_added_present": bool(date_added),
-            },
-        }
-        return {"confidence": final, "breakdown": breakdown}
+        return calculate_urlhaus_confidence(
+            threat=threat,
+            tags=tags,
+            status=status,
+            date_added=date_added,
+            related_cves=related_cves,
+            related_dread=related_dread,
+            graph_summary=graph_summary,
+            payload_signals=self._urlhaus_payload_signals(url, tags),
+            family_signals=self._urlhaus_malware_family_signals(tags),
+            age_calculator=calculate_age_days,
+        ).to_dict()
 
     def _urlhaus_payload_signals(self, url: str, tags: List[str]) -> Dict[str, bool]:
         lowered = (url or "").lower()
