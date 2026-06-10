@@ -156,6 +156,18 @@ make thesis-scenario
 
 The command writes `agent-python/reports/thesis_scenario_report.json`.
 
+Generate thesis-ready tables, charts, and case-study artifacts from existing benchmark outputs:
+
+```bash
+cd agent-python
+PYTHONPATH=src .venv/bin/python -m evaluation.thesis_reporting \
+  --objective-dir ~/thesis-artifacts/objective-evaluation/ \
+  --balanced-dir ~/thesis-artifacts/balanced-benchmark/balanced/ \
+  --correlation-dir ~/thesis-artifacts/correlation-benchmark/out/ \
+  --output-dir ~/thesis-artifacts/thesis-reporting/ \
+  --generated-at 2026-06-10T00:00:00+00:00
+```
+
 ## Real CVE Benchmark
 
 The curated real-data benchmark compares exported CVE model results against CISA KEV and FIRST EPSS data. It requires a JSON model-results export containing analyzed CVE rows with `cve_id` or `entity_id`, `risk_score`, `confidence`, `cvss_score` or `evidence.cvss_score`, and optional feature/evidence fields.
