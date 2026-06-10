@@ -36,12 +36,51 @@ class DatabaseManager:
             self.collections["cve"].create_index("analysis.risk_score")
             self.collections["urlhaus"].create_index("analysis.risk_score")
             self.collections["dread"].create_index("analysis.risk_score")
+            self.collections["cve"].create_index("job_lifecycle.idempotency_key")
+            self.collections["urlhaus"].create_index("job_lifecycle.idempotency_key")
+            self.collections["dread"].create_index("job_lifecycle.idempotency_key")
         except Exception:
             # Index creation should never block app startup in constrained or mocked environments.
             pass
 
     def get_unprocessed(self, source: str, limit: int = 10) -> List[Dict[str, Any]]:
         return list(self.collections[source].find({"processed": False}).sort([("_id", pymongo.ASCENDING)]).limit(limit))
+
+    def update_job_lifecycle(self, source: str, doc_id: Any, job_lifecycle: Dict[str, Any]) -> None:
+        now = datetime.now(timezone.utc)
+        processed = job_lifecycle.get("state") in {"completed", "completed_with_warnings", "failed", "dead_letter"}
+        self.collections[source].update_one(
+            {"_id": doc_id},
+            {
+                "$set": {
+                    "job_lifecycle": job_lifecycle,
+                    "job_lifecycle_updated_at": now,
+                    "processed": processed,
+                },
+                "$push": {
+                    "job_lifecycle_history": {
+                        "$each": [
+                            {
+                                "state": job_lifecycle.get("state"),
+                                "attempt_count": job_lifecycle.get("attempt_count"),
+                                "updated_at": now,
+                                "last_error": job_lifecycle.get("last_error"),
+                            }
+                        ],
+                        "$slice": -20,
+                    }
+                },
+            },
+        )
+
+    def get_job_lifecycle_by_idempotency(self, idempotency_key: str) -> Optional[Dict[str, Any]]:
+        for collection in self.collections.values():
+            if not hasattr(collection, "find_one"):
+                continue
+            doc = collection.find_one({"job_lifecycle.idempotency_key": idempotency_key}, {"job_lifecycle": 1})
+            if doc and doc.get("job_lifecycle"):
+                return doc["job_lifecycle"]
+        return None
 
     def update_analysis(self, source: str, doc_id: Any, analysis_result: Dict[str, Any]) -> None:
         now = datetime.now(timezone.utc)

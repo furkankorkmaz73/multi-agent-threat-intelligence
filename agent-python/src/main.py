@@ -1,13 +1,16 @@
 import argparse
 import logging
 import time
-from datetime import datetime, timezone
-from typing import Iterable, List
+from typing import Any, Iterable, List, Optional
 
 from agents.diagnostic import DiagnosticAgent
 from agents.recommender import RecommenderAgent
 from config import APP_VERSION, DEFAULT_ACTIVE_SLEEP, DEFAULT_BATCH_SIZE, DEFAULT_IDLE_SLEEP
 from core.database import DatabaseManager
+from worker.executor import WorkerJobExecutor
+from worker.job_lifecycle import RetryPolicy
+from worker.job_repository import JobRepository, build_job_repository
+from worker.observability import StructuredJobLogger, WorkerMetrics
 
 
 def setup_logging() -> None:
@@ -69,6 +72,13 @@ def process_source(
     thinker: DiagnosticAgent,
     recommender: RecommenderAgent,
     batch_size: int,
+    *,
+    job_repository: Optional[JobRepository] = None,
+    retry_policy: Optional[RetryPolicy] = None,
+    event_logger: Optional[StructuredJobLogger] = None,
+    metrics: Optional[WorkerMetrics] = None,
+    clock: Optional[Any] = None,
+    force: bool = False,
 ) -> int:
     pending = db.get_unprocessed(source, limit=batch_size)
 
@@ -78,45 +88,27 @@ def process_source(
 
     logging.info("Pending records for source=%s: %d", source, len(pending))
     processed_count = 0
+    repository = job_repository or build_job_repository(db)
+    executor = WorkerJobExecutor(
+        repository=repository,
+        retry_policy=retry_policy,
+        event_logger=event_logger,
+        metrics=metrics,
+        clock=clock,
+        analysis_version=APP_VERSION,
+        force=force,
+    )
 
     for doc in pending:
         doc_id = doc.get("_id", "unknown-id")
         logging.info("Processing source=%s doc_id=%s", source, doc_id)
 
-        try:
-            analysis = thinker.analyze(source, doc, db=db)
-            if analysis is None:
-                logging.warning("Skipped source=%s doc_id=%s because no analysis was returned", source, doc_id)
-                continue
-
-            analysis["recommendations"] = recommender.suggest(
-                analysis_result=analysis,
-                source=source,
-                original_doc=doc,
-            )
-            analysis["source"] = source
-            analysis["analyzed_at"] = datetime.now(timezone.utc)
-            analysis["pipeline_version"] = APP_VERSION
-
-            db.update_analysis(source, doc_id, analysis)
-
-            logging.info(
-                "Completed source=%s doc_id=%s level=%s score=%s confidence=%s",
-                source,
-                doc_id,
-                analysis.get("risk_level"),
-                analysis.get("risk_score"),
-                analysis.get("confidence"),
-            )
+        outcome = executor.process_document(source=source, doc=doc, db=db, thinker=thinker, recommender=recommender)
+        if outcome.processed:
             processed_count += 1
-
-        except Exception as exc:
-            logging.exception(
-                "Failed processing source=%s doc_id=%s error=%s",
-                source,
-                doc_id,
-                exc,
-            )
+            logging.info("Completed source=%s doc_id=%s", source, doc_id)
+        elif outcome.skipped_duplicate:
+            logging.info("Skipped duplicate source=%s doc_id=%s", source, doc_id)
 
     return processed_count
 
