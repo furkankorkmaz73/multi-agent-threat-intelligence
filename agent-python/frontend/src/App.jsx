@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   analyzeInput,
+  clearRuntimeApiKey,
+  describeApiError,
+  getAuthStatus,
   getEvaluationDiagnostics,
   getEvaluationSnapshot,
   getFindingDetail,
@@ -9,6 +12,7 @@ import {
   getStatusOverview,
   getTopFindings,
   searchFindings,
+  setRuntimeApiKey,
 } from "./api";
 import FindingTable from "./components/FindingTable";
 import FindingDetail from "./components/FindingDetail";
@@ -16,6 +20,7 @@ import MetricCard from "./components/MetricCard";
 import JsonBlock from "./components/JsonBlock";
 import { RiskBadge, StatusPill } from "./components/Badges";
 import { formatNumber, formatPercent } from "./utils/format";
+import { filterAndSortFindings } from "./viewModels";
 import "./App.css";
 
 const SOURCES = ["", "cve", "urlhaus", "dread"];
@@ -23,6 +28,7 @@ const ANALYZE_SOURCES = ["cve", "urlhaus", "dread"];
 const TABS = [
   { id: "findings", label: "Findings" },
   { id: "evaluation", label: "Evaluation" },
+  { id: "status", label: "Status" },
   { id: "adhoc", label: "Ad-hoc analysis" },
 ];
 
@@ -81,7 +87,41 @@ function TabNav({ activeTab, setActiveTab }) {
   );
 }
 
-function SourceControls({ source, setSource, limit, setLimit, mode, setMode, query, setQuery, onRefresh }) {
+function Alert({ error, fallbackTitle = "Request failed" }) {
+  if (!error) return null;
+  const detail = describeApiError(error);
+  return (
+    <div className="error-banner" data-kind={detail.kind}>
+      <strong>{detail.title || fallbackTitle}</strong>
+      <span>{detail.message}</span>
+    </div>
+  );
+}
+
+function AuthPanel({ authStatus, apiKeyInput, setApiKeyInput, onApply, onClear }) {
+  return (
+    <div className="auth-panel">
+      <div>
+        <span className="metric-label">API authentication</span>
+        <strong>{authStatus.configured ? `Configured from ${authStatus.source}` : "No API key configured"}</strong>
+        <p>Use an analyst key for findings and an operator/admin key for status. The session key is kept in memory only.</p>
+      </div>
+      <form onSubmit={(event) => { event.preventDefault(); onApply(); }} className="auth-form">
+        <input
+          type="password"
+          value={apiKeyInput}
+          onChange={(event) => setApiKeyInput(event.target.value)}
+          placeholder="Paste API key for this session"
+          autoComplete="off"
+        />
+        <button className="primary-button" type="submit">Use key</button>
+        <button className="secondary-button" type="button" onClick={onClear}>Clear</button>
+      </form>
+    </div>
+  );
+}
+
+function SourceControls({ source, setSource, limit, setLimit, mode, setMode, query, setQuery, riskLevel, setRiskLevel, sortBy, setSortBy, onRefresh }) {
   return (
     <div className="control-grid">
       <label>
@@ -106,6 +146,22 @@ function SourceControls({ source, setSource, limit, setLimit, mode, setMode, que
         <span>Limit</span>
         <select value={limit} onChange={(event) => setLimit(Number(event.target.value))}>
           {[10, 25, 50, 100].map((item) => <option key={item} value={item}>{item}</option>)}
+        </select>
+      </label>
+      <label>
+        <span>Risk</span>
+        <select value={riskLevel} onChange={(event) => setRiskLevel(event.target.value)}>
+          <option value="">All</option>
+          {["CRITICAL", "HIGH", "MEDIUM", "LOW"].map((item) => <option key={item} value={item}>{item}</option>)}
+        </select>
+      </label>
+      <label>
+        <span>Sort</span>
+        <select value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
+          <option value="risk_desc">Risk score</option>
+          <option value="confidence_desc">Confidence</option>
+          <option value="analyzed_desc">Analyzed time</option>
+          <option value="source_asc">Source</option>
         </select>
       </label>
       {mode === "search" ? (
@@ -134,6 +190,47 @@ function Overview({ health, status, evaluationDiagnostics }) {
       <MetricCard label="Pipeline" value={status?.pipeline_version || "-"} note="Backend version" />
       <MetricCard label="Diagnostic rows" value={evaluationDiagnostics?.record_count ?? "-"} note="Sample only" />
     </div>
+  );
+}
+
+function StatusPanel({ status, error, onRefresh }) {
+  if (error) {
+    return (
+      <Section title="Operational status" description="Operator or admin role required." actions={<button className="secondary-button" onClick={onRefresh}>Retry</button>}>
+        <Alert error={error} />
+      </Section>
+    );
+  }
+
+  const sources = status?.sources || {};
+  const totals = status?.totals || {};
+  return (
+    <Section title="Operational status" description="Worker and persistence status exposed by the authenticated FastAPI backend." actions={<button className="secondary-button" onClick={onRefresh}>Refresh status</button>}>
+      <div className="overview-grid compact-overview">
+        <MetricCard label="Total records" value={totals.total ?? "-"} />
+        <MetricCard label="Processed" value={totals.processed ?? "-"} />
+        <MetricCard label="Unprocessed" value={totals.unprocessed ?? "-"} />
+        <MetricCard label="Analyzed" value={totals.analyzed ?? "-"} />
+      </div>
+      <div className="compact-table-shell">
+        <table className="compact-table">
+          <thead><tr><th>Source</th><th>Total</th><th>Processed</th><th>Unprocessed</th><th>Analyzed</th><th>Coverage</th><th>Avg risk</th></tr></thead>
+          <tbody>
+            {Object.entries(sources).map(([source, row]) => (
+              <tr key={source}>
+                <td className="mono">{source}</td>
+                <td>{row.total}</td>
+                <td>{row.processed}</td>
+                <td>{row.unprocessed}</td>
+                <td>{row.analyzed}</td>
+                <td>{formatPercent(row.analysis_coverage)}</td>
+                <td>{formatNumber(row.avg_risk_score)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Section>
   );
 }
 
@@ -258,26 +355,65 @@ export default function App() {
   const [limit, setLimit] = useState(25);
   const [mode, setMode] = useState("top");
   const [query, setQuery] = useState("");
+  const [riskLevel, setRiskLevel] = useState("");
+  const [sortBy, setSortBy] = useState("risk_desc");
   const [activeTab, setActiveTab] = useState("findings");
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [authStatus, setAuthStatus] = useState(getAuthStatus());
   const selectedKey = detail.value ? `${detail.value.source}:${detail.value.entity_id}` : "";
+  const displayedFindings = useMemo(
+    () => filterAndSortFindings(findings.value, { riskLevel, sortBy }),
+    [findings.value, riskLevel, sortBy],
+  );
+
+  function applyApiKey() {
+    setRuntimeApiKey(apiKeyInput);
+    setApiKeyInput("");
+    setAuthStatus(getAuthStatus());
+    loadOverview();
+    loadFindings();
+  }
+
+  function clearApiKey() {
+    clearRuntimeApiKey();
+    setApiKeyInput("");
+    setAuthStatus(getAuthStatus());
+    status.setValue(null);
+    loadOverview();
+    loadFindings();
+  }
 
   async function loadOverview() {
     health.setError("");
     status.setError("");
-    try {
-      const [healthPayload, statusPayload, evaluationPayload, diagnosticsPayload] = await Promise.all([
-        getHealth(),
-        getStatusOverview(),
-        getEvaluationSnapshot({ limit: 50, topK: 10 }).catch(() => null),
-        getEvaluationDiagnostics({ limit: 500 }).catch(() => null),
-      ]);
+    evaluation.setError("");
+    diagnostics.setError("");
+
+    const [healthPayload, statusResult, evaluationPayload, diagnosticsPayload] = await Promise.all([
+      getHealth().catch((err) => {
+        health.setError(err);
+        return null;
+      }),
+      getStatusOverview().catch((err) => {
+        status.setError(err);
+        return null;
+      }),
+      getEvaluationSnapshot({ limit: 50, topK: 10 }).catch((err) => {
+        evaluation.setError(err);
+        return null;
+      }),
+      getEvaluationDiagnostics({ limit: 500 }).catch((err) => {
+        diagnostics.setError(err);
+        return null;
+      }),
+    ]);
+
+    if (healthPayload) {
       health.setValue(healthPayload);
-      status.setValue(statusPayload);
-      evaluation.setValue(evaluationPayload);
-      diagnostics.setValue(diagnosticsPayload);
-    } catch (err) {
-      health.setError(err.message || String(err));
     }
+    if (statusResult) status.setValue(statusResult);
+    evaluation.setValue(evaluationPayload);
+    diagnostics.setValue(diagnosticsPayload);
   }
 
   async function loadFindings() {
@@ -295,7 +431,7 @@ export default function App() {
       findings.setValue(payload);
       if (!payload.some((item) => `${item.source}:${item.entity_id}` === selectedKey)) detail.setValue(null);
     } catch (err) {
-      findings.setError(err.message || String(err));
+      findings.setError(err);
     } finally {
       findings.setLoading(false);
     }
@@ -307,7 +443,7 @@ export default function App() {
     try {
       detail.setValue(await getFindingDetail({ source: finding.source, entityId: finding.entity_id }));
     } catch (err) {
-      detail.setError(err.message || String(err));
+      detail.setError(err);
     } finally {
       detail.setLoading(false);
     }
@@ -316,7 +452,7 @@ export default function App() {
   useEffect(() => { loadOverview(); }, []);
   useEffect(() => { loadFindings(); }, [source, limit, mode]);
 
-  const globalError = useMemo(() => health.error || status.error || findings.error || detail.error, [health.error, status.error, findings.error, detail.error]);
+  const globalError = useMemo(() => health.error || findings.error || detail.error, [health.error, findings.error, detail.error]);
 
   return (
     <main className="app-shell">
@@ -329,7 +465,9 @@ export default function App() {
         <button className="secondary-button" onClick={() => { loadOverview(); loadFindings(); }}>Refresh all</button>
       </header>
 
-      {globalError ? <div className="error-banner">{globalError}</div> : null}
+      <AuthPanel authStatus={authStatus} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} onApply={applyApiKey} onClear={clearApiKey} />
+
+      <Alert error={globalError} />
 
       <Overview health={health.value} status={status.value} evaluationDiagnostics={diagnostics.value} />
 
@@ -341,9 +479,9 @@ export default function App() {
             <Section
               title="Findings"
               description="Prioritized records from persisted analysis results. Select a row to inspect evidence and scoring details."
-              actions={<SourceControls source={source} setSource={setSource} limit={limit} setLimit={setLimit} mode={mode} setMode={setMode} query={query} setQuery={setQuery} onRefresh={loadFindings} />}
+              actions={<SourceControls source={source} setSource={setSource} limit={limit} setLimit={setLimit} mode={mode} setMode={setMode} query={query} setQuery={setQuery} riskLevel={riskLevel} setRiskLevel={setRiskLevel} sortBy={sortBy} setSortBy={setSortBy} onRefresh={loadFindings} />}
             >
-              {findings.loading ? <div className="empty-state large">Loading findings…</div> : <FindingTable findings={findings.value} selectedKey={selectedKey} onSelect={selectFinding} />}
+              {findings.loading ? <div className="empty-state large">Loading findings...</div> : findings.error ? <Alert error={findings.error} /> : <FindingTable findings={displayedFindings} selectedKey={selectedKey} onSelect={selectFinding} />}
             </Section>
           ) : null}
 
@@ -352,6 +490,8 @@ export default function App() {
               <EvaluationPanel snapshot={evaluation.value} diagnostics={diagnostics.value} />
             </Section>
           ) : null}
+
+          {activeTab === "status" ? <StatusPanel status={status.value} error={status.error} onRefresh={loadOverview} /> : null}
 
           {activeTab === "adhoc" ? <AnalyzeSandbox /> : null}
         </section>

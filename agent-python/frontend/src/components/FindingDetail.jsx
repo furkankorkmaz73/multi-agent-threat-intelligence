@@ -3,6 +3,7 @@ import { RiskBadge, SourceBadge } from "./Badges";
 import MetricCard from "./MetricCard";
 import BreakdownPanel from "./BreakdownPanel";
 import JsonBlock from "./JsonBlock";
+import { detailEvidenceGroups } from "../viewModels";
 
 function ChipList({ label, values }) {
   const items = Array.isArray(values) ? values.filter(Boolean) : [];
@@ -37,6 +38,127 @@ function EvidenceQuality({ evidence = {} }) {
   );
 }
 
+function EvidenceDecisionList({ title, items, count }) {
+  const rows = Array.isArray(items) ? items : [];
+  return (
+    <div className="decision-group">
+      <div className="decision-title-row">
+        <strong>{title}</strong>
+        <span>{count ?? rows.length}</span>
+      </div>
+      {rows.length ? (
+        <div className="decision-list">
+          {rows.slice(0, 6).map((item, index) => (
+            <div className="decision-item" key={`${title}-${index}`}>
+              <div className="decision-item-head">
+                <span>{item.url || item.title || item.id || item.entity_id || "Evidence item"}</span>
+                {item.score !== undefined ? <strong>{formatNumber(item.score, 4)}</strong> : null}
+              </div>
+              <div className="decision-meta">
+                {item.acceptance_reason ? <span>reason: {item.acceptance_reason}</span> : null}
+                {item.rejection_reason ? <span>reason: {item.rejection_reason}</span> : null}
+                {item.url_status ? <span>status: {item.url_status}</span> : null}
+                {item.threat ? <span>threat: {item.threat}</span> : null}
+              </div>
+              <ChipList label="tags" values={item.tags} />
+            </div>
+          ))}
+        </div>
+      ) : <p className="empty-state">No serialized {title.toLowerCase()} items.</p>}
+    </div>
+  );
+}
+
+function EvidenceDecisions({ detail }) {
+  const groups = detailEvidenceGroups(detail);
+  return (
+    <section className="panel-card">
+      <div className="panel-title-row"><h3>Correlation decisions</h3></div>
+      <div className="kv-grid">
+        <div><span>Accepted</span><strong>{groups.counts.accepted}</strong></div>
+        <div><span>Rejected</span><strong>{groups.counts.rejected}</strong></div>
+        <div><span>Manual review</span><strong>{groups.counts.manualReview}</strong></div>
+        <div><span>Shared terms</span><strong>{groups.sharedTerms.length}</strong></div>
+      </div>
+      <ChipList label="acceptance_reasons" values={groups.reasons} />
+      <ChipList label="shared_terms" values={groups.sharedTerms} />
+      <EvidenceDecisionList title="Accepted evidence" items={groups.accepted} count={groups.counts.accepted} />
+      <EvidenceDecisionList title="Rejected evidence" items={groups.rejected} count={groups.counts.rejected} />
+      <EvidenceDecisionList title="Manual-review evidence" items={groups.manualReview} count={groups.counts.manualReview} />
+    </section>
+  );
+}
+
+function ObjectMetrics({ title, data = {}, keys = [] }) {
+  const entries = keys.map((key) => [key, data[key]]).filter(([, value]) => value !== undefined && value !== null);
+  return (
+    <section className="panel-card">
+      <div className="panel-title-row"><h3>{title}</h3></div>
+      {entries.length ? (
+        <div className="kv-grid">
+          {entries.map(([key, value]) => (
+            <div key={key}><span>{titleCase(key)}</span><strong>{typeof value === "number" ? formatNumber(value, 4) : String(value)}</strong></div>
+          ))}
+        </div>
+      ) : <p className="empty-state">No metrics available.</p>}
+    </section>
+  );
+}
+
+function DistributionPanel({ title, data = {} }) {
+  const entries = Object.entries(data || {}).sort(([left], [right]) => left.localeCompare(right));
+  return (
+    <section className="panel-card">
+      <div className="panel-title-row"><h3>{title}</h3></div>
+      {entries.length ? (
+        <div className="distribution-list">
+          {entries.map(([key, value]) => (
+            <div className="distribution-row compact" key={key}>
+              <span>{titleCase(key)}</span>
+              <div className="distribution-track"><span style={{ width: `${Math.min(100, Number(value || 0) * 16)}%` }} /></div>
+              <strong>{value}</strong>
+            </div>
+          ))}
+        </div>
+      ) : <p className="empty-state">No distribution available.</p>}
+    </section>
+  );
+}
+
+function ReviewPanel({ critic = {} }) {
+  return (
+    <section className="panel-card">
+      <div className="panel-title-row"><h3>Critic review</h3></div>
+      <div className="kv-grid">
+        <div><span>Status</span><strong>{critic.status || "unknown"}</strong></div>
+        <div><span>Warnings</span><strong>{Array.isArray(critic.warnings) ? critic.warnings.length : 0}</strong></div>
+      </div>
+      {critic.summary ? <p className="panel-copy">{critic.summary}</p> : null}
+      <InlineTextList title="Critic issues" items={critic.issues} />
+      <InlineTextList title="Critic warnings" items={critic.warnings} />
+    </section>
+  );
+}
+
+function TracePanel({ title, items = [] }) {
+  const rows = Array.isArray(items) ? items : [];
+  return (
+    <section className="panel-card">
+      <div className="panel-title-row"><h3>{title}</h3></div>
+      {rows.length ? (
+        <ol className="trace-list">
+          {rows.slice(0, 12).map((item, index) => (
+            <li key={`${title}-${index}`}>
+              <strong>{item.agent || item.step || item.action || item.status || `Step ${index + 1}`}</strong>
+              <span>{item.action || item.status || item.summary || item.reason || ""}</span>
+            </li>
+          ))}
+        </ol>
+      ) : <p className="empty-state">No {title.toLowerCase()} available.</p>}
+    </section>
+  );
+}
+
 function NlpPanel({ entities = {} }) {
   const order = ["cve_ids", "cwe_ids", "products", "versions", "vuln_types", "impacts", "threat_terms", "iocs", "domains", "keywords", "salient_phrases"];
   const keys = order.filter((key) => Array.isArray(entities[key]) && entities[key].length);
@@ -60,6 +182,20 @@ function TextList({ title, items }) {
         </ul>
       ) : <p className="empty-state">None.</p>}
     </section>
+  );
+}
+
+function InlineTextList({ title, items }) {
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  return (
+    <div className="inline-list-block">
+      <strong>{title}</strong>
+      {list.length ? (
+        <ul className="text-list">
+          {list.map((item, index) => <li key={`${title}-${index}`}>{item}</li>)}
+        </ul>
+      ) : <p className="empty-state">None.</p>}
+    </div>
   );
 }
 
@@ -93,6 +229,15 @@ export default function FindingDetail({ detail, loading }) {
         <BreakdownPanel title="Primary score drivers" data={detail.feature_breakdown} type="risk" />
         <BreakdownPanel title="Confidence breakdown" data={confidenceBreakdown} type="confidence" emptyLabel="No source-specific confidence breakdown available. Re-run analysis with the latest model to generate it." />
         <EvidenceQuality evidence={evidence} />
+        <EvidenceDecisions detail={detail} />
+        <ObjectMetrics title="Graph summary" data={detail.graph_summary} keys={["node_count", "edge_count", "cross_source_edge_count", "centrality_score", "graph_density", "average_edge_confidence", "structural_strength"]} />
+        <DistributionPanel title="Graph relations" data={detail.graph_summary?.relation_distribution} />
+        <DistributionPanel title="Graph provenance" data={detail.graph_summary?.provenance_distribution} />
+        <BreakdownPanel title="Source contributions" data={detail.source_contributions} />
+        <BreakdownPanel title="Counterfactuals" data={detail.counterfactuals} />
+        <ReviewPanel critic={detail.critic_review} />
+        <TracePanel title="Execution plan" items={detail.execution_plan} />
+        <TracePanel title="Orchestration trace" items={detail.orchestration_trace} />
         <NlpPanel entities={evidence.nlp_entities || {}} />
         <TextList title="Explanation" items={detail.explanation} />
         <TextList title="Recommendations" items={detail.recommendations} />

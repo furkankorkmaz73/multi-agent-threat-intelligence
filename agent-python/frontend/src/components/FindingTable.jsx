@@ -1,5 +1,6 @@
 import { compactDate, formatNumber } from "../utils/format";
 import { RiskBadge, SourceBadge } from "./Badges";
+import { evidenceCounts } from "../viewModels";
 
 function confidenceBand(value) {
   const n = Number(value || 0);
@@ -20,15 +21,13 @@ function EvidenceMini({ finding }) {
     );
   }
 
-  const accepted = Number(summary.urlhaus_accepted ?? summary.accepted_urlhaus_count ?? 0);
-  const rejected = Number(summary.urlhaus_rejected ?? summary.rejected_urlhaus_count ?? 0);
-  const exact = Number(summary.exact_cve_hits ?? 0);
-  const highSignal = Number(summary.high_signal_hits ?? 0);
+  const { accepted, rejected, manualReview, exact, highSignal } = evidenceCounts(finding);
   const active = Boolean(summary.has_active_evidence || accepted > 0 || exact > 0 || highSignal > 0);
 
   return (
     <div className="evidence-mini" data-active={active ? "true" : "false"}>
       <span>UH {accepted}/{rejected}</span>
+      {manualReview ? <span>Review {manualReview}</span> : null}
       {exact ? <span>Exact {exact}</span> : null}
       {highSignal ? <span>Signal {highSignal}</span> : null}
     </div>
@@ -66,6 +65,10 @@ export default function FindingTable({ findings, selectedKey, onSelect }) {
                 key={key}
                 className={selectedKey === key ? "selected-row" : ""}
                 onClick={() => onSelect?.(finding)}
+                tabIndex={0}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") onSelect?.(finding);
+                }}
               >
                 <td>
                   <div className="finding-id">{finding.entity_id}</div>

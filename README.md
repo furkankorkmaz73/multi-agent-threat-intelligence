@@ -140,7 +140,7 @@ The GitHub Actions workflow runs:
 
 ```bash
 cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m pytest -q -p no:ddtrace
-cd agent-python/frontend && npm ci && npm run build && npm audit --omit=dev
+cd agent-python/frontend && npm ci && npm test && npm run compile-check && npm run lint && npm run build && npm audit --omit=dev
 cd agent-go && GOTOOLCHAIN=go1.24.0 go test ./... && go mod verify
 ```
 
@@ -542,14 +542,26 @@ curl http://localhost:8000/status/overview
 
 ```bash
 cd agent-python/frontend
-npm install
+cp .env.example .env
+npm ci
 npm run dev
 ```
+
+Set `VITE_API_BASE` to the FastAPI base URL. When the backend runs with `API_AUTH_MODE=api_key`, enter an API key in the console at runtime. Frontend environment variables are bundled into browser assets, so analyst/operator API keys must not be placed in Vite environment variables. A `viewer` or `analyst` key can read findings; `operator` or `admin` is required for the operational status view. The runtime key is kept in memory only and is sent as `x-api-key`.
 
 Open:
 
 ```text
 http://localhost:5173
+```
+
+Frontend validation:
+
+```bash
+npm test
+npm run compile-check
+npm run lint
+npm run build
 ```
 
 ---
@@ -651,6 +663,7 @@ Main views:
 ```text
 Findings
 Evaluation
+Status
 Ad-hoc analysis
 ```
 
@@ -680,6 +693,8 @@ Explanations
 Recommendations
 Full payload
 ```
+
+The status view uses the existing `/status/overview` API permission and renders a role-specific 403 state when opened with a non-operator key.
 
 ---
 

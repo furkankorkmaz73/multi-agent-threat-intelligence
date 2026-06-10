@@ -48,6 +48,8 @@ agent-go/**/*.exe
 
 # Node / misc, if any
 node_modules/
+agent-python/frontend/dist/
+agent-python/frontend/coverage/
 
 # OS / editor
 .DS_Store

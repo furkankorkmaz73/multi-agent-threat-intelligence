@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test": "node ./scripts/run-tests.mjs",
+    "compile-check": "node ./scripts/compile-check.mjs",
+    "lint": "node ./scripts/lint.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
