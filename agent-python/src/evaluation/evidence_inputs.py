@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
+import io
 import json
 import re
 import sys
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,7 +19,9 @@ from evaluation.real_data import DataFormatError, DataUnavailableError
 
 
 URLHAUS_JSON_RECENT_URL = "https://urlhaus.abuse.ch/downloads/json_recent/"
+URLHAUS_JSON_FULL_URL = "https://urlhaus.abuse.ch/downloads/json/"
 DEFAULT_URLHAUS_CACHE_FILENAME = "urlhaus_json_recent.json"
+DEFAULT_URLHAUS_FULL_CACHE_FILENAME = "urlhaus_full.json"
 TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9._-]{1,}", re.I)
 
 Fetcher = Callable[[str, float], bytes | str]
@@ -61,12 +66,15 @@ def load_urlhaus_records(
     timeout_seconds: float = 60.0,
     fetcher: Fetcher | None = None,
     now: Clock | None = None,
+    source_url: str = URLHAUS_JSON_RECENT_URL,
+    cache_filename: str = DEFAULT_URLHAUS_CACHE_FILENAME,
 ) -> EvidenceLoadResult:
-    cache_path = Path(path) if path is not None else Path(cache_dir) / DEFAULT_URLHAUS_CACHE_FILENAME
+    cache_path = Path(path) if path is not None else Path(cache_dir) / cache_filename
     cache_hit = False
     downloaded_at: str | None = None
     if path is not None:
-        text = cache_path.read_text(encoding="utf-8")
+        raw = cache_path.read_bytes()
+        text = _decode_download_payload(raw)
         cache_hit = True
     elif cache_path.exists() and (offline or not refresh):
         text = cache_path.read_text(encoding="utf-8")
@@ -75,17 +83,23 @@ def load_urlhaus_records(
     else:
         if offline:
             raise DataUnavailableError(f"URLhaus cache is unavailable in offline mode: {cache_path}")
-        payload = _download(URLHAUS_JSON_RECENT_URL, timeout_seconds=timeout_seconds, fetcher=fetcher)
-        text = payload.decode("utf-8") if isinstance(payload, bytes) else str(payload)
+        payload = _download(source_url, timeout_seconds=timeout_seconds, fetcher=fetcher)
+        text = _decode_download_payload(payload)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(text, encoding="utf-8")
         downloaded_at = (now or _utc_now)().isoformat()
-        _write_cache_metadata(cache_path, text, downloaded_at=downloaded_at, source_url=URLHAUS_JSON_RECENT_URL)
+        _write_cache_metadata(
+            cache_path,
+            text,
+            downloaded_at=downloaded_at,
+            source_url=source_url,
+            source_name="urlhaus_json_full" if source_url == URLHAUS_JSON_FULL_URL else "urlhaus_json_recent",
+        )
 
     records, stats, malformed = parse_urlhaus_json(text)
     provenance = _provenance(
-        source_name="urlhaus_json_recent",
-        source_url=URLHAUS_JSON_RECENT_URL,
+        source_name="urlhaus_json_full" if source_url == URLHAUS_JSON_FULL_URL else "urlhaus_json_recent",
+        source_url=source_url,
         path=cache_path,
         text=text,
         parser_stats=stats,
@@ -251,12 +265,13 @@ def _normalize_urlhaus_record(row: Mapping[str, Any], index: int) -> dict[str, A
         "_id": urlhaus_id,
         "urlhaus_id": urlhaus_id,
         "id": urlhaus_id,
-        "date_added": _optional_str(row.get("date_added") or row.get("dateAdded")),
+        "date_added": _optional_str(row.get("date_added") or row.get("dateAdded") or row.get("dateadded")),
         "url": url,
         "url_status": _optional_str(row.get("url_status") or row.get("urlStatus")),
         "threat": threat,
         "tags": tags,
         "urlhaus_reference": reference,
+        "urlhaus_link": reference,
         "reporter": _optional_str(row.get("reporter")),
     }
     normalized["normalized_fields"] = {
@@ -345,6 +360,24 @@ def _download(url: str, *, timeout_seconds: float, fetcher: Fetcher | None) -> b
         raise DataUnavailableError(f"Unable to download {url}: {exc}") from exc
 
 
+def _decode_download_payload(payload: bytes | str) -> str:
+    if isinstance(payload, str):
+        return payload
+    data = payload
+    if data.startswith(b"PK\x03\x04"):
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            names = [name for name in archive.namelist() if not name.endswith("/")]
+            if not names:
+                raise DataFormatError("Downloaded URLhaus ZIP did not contain a data file")
+            data = archive.read(names[0])
+    elif data.startswith(b"\x1f\x8b"):
+        data = gzip.decompress(data)
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise DataFormatError("Downloaded URLhaus data is not UTF-8 text") from exc
+
+
 def _normalize_tags(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
@@ -404,11 +437,13 @@ def _metadata_path(cache_path: Path) -> Path:
     return cache_path.with_name(f"{cache_path.name}.metadata.json")
 
 
-def _write_cache_metadata(cache_path: Path, text: str, *, downloaded_at: str, source_url: str) -> None:
+def _write_cache_metadata(
+    cache_path: Path, text: str, *, downloaded_at: str, source_url: str, source_name: str
+) -> None:
     _metadata_path(cache_path).write_text(
         json.dumps(
             {
-                "source_name": "urlhaus_json_recent",
+                "source_name": source_name,
                 "source_url": source_url,
                 "downloaded_at": downloaded_at,
                 "content_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
@@ -443,6 +478,7 @@ def main() -> None:
     parser.add_argument("--urlhaus-file", default=None, help="Local official-format URLhaus JSON file")
     parser.add_argument("--cache-dir", required=True, help="Cache directory for URLhaus data")
     parser.add_argument("--refresh", action="store_true", help="Download official URLhaus data even if cached")
+    parser.add_argument("--full", action="store_true", help="Use the official full URLhaus JSON ZIP instead of json_recent")
     parser.add_argument("--offline", action="store_true", help="Use local/cache input only")
     parser.add_argument("--timeout-seconds", type=float, default=60.0)
     args = parser.parse_args()
@@ -453,6 +489,8 @@ def main() -> None:
             refresh=args.refresh,
             offline=args.offline,
             timeout_seconds=args.timeout_seconds,
+            source_url=URLHAUS_JSON_FULL_URL if args.full else URLHAUS_JSON_RECENT_URL,
+            cache_filename=DEFAULT_URLHAUS_FULL_CACHE_FILENAME if args.full else DEFAULT_URLHAUS_CACHE_FILENAME,
         )
     except (DataFormatError, DataUnavailableError) as exc:
         print(json.dumps({"error": type(exc).__name__, "message": str(exc)}, sort_keys=True), file=sys.stderr)
