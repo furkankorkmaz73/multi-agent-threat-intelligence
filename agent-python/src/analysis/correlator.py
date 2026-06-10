@@ -5,6 +5,12 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from config import get_settings
+from analysis.correlation_decisions import (
+    CorrelationDecision,
+    CorrelationDecisionStatus,
+    build_correlation_candidate,
+    decide_correlation_candidate,
+)
 from analysis.nlp_features import (
     THREAT_PATTERNS,
     WEAK_TERMS,
@@ -82,6 +88,30 @@ def score_dread_matches(
     return score, explanations, sorted(set(categories)), stats
 
 
+def build_correlation_decisions(
+    matches: List[Dict[str, Any]],
+    base_keywords: Optional[List[str]] = None,
+    entity_time: Optional[str] = None,
+    *,
+    source: str,
+) -> List[CorrelationDecision]:
+    base_terms = _normalize_terms(base_keywords or [])
+    base_text = " ".join(base_terms)
+    base_features = extract_nlp_features(base_text)
+    decisions: List[CorrelationDecision] = []
+    for match in matches[:8]:
+        evaluated = _evaluate_match(
+            match=match,
+            source=source,
+            base_terms=base_terms,
+            base_text=base_text,
+            base_features=base_features,
+            entity_time=entity_time,
+        )
+        decisions.append(evaluated["decision"])
+    return decisions
+
+
 def _score_matches(
     matches: List[Dict[str, Any]],
     base_keywords: Optional[List[str]],
@@ -113,36 +143,25 @@ def _score_matches(
     strongest_match_score = 0.0
 
     for match in matches[:8]:
-        candidate_text = _match_text(match, source)
-        match_terms = _normalize_terms([candidate_text, *(match.get("tags") or [])])
-        match_features = extract_nlp_features(candidate_text)
-        lexical = _hybrid_lexical_overlap(base_terms, match_terms)
-        semantic = hybrid_semantic_score(base_text, candidate_text, base_features, match_features)
-        temporal = _compute_time_proximity_score(entity_time, _match_time(match, source))
-        entity_info = entity_overlap(base_features, match_features)
-        entity_score = float(entity_info.get("score", 0.0))
-        shared_for_match = top_shared_terms(base_terms, match_terms, limit=8)
-        meaningful_shared_terms = _meaningful_shared_terms(shared_for_match)
-        shared_term_count = len(meaningful_shared_terms)
-
-        joined_terms = " ".join(match_terms)
-        exact_cve = any(cve_id in joined_terms for cve_id in {t for t in base_terms if CVE_RE.fullmatch(t)})
-        base_high_signal_terms = _normalize_threat_terms(base_terms) & _normalize_threat_terms(HIGH_IMPACT_TERMS)
-        candidate_high_signal_terms = _normalize_threat_terms(match_terms) & _normalize_threat_terms(HIGH_IMPACT_TERMS)
-        high_signal_term_hits = len(base_high_signal_terms & candidate_high_signal_terms)
-
-        accepted, reason = _accept_match(
+        evaluated = _evaluate_match(
+            match=match,
             source=source,
-            lexical=lexical,
-            semantic=semantic,
-            temporal=temporal,
-            entity_score=entity_score,
-            shared_term_count=shared_term_count,
-            exact_cve=exact_cve,
-            high_signal_term_hits=high_signal_term_hits,
-            entity_matches=entity_info.get("matches", {}),
+            base_terms=base_terms,
+            base_text=base_text,
+            base_features=base_features,
+            entity_time=entity_time,
         )
-        if not accepted:
+        lexical = evaluated["lexical"]
+        semantic = evaluated["semantic"]
+        temporal = evaluated["temporal"]
+        entity_score = evaluated["entity_score"]
+        meaningful_shared_terms = evaluated["meaningful_shared_terms"]
+        exact_cve = evaluated["exact_cve"]
+        high_signal_term_hits = evaluated["high_signal_term_hits"]
+        decision = evaluated["decision"]
+        reason = decision.primary_reason
+
+        if decision.status is not CorrelationDecisionStatus.ACCEPTED:
             rejected_count += 1
             continue
 
@@ -241,32 +260,87 @@ def _accept_match(
     high_signal_term_hits: int,
     entity_matches: Optional[Dict[str, List[str]]] = None,
 ) -> tuple[bool, str]:
-    entity_matches = entity_matches or {}
-    if exact_cve:
-        return True, "exact_cve"
+    candidate = build_correlation_candidate(
+        source=source,
+        source_identifier="source",
+        target_identifier="target",
+        relation_type=f"{source}_correlation",
+        lexical=lexical,
+        semantic=semantic,
+        temporal=temporal,
+        entity_score=entity_score,
+        shared_term_count=shared_term_count,
+        exact_cve=exact_cve,
+        high_signal_term_hits=high_signal_term_hits,
+        entity_matches=entity_matches or {},
+    )
+    decision = decide_correlation_candidate(
+        candidate,
+        min_shared_terms=SETTINGS.retrieval.min_shared_terms,
+        min_lexical_overlap=SETTINGS.retrieval.min_lexical_overlap,
+        min_semantic_support=SETTINGS.retrieval.min_semantic_support,
+    )
+    return decision.status is CorrelationDecisionStatus.ACCEPTED, decision.primary_reason
 
-    # URLhaus IOC candidates need stricter corroboration than prose-like sources.
-    # Entity overlap caused by generic vuln/impact labels such as DoS/crash or
-    # URL path artifacts must not become accepted evidence by itself.
-    if source == "urlhaus":
-        strong_entity_group = bool(
-            entity_matches.get("cve_ids")
-            or entity_matches.get("domains")
-            or entity_matches.get("threat_terms")
-        )
-        has_meaningful_support = shared_term_count >= 1 or high_signal_term_hits >= 1 or strong_entity_group
-        if entity_score >= 0.35 and has_meaningful_support and (semantic >= 0.18 or lexical >= 0.08):
-            return True, "entity_alignment"
-    elif entity_score >= 0.30 and (semantic >= 0.10 or lexical >= 0.04):
-        return True, "entity_alignment"
 
-    if high_signal_term_hits >= 2 and (lexical >= 0.06 or semantic >= 0.18):
-        return True, "high_signal_terms"
-    if shared_term_count >= SETTINGS.retrieval.min_shared_terms and lexical >= SETTINGS.retrieval.min_lexical_overlap:
-        return True, "lexical_overlap"
-    if semantic >= max(SETTINGS.retrieval.min_semantic_support, 0.30) and temporal >= 0.2 and shared_term_count >= 1:
-        return True, "semantic_temporal_support"
-    return False, "weak_support"
+def _evaluate_match(
+    *,
+    match: Dict[str, Any],
+    source: str,
+    base_terms: List[str],
+    base_text: str,
+    base_features: Any,
+    entity_time: Optional[str],
+) -> Dict[str, Any]:
+    candidate_text = _match_text(match, source)
+    match_terms = _normalize_terms([candidate_text, *(match.get("tags") or [])])
+    match_features = extract_nlp_features(candidate_text)
+    lexical = _hybrid_lexical_overlap(base_terms, match_terms)
+    semantic = hybrid_semantic_score(base_text, candidate_text, base_features, match_features)
+    temporal = _compute_time_proximity_score(entity_time, _match_time(match, source))
+    entity_info = entity_overlap(base_features, match_features)
+    entity_score = float(entity_info.get("score", 0.0))
+    shared_for_match = top_shared_terms(base_terms, match_terms, limit=8)
+    meaningful_shared_terms = _meaningful_shared_terms(shared_for_match)
+    shared_term_count = len(meaningful_shared_terms)
+
+    joined_terms = " ".join(match_terms)
+    exact_cve = any(cve_id in joined_terms for cve_id in {t for t in base_terms if CVE_RE.fullmatch(t)})
+    base_high_signal_terms = _normalize_threat_terms(base_terms) & _normalize_threat_terms(HIGH_IMPACT_TERMS)
+    candidate_high_signal_terms = _normalize_threat_terms(match_terms) & _normalize_threat_terms(HIGH_IMPACT_TERMS)
+    high_signal_term_hits = len(base_high_signal_terms & candidate_high_signal_terms)
+    candidate = build_correlation_candidate(
+        source=source,
+        source_identifier=_source_identifier(base_terms),
+        target_identifier=_target_identifier(match, source),
+        relation_type=f"{source}_correlation",
+        lexical=lexical,
+        semantic=semantic,
+        temporal=temporal,
+        entity_score=entity_score,
+        shared_term_count=shared_term_count,
+        exact_cve=exact_cve,
+        high_signal_term_hits=high_signal_term_hits,
+        entity_matches=entity_info.get("matches", {}),
+        observed_at=_match_time(match, source),
+        raw_reference=_raw_reference(match, source),
+    )
+    decision = decide_correlation_candidate(
+        candidate,
+        min_shared_terms=SETTINGS.retrieval.min_shared_terms,
+        min_lexical_overlap=SETTINGS.retrieval.min_lexical_overlap,
+        min_semantic_support=SETTINGS.retrieval.min_semantic_support,
+    )
+    return {
+        "lexical": lexical,
+        "semantic": semantic,
+        "temporal": temporal,
+        "entity_score": entity_score,
+        "meaningful_shared_terms": meaningful_shared_terms,
+        "exact_cve": exact_cve,
+        "high_signal_term_hits": high_signal_term_hits,
+        "decision": decision,
+    }
 
 
 def _accepted_match_summary(match: Dict[str, Any], source: str, *, score: float, reason: str) -> Dict[str, Any]:
@@ -318,6 +392,27 @@ def _match_time(match: Dict[str, Any], source: str) -> Optional[str]:
     if source == "urlhaus":
         return match.get("date_added")
     return match.get("created_at") or match.get("published")
+
+
+def _source_identifier(base_terms: List[str]) -> str:
+    for term in base_terms:
+        if CVE_RE.fullmatch(term):
+            return term.upper()
+    return " ".join(base_terms[:5]) or "unknown-source"
+
+
+def _target_identifier(match: Dict[str, Any], source: str) -> str:
+    if source == "urlhaus":
+        return str(match.get("url") or match.get("urlhaus_id") or "unknown-urlhaus")
+    return str(match.get("title") or match.get("_id") or match.get("url") or "unknown-dread")
+
+
+def _raw_reference(match: Dict[str, Any], source: str) -> Optional[str]:
+    if source == "urlhaus":
+        value = match.get("url") or match.get("urlhaus_reference")
+    else:
+        value = match.get("url") or match.get("_id") or match.get("title")
+    return str(value) if value not in (None, "") else None
 
 
 def _meaningful_shared_terms(shared_terms: Iterable[str]) -> List[str]:
