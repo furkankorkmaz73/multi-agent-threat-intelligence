@@ -1,6 +1,6 @@
 module github.com/furkankorkmaz309/threat-agent
 
-go 1.22
+go 1.24.0
 
 require (
 	github.com/go-rod/rod v0.116.2
