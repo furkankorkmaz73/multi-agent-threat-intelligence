@@ -4,10 +4,11 @@ from typing import Any, Dict, List, Optional
 
 from agents.llm_helper import generate_explanation
 from analysis.correlator import DREAD_CLASSIFIERS, score_dread_matches, score_urlhaus_matches
+from analysis.features.cve_temporal import evaluate_cve_temporal_features
 from analysis.graph_builder import GraphBuilder
 from analysis.keyword_extractor import extract_keywords
 from analysis.nlp_features import extract_nlp_features
-from analysis.scoring import calculate_age_days, calculate_age_penalty, calculate_recentness_bonus, extract_cvss_score, level_from_score
+from analysis.scoring import calculate_age_days, extract_cvss_score, level_from_score
 from config import get_settings
 
 
@@ -35,9 +36,6 @@ class RiskEngine:
         cvss_score, cvss_version = extract_cvss_score(data.get("metrics", {}))
         nlp_features = extract_nlp_features(description, cve_id)
         keywords = nlp_features.all_terms[:18]
-        age_days = calculate_age_days(data.get("published"))
-        recentness_bonus = calculate_recentness_bonus(age_days)
-        raw_age_penalty = calculate_age_penalty(age_days)
 
         urlhaus_matches = db.find_related_urlhaus(keywords, limit=SETTINGS.retrieval.candidate_limit) if db else []
         dread_matches = db.find_related_dread(keywords, limit=SETTINGS.retrieval.candidate_limit) if db else []
@@ -50,7 +48,15 @@ class RiskEngine:
         nlp_bonus, nlp_explanations = self._score_nlp_context(nlp_features.to_dict())
 
         active_evidence_count = len(accepted_urlhaus_matches) + len(accepted_dread_matches)
-        age_penalty = self._adjust_age_penalty(raw_age_penalty, active_evidence_count=active_evidence_count)
+        temporal_features = evaluate_cve_temporal_features(
+            data.get("published"),
+            active_evidence_count=active_evidence_count,
+            age_calculator=calculate_age_days,
+        )
+        age_days = temporal_features.age_days
+        recentness_bonus = temporal_features.recentness_bonus
+        raw_age_penalty = temporal_features.raw_age_penalty
+        age_penalty = temporal_features.age_penalty
         base_score = self._score_cvss_severity(cvss_score)
         # Calibrated scoring: CVSS remains the severity anchor. External evidence and
         # NLP context adjust priority, while missing corroboration primarily affects
@@ -473,13 +479,6 @@ class RiskEngine:
         if cvss_score <= 0:
             return self.weights.zero_cvss_fallback
         return round(min(cvss_score * self.weights.base_cvss_multiplier, 7.4), 2)
-
-    def _adjust_age_penalty(self, raw_penalty: float, *, active_evidence_count: int) -> float:
-        if raw_penalty <= 0:
-            return 0.0
-        if active_evidence_count > 0:
-            return round(min(raw_penalty * 0.35, 0.35), 2)
-        return round(min(raw_penalty, 1.0), 2)
 
     def _get_primary_description(self, data: Dict[str, Any]) -> str:
         descriptions = data.get("descriptions", []) or []
