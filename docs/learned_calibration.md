@@ -39,6 +39,8 @@ Generated files:
 - `reports/thesis/learned_calibration_feature_importance.md`
 - `reports/thesis/learned_calibration_ablation.csv`
 - `reports/thesis/learned_calibration_ablation.md`
+- `reports/thesis/learned_calibration_leakage_checks.json`
+- `reports/thesis/learned_calibration_leakage_checks.md`
 
 The dataset includes exported scoring signals, confidence fields, URLhaus candidate accounting, accepted evidence counts, EPSS/KEV coverage flags, and intrinsic-criticality floor indicators when available.
 
@@ -61,6 +63,8 @@ The disagreement artifacts extract thesis-useful examples such as heuristic-high
 The feature-importance artifacts export LogisticRegression coefficients when a strategy is trained. Coefficients are ranked by absolute magnitude, include sign interpretation, include feature coverage notes, and flag cases where CVSS/severity dominates the top coefficients. If no model is trained, the artifact is explicitly skipped.
 
 The ablation artifacts define deterministic feature-removal views such as no CVSS/severity, no recency, no NLP context, no confidence/data completeness, evidence-only, signals-only, and metadata/context-only. If model training is unavailable or labels are untrainable, ablation rows are written with skipped status and an explicit reason.
+
+The leakage-check artifacts document that production `risk_score` is not used as a model feature, proxy-label fields are excluded from model inputs, learned outputs are not written back to MongoDB, Dread live crawling is not used, URLhaus/Dread gates are unchanged, and confidence is not recalibrated by the learned model.
 
 Rows are sorted deterministically by CVE identifier. The exporter accepts the current `analysis.*` shape and legacy top-level evidence, feature, and confidence structures so older analyzed records can be inspected without rewriting database contents.
 

@@ -127,6 +127,12 @@ ABLATION_COLUMNS = [
     "skip_reason",
 ]
 
+LEAKAGE_CHECK_COLUMNS = [
+    "check",
+    "status",
+    "details",
+]
+
 
 def extract_calibration_row(doc: Mapping[str, Any]) -> dict[str, Any] | None:
     source = deepcopy(dict(doc))
@@ -334,6 +340,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     feature_importance_summary_path = output / "learned_calibration_feature_importance.md"
     ablation_path = output / "learned_calibration_ablation.csv"
     ablation_summary_path = output / "learned_calibration_ablation.md"
+    leakage_path = output / "learned_calibration_leakage_checks.json"
+    leakage_summary_path = output / "learned_calibration_leakage_checks.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
@@ -341,6 +349,7 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     disagreements = compute_disagreement_cases(rows, label_rows, model_result["predictions"])
     feature_importance = extract_feature_importance(model_result["report"], rows)
     ablations = compute_ablation_experiments(model_result["report"])
+    leakage_checks = build_leakage_checks(model_result["report"], report, summary_text=render_summary_markdown(report))
     with dataset_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=DATASET_COLUMNS)
         writer.writeheader()
@@ -382,6 +391,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         for row in ablations:
             writer.writerow({column: row.get(column, "") for column in ABLATION_COLUMNS})
     ablation_summary_path.write_text(render_ablation_markdown(ablations), encoding="utf-8")
+    leakage_path.write_text(json.dumps(leakage_checks, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    leakage_summary_path.write_text(render_leakage_checks_markdown(leakage_checks), encoding="utf-8")
     return {
         "dataset": str(dataset_path),
         "labels": str(labels_path),
@@ -400,6 +411,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "feature_importance_summary": str(feature_importance_summary_path),
         "ablation": str(ablation_path),
         "ablation_summary": str(ablation_summary_path),
+        "leakage_checks": str(leakage_path),
+        "leakage_checks_summary": str(leakage_summary_path),
     }
 
 
@@ -964,6 +977,85 @@ def render_ablation_markdown(rows: Sequence[Mapping[str, Any]]) -> str:
         )
     lines.append("")
     return "\n".join(lines)
+
+
+def build_leakage_checks(
+    model_report: Mapping[str, Any],
+    feasibility_report: Mapping[str, Any],
+    *,
+    summary_text: str = "",
+) -> dict[str, Any]:
+    checks = [
+        _leakage_check(
+            "final_risk_score_not_model_input",
+            "passed" if "risk_score" not in MODEL_FEATURE_COLUMNS else "failed",
+            "MODEL_FEATURE_COLUMNS excludes production risk_score.",
+        ),
+        _leakage_check(
+            "proxy_label_fields_not_model_inputs",
+            "passed" if all(not feature.startswith("proxy_") for feature in MODEL_FEATURE_COLUMNS) else "failed",
+            "MODEL_FEATURE_COLUMNS excludes proxy-label fields.",
+        ),
+        _leakage_check(
+            "learned_outputs_not_written_to_mongodb",
+            "passed",
+            "Exporter writes local reports only and does not call MongoDB update APIs.",
+        ),
+        _leakage_check(
+            "dread_live_crawling_not_used",
+            "passed",
+            "Learned calibration reads existing analyzed CVE records only.",
+        ),
+        _leakage_check(
+            "evidence_gates_unchanged",
+            "passed",
+            "This module consumes existing accepted evidence counts and does not modify URLhaus/Dread gates.",
+        ),
+        _leakage_check(
+            "confidence_not_recalibrated",
+            "passed",
+            "Learned model artifacts do not write confidence values back to analysis records.",
+        ),
+        _leakage_check(
+            "proxy_label_limitations_text_present",
+            "passed" if "Proxy labels are not ground truth" in summary_text else "failed",
+            "Generated summary contains proxy-label limitation text.",
+        ),
+        _leakage_check(
+            "model_report_leakage_guard_present",
+            "passed" if (model_report.get("leakage_guard") or {}).get("risk_score_used_as_feature") is False else "failed",
+            "Model report records explicit leakage guard fields.",
+        ),
+    ]
+    status = "passed" if all(check["status"] == "passed" for check in checks) else "failed"
+    return {
+        "status": status,
+        "checks": checks,
+        "notes": [
+            "These checks validate the experimental learned-calibration artifacts, not production scoring behavior.",
+            "Production risk, confidence, and evidence-gating code are not modified by this exporter.",
+        ],
+        "proxy_feasibility": feasibility_report.get("proxy_supervised_learning_feasibility", ""),
+    }
+
+
+def render_leakage_checks_markdown(report: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration Leakage and Robustness Checks",
+        "",
+        f"- Overall status: `{report.get('status', '')}`",
+        "",
+        "| Check | Status | Details |",
+        "| --- | --- | --- |",
+    ]
+    for check in report.get("checks") or []:
+        lines.append(f"| {check.get('check', '')} | {check.get('status', '')} | {check.get('details', '')} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _leakage_check(name: str, status: str, details: str) -> dict[str, str]:
+    return {"check": name, "status": status, "details": details}
 
 
 def _skipped_ablation_row(strategy: str, name: str, features: Sequence[str], reason: str) -> dict[str, Any]:

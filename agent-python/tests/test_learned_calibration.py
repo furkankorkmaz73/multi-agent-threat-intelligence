@@ -18,6 +18,7 @@ from evaluation.learned_calibration import (
     ablation_plan,
     build_proxy_label_row,
     build_proxy_label_rows,
+    build_leakage_checks,
     build_feasibility_report,
     compute_baseline_metrics,
     compute_disagreement_cases,
@@ -231,6 +232,8 @@ def test_export_writes_three_output_files(tmp_path):
     importance_summary = tmp_path / "learned_calibration_feature_importance.md"
     ablation = tmp_path / "learned_calibration_ablation.csv"
     ablation_summary = tmp_path / "learned_calibration_ablation.md"
+    leakage = tmp_path / "learned_calibration_leakage_checks.json"
+    leakage_summary = tmp_path / "learned_calibration_leakage_checks.md"
     assert result["paths"] == {
         "dataset": str(dataset),
         "labels": str(labels),
@@ -249,6 +252,8 @@ def test_export_writes_three_output_files(tmp_path):
         "feature_importance_summary": str(importance_summary),
         "ablation": str(ablation),
         "ablation_summary": str(ablation_summary),
+        "leakage_checks": str(leakage),
+        "leakage_checks_summary": str(leakage_summary),
     }
     assert dataset.exists()
     assert labels.exists()
@@ -267,6 +272,8 @@ def test_export_writes_three_output_files(tmp_path):
     assert importance_summary.exists()
     assert ablation.exists()
     assert ablation_summary.exists()
+    assert leakage.exists()
+    assert leakage_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
     assert rows[0]["cve_id"] == "CVE-2026-1234"
     label_rows = list(csv.DictReader(labels.open(encoding="utf-8")))
@@ -292,6 +299,8 @@ def test_export_writes_three_output_files(tmp_path):
         assert list(importance_rows[0].keys()) == FEATURE_IMPORTANCE_COLUMNS
     ablation_rows = list(csv.DictReader(ablation.open(encoding="utf-8")))
     assert list(ablation_rows[0].keys()) == ABLATION_COLUMNS
+    leakage_payload = json.loads(leakage.read_text(encoding="utf-8"))
+    assert leakage_payload["status"] == "passed"
     text = summary.read_text(encoding="utf-8")
     assert "Proxy labels are not ground truth" in text
     assert "production `risk_score` behavior is unchanged" in text
@@ -750,3 +759,36 @@ def test_ablation_experiments_emit_metric_table_shape_for_completed_report():
     assert rows[0]["status"] == "baseline_only"
     assert rows[0]["balanced_accuracy"] == 0.75
     assert set(rows[0].keys()) == set(ABLATION_COLUMNS)
+
+
+def test_leakage_checks_pass_for_default_configuration():
+    report = {
+        "leakage_guard": {
+            "risk_score_used_as_feature": False,
+            "proxy_label_fields_used_as_features": [],
+        }
+    }
+    feasibility = {"proxy_supervised_learning_feasibility": "limited"}
+
+    checks = build_leakage_checks(
+        report,
+        feasibility,
+        summary_text="Proxy labels are not ground truth, and production risk_score behavior is unchanged.",
+    )
+
+    assert checks["status"] == "passed"
+    names = {check["check"] for check in checks["checks"]}
+    assert "final_risk_score_not_model_input" in names
+    assert "dread_live_crawling_not_used" in names
+
+
+def test_leakage_checks_fail_when_limitation_text_missing():
+    checks = build_leakage_checks(
+        {"leakage_guard": {"risk_score_used_as_feature": False}},
+        {},
+        summary_text="",
+    )
+
+    assert checks["status"] == "failed"
+    failed = [check for check in checks["checks"] if check["status"] == "failed"]
+    assert failed[0]["check"] == "proxy_label_limitations_text_present"
