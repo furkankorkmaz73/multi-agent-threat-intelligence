@@ -41,6 +41,8 @@ Generated files:
 - `reports/thesis/learned_calibration_ablation.md`
 - `reports/thesis/learned_calibration_leakage_checks.json`
 - `reports/thesis/learned_calibration_leakage_checks.md`
+- `reports/thesis/learned_calibration_thesis_section.md`
+- `reports/thesis/learned_calibration_limitations.md`
 
 The dataset includes exported scoring signals, confidence fields, URLhaus candidate accounting, accepted evidence counts, EPSS/KEV coverage flags, and intrinsic-criticality floor indicators when available.
 
@@ -65,6 +67,8 @@ The feature-importance artifacts export LogisticRegression coefficients when a s
 The ablation artifacts define deterministic feature-removal views such as no CVSS/severity, no recency, no NLP context, no confidence/data completeness, evidence-only, signals-only, and metadata/context-only. If model training is unavailable or labels are untrainable, ablation rows are written with skipped status and an explicit reason.
 
 The leakage-check artifacts document that production `risk_score` is not used as a model feature, proxy-label fields are excluded from model inputs, learned outputs are not written back to MongoDB, Dread live crawling is not used, URLhaus/Dread gates are unchanged, and confidence is not recalibrated by the learned model.
+
+The thesis-section and limitations artifacts provide concise academic prose that can be adapted into the thesis. They emphasize that proxy labels are not ground truth, the experiment is diagnostic, and the production heuristic risk score remains unchanged and explainable.
 
 Rows are sorted deterministically by CVE identifier. The exporter accepts the current `analysis.*` shape and legacy top-level evidence, feature, and confidence structures so older analyzed records can be inspected without rewriting database contents.
 

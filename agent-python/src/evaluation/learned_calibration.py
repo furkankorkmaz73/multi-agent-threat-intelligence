@@ -342,6 +342,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     ablation_summary_path = output / "learned_calibration_ablation.md"
     leakage_path = output / "learned_calibration_leakage_checks.json"
     leakage_summary_path = output / "learned_calibration_leakage_checks.md"
+    thesis_section_path = output / "learned_calibration_thesis_section.md"
+    limitations_path = output / "learned_calibration_limitations.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
@@ -393,6 +395,11 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     ablation_summary_path.write_text(render_ablation_markdown(ablations), encoding="utf-8")
     leakage_path.write_text(json.dumps(leakage_checks, indent=2, sort_keys=True, default=str), encoding="utf-8")
     leakage_summary_path.write_text(render_leakage_checks_markdown(leakage_checks), encoding="utf-8")
+    thesis_section_path.write_text(
+        render_learned_calibration_thesis_section(report, baseline_metrics, model_result["report"], comparison, disagreements, ablations),
+        encoding="utf-8",
+    )
+    limitations_path.write_text(render_learned_calibration_limitations(report, model_result["report"], leakage_checks), encoding="utf-8")
     return {
         "dataset": str(dataset_path),
         "labels": str(labels_path),
@@ -413,6 +420,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "ablation_summary": str(ablation_summary_path),
         "leakage_checks": str(leakage_path),
         "leakage_checks_summary": str(leakage_summary_path),
+        "thesis_section": str(thesis_section_path),
+        "limitations": str(limitations_path),
     }
 
 
@@ -1052,6 +1061,113 @@ def render_leakage_checks_markdown(report: Mapping[str, Any]) -> str:
         lines.append(f"| {check.get('check', '')} | {check.get('status', '')} | {check.get('details', '')} |")
     lines.append("")
     return "\n".join(lines)
+
+
+def render_learned_calibration_thesis_section(
+    feasibility_report: Mapping[str, Any],
+    baseline_metrics: Mapping[str, Any],
+    model_report: Mapping[str, Any],
+    comparison: Mapping[str, Any],
+    disagreements: Sequence[Mapping[str, Any]],
+    ablations: Sequence[Mapping[str, Any]],
+) -> str:
+    lines = [
+        "# Learned Calibration Experiment",
+        "",
+        "This section summarizes an experimental learned-calibration layer built around the existing deterministic risk engine.",
+        "The purpose is diagnostic: to examine whether proxy-supervised models could reproduce or challenge the heuristic ranking without replacing production `risk_score`.",
+        "",
+        "## Proxy Labels",
+        "",
+        "Proxy labels are constructed from intrinsic severity/context, EPSS/KEV signals when available, and accepted external evidence counts.",
+        "They are not ground truth exploitation outcomes and do not support real-world supervised exploitation-prediction claims.",
+        f"The exported dataset contains `{feasibility_report.get('analyzed_records_exported', 0)}` analyzed CVE rows.",
+        "",
+        "## Feature Set",
+        "",
+        "The experimental feature set includes CVSS, normalized scoring signals, accepted evidence counts, confidence/data-completeness fields, age, and the intrinsic-criticality floor flag.",
+        "Production `risk_score` and proxy-label fields are excluded from model inputs.",
+        "",
+        "## Baseline Comparison",
+        "",
+        "The baseline artifacts compare the existing heuristic `risk_score` ranking against each proxy strategy.",
+        f"Baseline strategy statuses: `{_strategy_status_summary(baseline_metrics)}`.",
+        "",
+        "## Model Metrics",
+        "",
+        f"Model artifact status: `{model_report.get('status', '')}`.",
+        "When scikit-learn or usable class diversity is unavailable, model metrics are explicitly skipped rather than fabricated.",
+        "",
+        "## Ablation Interpretation",
+        "",
+        f"Ablation rows exported: `{len(ablations)}`.",
+        "Ablations are designed to test CVSS/severity dominance, recency, NLP context, confidence/data completeness, sparse evidence, normalized signals, and metadata/context views.",
+        "",
+        "## Disagreement Analysis",
+        "",
+        f"Disagreement rows exported: `{len(disagreements)}`.",
+        "These rows are intended as thesis examples when learned predictions are available; otherwise the artifact remains empty with an explicit explanation.",
+        "",
+        "## Production Risk Score",
+        "",
+        "The production risk score remains heuristic, deterministic, and explainable.",
+        "The learned-calibration artifacts do not write predictions back into MongoDB, do not recalibrate confidence, and do not change URLhaus/Dread evidence gates.",
+        "",
+        "## Interpretation",
+        "",
+        "The current experiment supports discussion of feasibility, proxy-label limitations, feature leakage controls, and evidence sparsity.",
+        "It does not establish statistical significance, production readiness, or real-world exploitation-prediction performance.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def render_learned_calibration_limitations(
+    feasibility_report: Mapping[str, Any],
+    model_report: Mapping[str, Any],
+    leakage_checks: Mapping[str, Any],
+) -> str:
+    lines = [
+        "# Learned Calibration Limitations",
+        "",
+        "## Scope",
+        "",
+        "Learned calibration is an experimental thesis artifact. It does not replace the deterministic scoring engine.",
+        "",
+        "## Proxy Labels Are Not Ground Truth",
+        "",
+        "The labels are deterministic proxies derived from available signals. They are not verified exploitation labels and should not be used to claim real-world predictive validity.",
+        "",
+        "## Evidence Coverage",
+        "",
+        f"EPSS available count: `{feasibility_report.get('epss_availability_count', 0)}`.",
+        f"KEV known count: `{feasibility_report.get('kev_known_count', 0)}`.",
+        f"Accepted external evidence count: `{feasibility_report.get('accepted_external_evidence_count', 0)}`.",
+        "Sparse EPSS/KEV or accepted external evidence limits what a learned model can responsibly learn.",
+        "",
+        "## Model Availability",
+        "",
+        f"Model status: `{model_report.get('status', '')}`.",
+        "If scikit-learn is unavailable or labels lack class diversity, training is skipped with explicit status fields.",
+        "",
+        "## Leakage Controls",
+        "",
+        f"Leakage check status: `{leakage_checks.get('status', '')}`.",
+        "The experiment excludes production `risk_score` and proxy-label fields from model inputs and writes only local artifacts.",
+        "",
+        "## Production Use",
+        "",
+        "The learned-calibration outputs are diagnostic and thesis-facing. Production scoring remains heuristic, auditable, and evidence-gated.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _strategy_status_summary(metrics: Mapping[str, Any]) -> str:
+    return ", ".join(
+        f"{strategy}={payload.get('status', '')}"
+        for strategy, payload in (metrics.get("strategies") or {}).items()
+    )
 
 
 def _leakage_check(name: str, status: str, details: str) -> dict[str, str]:

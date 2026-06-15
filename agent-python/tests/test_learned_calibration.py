@@ -234,6 +234,8 @@ def test_export_writes_three_output_files(tmp_path):
     ablation_summary = tmp_path / "learned_calibration_ablation.md"
     leakage = tmp_path / "learned_calibration_leakage_checks.json"
     leakage_summary = tmp_path / "learned_calibration_leakage_checks.md"
+    thesis_section = tmp_path / "learned_calibration_thesis_section.md"
+    limitations = tmp_path / "learned_calibration_limitations.md"
     assert result["paths"] == {
         "dataset": str(dataset),
         "labels": str(labels),
@@ -254,6 +256,8 @@ def test_export_writes_three_output_files(tmp_path):
         "ablation_summary": str(ablation_summary),
         "leakage_checks": str(leakage),
         "leakage_checks_summary": str(leakage_summary),
+        "thesis_section": str(thesis_section),
+        "limitations": str(limitations),
     }
     assert dataset.exists()
     assert labels.exists()
@@ -274,6 +278,8 @@ def test_export_writes_three_output_files(tmp_path):
     assert ablation_summary.exists()
     assert leakage.exists()
     assert leakage_summary.exists()
+    assert thesis_section.exists()
+    assert limitations.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
     assert rows[0]["cve_id"] == "CVE-2026-1234"
     label_rows = list(csv.DictReader(labels.open(encoding="utf-8")))
@@ -301,6 +307,11 @@ def test_export_writes_three_output_files(tmp_path):
     assert list(ablation_rows[0].keys()) == ABLATION_COLUMNS
     leakage_payload = json.loads(leakage.read_text(encoding="utf-8"))
     assert leakage_payload["status"] == "passed"
+    thesis_text = thesis_section.read_text(encoding="utf-8")
+    limitations_text = limitations.read_text(encoding="utf-8")
+    assert "not ground truth exploitation outcomes" in thesis_text
+    assert "production risk score remains heuristic" in thesis_text
+    assert "does not replace the deterministic scoring engine" in limitations_text
     text = summary.read_text(encoding="utf-8")
     assert "Proxy labels are not ground truth" in text
     assert "production `risk_score` behavior is unchanged" in text
