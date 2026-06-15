@@ -212,6 +212,12 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
     assert "dread_only_evidence" in correlation_csv
     assert "corroborated_dread_evidence" in correlation_csv
     assert "confidence_cap_reason" in correlation_csv
+    assert "evidence_gate_passed" in correlation_csv
+    assert "accepted_evidence_count" in correlation_csv
+    assert "false_positive_control" in correlation_csv
+    assert "UH-FP-KEYWORD" in correlation_csv
+    assert "UH-FP-STALE" in correlation_csv
+    assert "UH-FP-PRODUCT" in correlation_csv
     cases = json.loads((tmp_path / "out" / "case_studies.json").read_text(encoding="utf-8"))["cases"]
     case_names = {case["case"] for case in cases}
     assert {
@@ -221,6 +227,10 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
         "dread_only_manual_review",
         "dread_corroborated_by_urlhaus_or_kev",
         "weak_dread_rejected",
+        "keyword_only_false_positive_rejected",
+        "stale_evidence_rejected_or_capped",
+        "unrelated_product_overlap_rejected",
+        "manual_review_not_risk_boost",
         "asset_applicability_difference",
         "patched_asset_reduction",
         "compensating_control_reduction",
@@ -289,6 +299,10 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
         "dread_only_manual_review",
         "dread_corroborated_by_urlhaus_or_kev",
         "weak_dread_rejected",
+        "keyword_only_false_positive_rejected",
+        "stale_evidence_rejected_or_capped",
+        "unrelated_product_overlap_rejected",
+        "manual_review_not_risk_boost",
         "asset_applicability_difference",
     ):
         assert case in results_md
@@ -347,6 +361,10 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
         "dread_only_manual_review",
         "dread_corroborated_by_urlhaus_or_kev",
         "weak_dread_rejected",
+        "keyword_only_false_positive_rejected",
+        "stale_evidence_rejected_or_capped",
+        "unrelated_product_overlap_rejected",
+        "manual_review_not_risk_boost",
         "asset_applicability_difference",
     ):
         assert case in thesis_md

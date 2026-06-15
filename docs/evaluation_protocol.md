@@ -6,6 +6,8 @@ The built-in thesis fixture is a controlled evaluation set, not a live threat-in
 
 The fixture includes bounded Dread cases for behavioral validation: Dread-only manual review, Dread corroborated by stronger URLhaus/KEV evidence, and weak Dread rejection. These cases do not require live Dread access and do not treat Dread as ground truth.
 
+The fixture also includes false-positive stress cases: keyword-only URLhaus evidence, stale external evidence, unrelated product/vendor overlap, and IOC mentions without vulnerability context. These validate that rejected or manual-review evidence remains diagnostic and is excluded from accepted-evidence counts, correlation signal, graph/risk boosting, and high-confidence treatment.
+
 ## Operational Risk Evaluation
 
 Generic CVE risk is evaluated separately from asset-aware operational risk. The deterministic thesis scenario applies vulnerable-product metadata to a small asset inventory so the same CVE can be compared across applicable, non-applicable, patched, exposed, and compensating-control contexts.
@@ -75,3 +77,5 @@ agent-python/reports/thesis/
 ```
 
 The artifact bundle is intended for thesis tables and appendix material. It is not a claim of statistical significance, field prevalence, or production asset-inventory accuracy. Real-world operational evaluation requires high-quality asset inventory, product/version metadata, patch-state data, exposure classification, and validated compensating-control evidence.
+
+False-positive stress cases are deterministic guardrails, not a complete adversarial evaluation of all possible noisy intelligence records.

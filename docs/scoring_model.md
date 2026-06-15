@@ -82,4 +82,6 @@ Operational-risk exports preserve both values: `source_risk_score` / `generic_cv
 
 Confidence is component-level and auditable. It includes metadata quality, CVSS availability/version, description quality, entity extraction, accepted external evidence, source reliability, evidence freshness, correlation quality, and penalties for weak descriptions, missing CVSS, stale metadata, rejected correlations, and unavailable external signals.
 
+Only accepted correlation decisions feed the `correlation_signal`. Rejected and manual-review candidates remain visible in diagnostic exports, but they do not increase accepted-evidence counts, correlation signal, graph context, risk, or confidence as accepted evidence.
+
 Dread-only evidence is capped unless corroborated by stronger evidence because dark-web posts are difficult to reproduce, verify, and attribute. The confidence breakdown exposes `dread_evidence_present`, `dread_only_evidence`, `corroborated_dread_evidence`, `evidence_reliability`, and `confidence_cap_reason` so Dread support remains auditable. A Dread-only manual-review or rejected candidate does not increase accepted-evidence counts, risk, graph context, or confidence.

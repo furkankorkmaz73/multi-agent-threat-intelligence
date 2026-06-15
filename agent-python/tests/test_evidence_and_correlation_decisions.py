@@ -24,6 +24,10 @@ def test_exact_cve_reference_is_accepted_with_provenance_serialization():
     serialized = decision.to_dict()
     assert decision.status is CorrelationDecisionStatus.ACCEPTED
     assert decision.primary_reason == "exact_cve"
+    assert decision.evidence_gate_passed is True
+    assert decision.evidence_gate_reason == "exact_cve"
+    assert decision.accepted_evidence_count == 1
+    assert decision.rejected_evidence_count == 0
     assert serialized["status"] == "accepted"
     assert serialized["source_identifier"] == "CVE-2026-4242"
     assert serialized["target_identifier"] == "https://malware.example/CVE-2026-4242/payload.exe"
@@ -51,6 +55,9 @@ def test_dread_high_signal_overlap_routes_to_manual_review_without_exact_cve():
     assert decisions[0].status is CorrelationDecisionStatus.MANUAL_REVIEW
     assert decisions[0].primary_reason == "ambiguous_support"
     assert decisions[0].final_confidence <= 0.35
+    assert decisions[0].evidence_gate_passed is False
+    assert decisions[0].manual_review_evidence_count == 1
+    assert decisions[0].accepted_evidence_count == 0
     assert decisions[0].dread_only_evidence is True
     assert decisions[0].confidence_cap_reason == "dread_manual_review_cap"
 
@@ -103,6 +110,9 @@ def test_weak_dread_candidate_does_not_increase_score_or_confidence():
 
     assert decisions[0].status is CorrelationDecisionStatus.REJECTED
     assert decisions[0].final_confidence <= 0.15
+    assert decisions[0].evidence_gate_passed is False
+    assert decisions[0].rejection_reason == "weak_support"
+    assert decisions[0].false_positive_control is True
     assert score == 0.0
     assert explanations == []
     assert stats["accepted_match_count"] == 0
@@ -127,6 +137,94 @@ def test_generic_keyword_only_urlhaus_candidate_is_rejected():
 
     assert decisions[0].status is CorrelationDecisionStatus.REJECTED
     assert decisions[0].primary_reason == "weak_support"
+    assert decisions[0].evidence_gate_passed is False
+    assert decisions[0].accepted_evidence_count == 0
+
+
+def test_keyword_only_urlhaus_high_signal_candidate_is_rejected():
+    matches = [
+        {
+            "url": "https://noise.example/exploit-rce-loader",
+            "threat": "malware_download",
+            "tags": ["exploit", "rce", "loader"],
+            "url_status": "offline",
+            "date_added": "2026-05-02T00:00:00+00:00",
+        }
+    ]
+
+    decisions = build_correlation_decisions(
+        matches,
+        base_keywords=["cve-2026-4242", "remote code execution", "exploit", "rce"],
+        entity_time="2026-05-01T00:00:00+00:00",
+        source="urlhaus",
+    )
+    score, explanations, stats = score_urlhaus_matches(
+        matches,
+        base_keywords=["cve-2026-4242", "remote code execution", "exploit", "rce"],
+        entity_time="2026-05-01T00:00:00+00:00",
+    )
+
+    assert decisions[0].status is CorrelationDecisionStatus.REJECTED
+    assert decisions[0].evidence_gate_passed is False
+    assert decisions[0].false_positive_control is True
+    assert score == 0.0
+    assert explanations == []
+    assert stats["accepted_match_count"] == 0
+    assert stats["accepted_evidence_count"] == 0
+
+
+def test_stale_urlhaus_high_signal_candidate_is_rejected_without_temporal_support():
+    matches = [
+        {
+            "url": "https://old.example/vpn-rce-loader",
+            "threat": "malware_download",
+            "tags": ["exploit", "rce", "vpn", "loader"],
+            "url_status": "offline",
+            "date_added": "2018-01-01T00:00:00+00:00",
+        }
+    ]
+
+    decisions = build_correlation_decisions(
+        matches,
+        base_keywords=["cve-2026-4242", "example vpn", "rce", "exploit", "loader"],
+        entity_time="2026-05-01T00:00:00+00:00",
+        source="urlhaus",
+    )
+    score, explanations, stats = score_urlhaus_matches(
+        matches,
+        base_keywords=["cve-2026-4242", "example vpn", "rce", "exploit", "loader"],
+        entity_time="2026-05-01T00:00:00+00:00",
+    )
+
+    assert decisions[0].status is not CorrelationDecisionStatus.ACCEPTED
+    assert decisions[0].final_confidence <= 0.45
+    assert score == 0.0
+    assert explanations == []
+    assert stats["accepted_evidence_count"] == 0
+
+
+def test_unrelated_product_overlap_urlhaus_candidate_is_rejected():
+    matches = [
+        {
+            "url": "https://updates.example/example-vpn-admin-theme",
+            "threat": "malware_download",
+            "tags": ["example", "vpn", "admin"],
+            "url_status": "offline",
+            "date_added": "2026-05-02T00:00:00+00:00",
+        }
+    ]
+
+    decisions = build_correlation_decisions(
+        matches,
+        base_keywords=["cve-2026-4242", "example vpn gateway authentication bypass"],
+        entity_time="2026-05-01T00:00:00+00:00",
+        source="urlhaus",
+    )
+
+    assert decisions[0].status is CorrelationDecisionStatus.REJECTED
+    assert decisions[0].rejected_evidence_count == 1
+    assert decisions[0].accepted_evidence_count == 0
+    assert decisions[0].false_positive_control is True
 
 
 def test_generic_keyword_only_dread_candidate_is_not_accepted():
@@ -175,6 +273,8 @@ def test_weak_entity_alignment_routes_to_manual_review_without_accepted_counts()
     assert explanations == []
     assert stats["accepted_match_count"] == 0
     assert stats["rejected_match_count"] == 1
+    assert stats["accepted_evidence_count"] == 0
+    assert stats["manual_review_evidence_count"] in {0, 1}
 
 
 def test_conflicting_evidence_does_not_count_as_accepted():
@@ -262,6 +362,7 @@ def test_correlation_decision_rows_include_component_scores():
     assert row["primary_reason"] == "exact_cve"
     assert {"source_identifier", "target_identifier", "lexical_score", "semantic_score", "final_confidence"} <= set(row)
     assert {"evidence_source", "evidence_reliability", "confidence_cap_reason"} <= set(row)
+    assert {"evidence_gate_passed", "evidence_gate_reason", "accepted_evidence_count", "false_positive_control"} <= set(row)
 
 
 def test_dread_is_default_off_when_environment_is_unset(monkeypatch):

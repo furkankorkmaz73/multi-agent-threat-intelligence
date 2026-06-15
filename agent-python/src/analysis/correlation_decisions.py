@@ -64,6 +64,13 @@ class CorrelationDecision:
     corroborated_dread_evidence: bool = False
     manual_review_reason: str = ""
     confidence_cap_reason: str = ""
+    evidence_gate_passed: bool = False
+    evidence_gate_reason: str = ""
+    rejection_reason: str = ""
+    accepted_evidence_count: int = 0
+    rejected_evidence_count: int = 0
+    manual_review_evidence_count: int = 0
+    false_positive_control: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "final_confidence", max(0.0, min(float(self.final_confidence), 1.0)))
@@ -89,6 +96,13 @@ class CorrelationDecision:
             "corroborated_dread_evidence": bool(self.corroborated_dread_evidence),
             "manual_review_reason": self.manual_review_reason,
             "confidence_cap_reason": self.confidence_cap_reason,
+            "evidence_gate_passed": bool(self.evidence_gate_passed),
+            "evidence_gate_reason": self.evidence_gate_reason,
+            "rejection_reason": self.rejection_reason,
+            "accepted_evidence_count": int(self.accepted_evidence_count),
+            "rejected_evidence_count": int(self.rejected_evidence_count),
+            "manual_review_evidence_count": int(self.manual_review_evidence_count),
+            "false_positive_control": bool(self.false_positive_control),
         }
 
 
@@ -139,6 +153,13 @@ def correlation_decision_row(candidate: CorrelationCandidate, decision: Correlat
         "corroborated_dread_evidence": bool(decision.corroborated_dread_evidence),
         "manual_review_reason": decision.manual_review_reason,
         "confidence_cap_reason": decision.confidence_cap_reason,
+        "evidence_gate_passed": bool(decision.evidence_gate_passed),
+        "evidence_gate_reason": decision.evidence_gate_reason,
+        "rejection_reason": decision.rejection_reason,
+        "accepted_evidence_count": int(decision.accepted_evidence_count),
+        "rejected_evidence_count": int(decision.rejected_evidence_count),
+        "manual_review_evidence_count": int(decision.manual_review_evidence_count),
+        "false_positive_control": bool(decision.false_positive_control),
     }
 
 
@@ -256,14 +277,20 @@ def _accepted_reason(
         return "exact_cve"
 
     if source == "urlhaus":
-        strong_entity_group = bool(
-            entity_matches.get("cve_ids")
-            or entity_matches.get("domains")
-            or entity_matches.get("threat_terms")
-        )
+        strong_entity_group = _has_strong_entity_group(entity_matches)
         has_meaningful_support = shared_term_count >= 1 or high_signal_term_hits >= 1 or strong_entity_group
-        if entity_score >= 0.35 and has_meaningful_support and (semantic >= 0.18 or lexical >= 0.08):
+        if entity_score >= 0.35 and strong_entity_group and has_meaningful_support and temporal >= 0.15 and (semantic >= 0.18 or lexical >= 0.08):
             return "entity_alignment"
+        if (
+            high_signal_term_hits >= 2
+            and shared_term_count >= 2
+            and temporal >= 0.15
+            and (lexical >= 0.08 or semantic >= 0.18)
+        ):
+            return "high_signal_terms"
+        if semantic >= max(min_semantic_support, 0.30) and temporal >= 0.2 and shared_term_count >= 2:
+            return "semantic_temporal_support"
+        return ""
     elif source == "dread":
         # Non-exact Dread mentions are diagnostic unless corroborated elsewhere.
         # The standalone candidate cannot prove that corroboration, so it is
@@ -288,8 +315,15 @@ def _accepted_reason(
 def _requires_manual_review(candidate: CorrelationCandidate) -> bool:
     if candidate.exact_cve:
         return False
-    if candidate.source == "urlhaus" and candidate.entity_score >= 0.30 and candidate.semantic_score >= 0.12:
-        return True
+    if candidate.source == "urlhaus":
+        strong_entity_group = _has_strong_entity_group(candidate.entity_matches)
+        if candidate.high_signal_term_hits >= 2 and not strong_entity_group:
+            return False
+        if candidate.temporal_score < 0.10 and not strong_entity_group:
+            return False
+        if candidate.entity_score >= 0.30 and candidate.semantic_score >= 0.12:
+            return True
+        return False
     if candidate.source == "dread" and candidate.high_signal_term_hits >= 1 and max(candidate.lexical_score, candidate.semantic_score) >= 0.12:
         return True
     if candidate.source == "dread" and candidate.entity_score >= 0.35 and candidate.shared_term_count >= 1:
@@ -299,6 +333,14 @@ def _requires_manual_review(candidate: CorrelationCandidate) -> bool:
     if candidate.shared_term_count > 0 and candidate.semantic_score >= 0.25:
         return True
     return False
+
+
+def _has_strong_entity_group(entity_matches: Mapping[str, List[str]]) -> bool:
+    return bool(
+        entity_matches.get("cve_ids")
+        or entity_matches.get("domains")
+        or entity_matches.get("products")
+    )
 
 
 def _decision(candidate: CorrelationCandidate, status: CorrelationDecisionStatus, reason: str) -> CorrelationDecision:
@@ -324,6 +366,10 @@ def _decision(candidate: CorrelationCandidate, status: CorrelationDecisionStatus
         confidence_cap_reason = "manual_review_confidence_cap"
     elif status is CorrelationDecisionStatus.REJECTED:
         final_confidence = min(raw_confidence, 0.20)
+    gate_passed = status is CorrelationDecisionStatus.ACCEPTED
+    accepted_count = 1 if gate_passed else 0
+    manual_count = 1 if status is CorrelationDecisionStatus.MANUAL_REVIEW else 0
+    rejected_count = 1 if status is CorrelationDecisionStatus.REJECTED else 0
     return CorrelationDecision(
         status=status,
         source_identifier=candidate.source_identifier,
@@ -344,6 +390,13 @@ def _decision(candidate: CorrelationCandidate, status: CorrelationDecisionStatus
         corroborated_dread_evidence=is_dread and status is CorrelationDecisionStatus.ACCEPTED and candidate.exact_cve,
         manual_review_reason=manual_review_reason,
         confidence_cap_reason=confidence_cap_reason,
+        evidence_gate_passed=gate_passed,
+        evidence_gate_reason=reason if gate_passed else "",
+        rejection_reason=reason if status is CorrelationDecisionStatus.REJECTED else "",
+        accepted_evidence_count=accepted_count,
+        rejected_evidence_count=rejected_count,
+        manual_review_evidence_count=manual_count,
+        false_positive_control=not gate_passed,
     )
 
 

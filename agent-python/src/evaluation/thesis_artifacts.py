@@ -832,6 +832,10 @@ def _case_study_highlights(cases: Sequence[Mapping[str, Any]]) -> str:
         "dread_only_manual_review",
         "dread_corroborated_by_urlhaus_or_kev",
         "weak_dread_rejected",
+        "keyword_only_false_positive_rejected",
+        "stale_evidence_rejected_or_capped",
+        "unrelated_product_overlap_rejected",
+        "manual_review_not_risk_boost",
         "asset_applicability_difference",
         "patched_asset_reduction",
         "compensating_control_reduction",
@@ -860,6 +864,14 @@ def _case_note(case: Mapping[str, Any]) -> str:
         return f"Corroborated Dread support is bounded by {case.get('confidence_cap_reason', '')}."
     if case.get("case") == "weak_dread_rejected":
         return f"Weak Dread mention rejected ({case.get('rejected_dread_decisions', 0)} decision)."
+    if case.get("case") == "keyword_only_false_positive_rejected":
+        return f"Keyword-only candidate decision: {case.get('decision')} ({case.get('rejection_reason', '')})."
+    if case.get("case") == "stale_evidence_rejected_or_capped":
+        return f"Stale evidence decision: {case.get('decision')} with confidence {case.get('final_confidence')}."
+    if case.get("case") == "unrelated_product_overlap_rejected":
+        return f"Unrelated product-overlap candidate decision: {case.get('decision')}."
+    if case.get("case") == "manual_review_not_risk_boost":
+        return f"Manual-review decisions {case.get('manual_review_decisions', 0)}; accepted evidence count {case.get('accepted_evidence_count', 0)}."
     if case.get("case") == "asset_applicability_difference":
         return f"Applicable asset score {case.get('applicable_asset_score')}; non-applicable asset score {case.get('non_applicable_asset_score')}."
     if case.get("case") == "patched_asset_reduction":
@@ -1028,6 +1040,13 @@ def _write_correlation_decisions(decisions: Sequence[Mapping[str, Any]], path: P
                 "corroborated_dread_evidence": decision.get("corroborated_dread_evidence", ""),
                 "manual_review_reason": decision.get("manual_review_reason", ""),
                 "confidence_cap_reason": decision.get("confidence_cap_reason", ""),
+                "evidence_gate_passed": decision.get("evidence_gate_passed", ""),
+                "evidence_gate_reason": decision.get("evidence_gate_reason", ""),
+                "rejection_reason": decision.get("rejection_reason", ""),
+                "accepted_evidence_count": decision.get("accepted_evidence_count", ""),
+                "rejected_evidence_count": decision.get("rejected_evidence_count", ""),
+                "manual_review_evidence_count": decision.get("manual_review_evidence_count", ""),
+                "false_positive_control": decision.get("false_positive_control", ""),
             }
         )
 
@@ -1055,6 +1074,13 @@ def _write_correlation_decisions(decisions: Sequence[Mapping[str, Any]], path: P
             "corroborated_dread_evidence",
             "manual_review_reason",
             "confidence_cap_reason",
+            "evidence_gate_passed",
+            "evidence_gate_reason",
+            "rejection_reason",
+            "accepted_evidence_count",
+            "rejected_evidence_count",
+            "manual_review_evidence_count",
+            "false_positive_control",
         ],
     )
 

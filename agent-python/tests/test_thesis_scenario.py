@@ -47,9 +47,15 @@ def test_correlation_decision_status_coverage():
     assert any(decision["target_identifier"] == "DR-9001" and decision["status"] == "accepted" for decision in decisions)
     assert any(decision["target_identifier"] == "DR-9017" and decision["status"] == "manual_review" for decision in decisions)
     assert any(decision["target_identifier"] == "DR-9002" and decision["status"] == "rejected" for decision in decisions)
+    assert any(decision["target_identifier"] == "UH-FP-KEYWORD" and decision["status"] == "rejected" for decision in decisions)
+    assert any(decision["target_identifier"] == "UH-FP-STALE" and decision["status"] == "rejected" for decision in decisions)
+    assert any(decision["target_identifier"] == "UH-FP-PRODUCT" and decision["status"] == "rejected" for decision in decisions)
     assert all(decision["evidence_references"] for decision in decisions)
     assert all(decision["provenance_summary"] for decision in decisions)
     assert all("evidence_reliability" in decision for decision in decisions)
+    assert all("evidence_gate_passed" in decision for decision in decisions)
+    assert all(decision["accepted_evidence_count"] == 0 for decision in decisions if decision["status"] != "accepted")
+    assert all(decision["false_positive_control"] is True for decision in decisions if decision["target_identifier"].startswith("UH-FP-"))
     dread_decisions = [decision for decision in decisions if decision["evidence_source"] == "dread"]
     assert any(decision["confidence_cap_reason"] == "dread_source_reliability_cap" for decision in dread_decisions)
     assert any(decision["confidence_cap_reason"] == "dread_manual_review_cap" for decision in dread_decisions)
@@ -95,6 +101,14 @@ def test_asset_operational_risk_case_studies_cover_adjustments():
     assert cases["dread_corroborated_by_urlhaus_or_kev"]["accepted_dread_decisions"] >= 1
     assert "weak_dread_rejected" in cases
     assert cases["weak_dread_rejected"]["rejected_dread_decisions"] >= 1
+    assert "keyword_only_false_positive_rejected" in cases
+    assert cases["keyword_only_false_positive_rejected"]["decision"] == "rejected"
+    assert "stale_evidence_rejected_or_capped" in cases
+    assert cases["stale_evidence_rejected_or_capped"]["decision"] == "rejected"
+    assert "unrelated_product_overlap_rejected" in cases
+    assert cases["unrelated_product_overlap_rejected"]["decision"] == "rejected"
+    assert "manual_review_not_risk_boost" in cases
+    assert cases["manual_review_not_risk_boost"]["accepted_evidence_count"] == 0
 
 
 def test_api_compatible_response_keys_are_preserved():

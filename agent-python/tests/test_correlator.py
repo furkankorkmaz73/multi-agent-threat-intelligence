@@ -81,6 +81,8 @@ def test_non_exact_dread_high_signal_is_diagnostic_not_accepted():
     assert "exploit_sale" in categories
     assert stats["accepted_match_count"] == 0
     assert stats["manual_review_match_count"] == 1
+    assert stats["accepted_evidence_count"] == 0
+    assert stats["manual_review_evidence_count"] == 1
     assert stats["dread_only_evidence"] is True
 
 def test_weak_urlhaus_candidates_are_rejected():
@@ -110,6 +112,8 @@ def test_weak_urlhaus_candidates_are_rejected():
     assert explanations == []
     assert stats["accepted_match_count"] == 0
     assert stats["rejected_match_count"] == 1
+    assert stats["accepted_evidence_count"] == 0
+    assert stats["rejected_evidence_count"] == 1
     assert stats["accepted_matches"] == []
 
 

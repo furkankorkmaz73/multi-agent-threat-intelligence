@@ -12,9 +12,11 @@ CVE-IOC correlation is evidence-gated. Retrieval candidates are not automaticall
 
 Exact CVE references are the strongest accepted signal. Generic keyword overlap is not enough for acceptance.
 
-URLhaus records are IOC artifacts, so they require stronger support than ordinary text overlap. Accepted URLhaus evidence normally needs exact CVE reference, strong entity alignment with meaningful support, high-signal exploit/malware terms, or semantic plus temporal support.
+URLhaus records are IOC artifacts, so they require stronger support than ordinary text overlap. Accepted URLhaus evidence normally needs exact CVE reference, strong entity alignment with meaningful support, high-signal exploit/malware terms with enough shared terms and temporal support, or semantic plus temporal support.
 
 Dread records are stricter because they are optional experimental intelligence. A standalone non-exact Dread mention is not accepted as verified evidence, even when it contains high-signal exploit terminology. Exact CVE references in Dread can be accepted, but their confidence is explicitly capped. Non-exact Dread support is routed to `manual_review` unless stronger corroborating evidence is available elsewhere in the scenario.
+
+False-positive controls are deterministic. Keyword-only URLhaus candidates, stale external records outside the temporal support window, unrelated product/vendor overlap, and IOC mentions without vulnerability context are preserved diagnostically but are not accepted evidence.
 
 Rejected and manual-review candidates do not increase:
 
@@ -48,6 +50,13 @@ dread_only_evidence
 corroborated_dread_evidence
 manual_review_reason
 confidence_cap_reason
+evidence_gate_passed
+evidence_gate_reason
+rejection_reason
+accepted_evidence_count
+rejected_evidence_count
+manual_review_evidence_count
+false_positive_control
 ```
 
 LLM output must not be treated as verified evidence. LLM-derived fields may support explanation or context, but accepted correlation evidence must come from deterministic gates and explicit provenance.
