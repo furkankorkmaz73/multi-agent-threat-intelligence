@@ -11,12 +11,14 @@ def test_thesis_reproducibility_doc_contains_required_commands_and_artifacts():
     for required in (
         "make thesis-artifacts",
         "make thesis-artifact-quality",
+        "make thesis-demo",
         "PYTHONDONTWRITEBYTECODE=1",
         "risk_explanation_traces.json",
         "scoring_sensitivity.csv",
         "correlation_decisions.csv",
         "limitations_and_validity.md",
         "thesis_defense_pack.md",
+        "demo_walkthrough.md",
         "docs/thesis_limitations.md",
         "docs/thesis_claim_evidence_map.md",
         "docs/thesis_chapter_blueprint.md",
@@ -115,3 +117,16 @@ def test_thesis_chapter_blueprint_contains_required_english_writing_plan():
         "translate",
     ):
         assert forbidden not in text
+
+
+def test_makefile_exposes_thesis_demo_target():
+    repo_root = Path(__file__).resolve().parents[2]
+    makefile = (repo_root / "Makefile").read_text(encoding="utf-8")
+
+    for required in (
+        "thesis-demo:",
+        "$(MAKE) thesis-artifacts",
+        "$(MAKE) thesis-artifact-quality",
+        "Demo walkthrough: agent-python/reports/thesis/demo_walkthrough.md",
+    ):
+        assert required in makefile

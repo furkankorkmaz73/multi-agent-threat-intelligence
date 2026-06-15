@@ -176,6 +176,7 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
         "case_studies.json",
         "risk_explanation_traces.json",
         "risk_explanation_traces.md",
+        "demo_walkthrough.md",
         "results_summary.md",
         "thesis_results_section.md",
         "limitations_and_validity.md",
@@ -192,6 +193,7 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
     assert "results_summary" in first["generated_files"]
     assert "risk_explanation_traces" in first["generated_files"]
     assert "risk_explanation_traces_md" in first["generated_files"]
+    assert "demo_walkthrough" in first["generated_files"]
     assert "thesis_results_section" in first["generated_files"]
     assert "limitations_and_validity" in first["generated_files"]
     assert "thesis_defense_pack" in first["generated_files"]
@@ -202,6 +204,7 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
     assert "Top 10 Model-Risk CVEs" in (tmp_path / "first" / "scoring_summary.md").read_text(encoding="utf-8")
     assert "# Scoring Sensitivity Analysis" in (tmp_path / "first" / "scoring_sensitivity.md").read_text(encoding="utf-8")
     assert "# Risk Explanation Traces" in (tmp_path / "first" / "risk_explanation_traces.md").read_text(encoding="utf-8")
+    assert "# Thesis Demo Walkthrough" in (tmp_path / "first" / "demo_walkthrough.md").read_text(encoding="utf-8")
     assert "| Strategy | Top 5 CVEs | Precision@5 | Recall@5 | NDCG@5 | Mean KEV Rank |" in (
         tmp_path / "first" / "benchmark_summary.md"
     ).read_text(encoding="utf-8")
@@ -264,10 +267,12 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
     sensitivity_md = (tmp_path / "out" / "scoring_sensitivity.md").read_text(encoding="utf-8")
     trace_path = tmp_path / "out" / "risk_explanation_traces.json"
     trace_md_path = tmp_path / "out" / "risk_explanation_traces.md"
+    demo_path = tmp_path / "out" / "demo_walkthrough.md"
     traces = json.loads(trace_path.read_text(encoding="utf-8"))["traces"]
     traces_by_cve = {trace["cve_id"]: trace for trace in traces}
     assert trace_path == Path(manifest["generated_files"]["risk_explanation_traces"])
     assert trace_md_path == Path(manifest["generated_files"]["risk_explanation_traces_md"])
+    assert demo_path == Path(manifest["generated_files"]["demo_walkthrough"])
     required_traces = {
         "CVE-2026-9001",
         "CVE-2026-9002",
@@ -293,10 +298,38 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
     assert any(item["asset_applicable"] is True for item in high_trace["asset_operational_risk_examples"])
     assert any(item["asset_applicable"] is False for item in high_trace["asset_operational_risk_examples"])
     trace_md = trace_md_path.read_text(encoding="utf-8")
+    demo_md = demo_path.read_text(encoding="utf-8")
     assert "# Risk Explanation Traces" in trace_md
     for cve_id in required_traces:
         assert f"## {cve_id}" in trace_md
     _assert_markdown_tables_have_consistent_pipe_counts(trace_md)
+    for heading in (
+        "# Thesis Demo Walkthrough",
+        "## What This Demo Runs",
+        "## Output Files",
+        "## Key Demonstrated Capabilities",
+        "## How to Read the Results",
+        "## Asset-Aware Operational Risk Example",
+        "## Evidence-Gating and False-Positive Handling",
+        "## Reproducibility Notes",
+        "## Claim Boundaries",
+    ):
+        assert heading in demo_md
+    for expected in (
+        "deterministic controlled fixture",
+        "behavioral validation",
+        "artifact quality gate",
+        "Baseline ranking comparison",
+        "Ablation analysis",
+        "Bounded sensitivity analysis",
+        "Explanation traces",
+        "evidence-gated correlation",
+        "Asset-aware operational-risk examples",
+        "Dread is optional, experimental, bounded, default-off",
+        "No live Dread access",
+    ):
+        assert expected in demo_md
+    _assert_markdown_tables_have_consistent_pipe_counts(demo_md)
     results_path = tmp_path / "out" / "results_summary.md"
     assert results_path == Path(manifest["generated_files"]["results_summary"])
     results_md = results_path.read_text(encoding="utf-8")

@@ -132,7 +132,7 @@ The blueprint is intended to support thesis writing and defense preparation. It 
 | Item | Guidance |
 | --- | --- |
 | Main message | The appendix should connect claims to evidence and prepare concise answers to expected defense questions. |
-| Supporting repository files / artifacts | `docs/thesis_claim_evidence_map.md`, `reports/thesis/thesis_defense_pack.md`, `docs/thesis_reproducibility.md` |
+| Supporting repository files / artifacts | `docs/thesis_claim_evidence_map.md`, `reports/thesis/demo_walkthrough.md`, `reports/thesis/thesis_defense_pack.md`, `docs/thesis_reproducibility.md` |
 | Suggested figures or tables | Claim-to-evidence table; defense risk register; command reproducibility checklist. |
 | Claims allowed | The defense pack supports clear explanation of scope, evidence, and limitations. |
 | Claims to avoid | Do not introduce new claims not supported by repository artifacts. |
@@ -162,6 +162,8 @@ The blueprint is intended to support thesis writing and defense preparation. It 
 8. Conclusion
 
 This order reduces rework because the methodology, evaluation protocol, generated results, and limitations define the defensible claim boundary. Architecture, introduction, related work, and conclusion can then be written around evidence that is already fixed and validated.
+
+For a defense or portfolio walkthrough, run `make thesis-demo` and open `reports/thesis/demo_walkthrough.md` first.
 
 ## Final Defense Checklist
 

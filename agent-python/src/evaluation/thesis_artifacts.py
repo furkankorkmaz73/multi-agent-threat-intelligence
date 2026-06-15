@@ -88,6 +88,7 @@ def generate_thesis_artifacts(
         "case_studies": output / "case_studies.json",
         "risk_explanation_traces": output / "risk_explanation_traces.json",
         "risk_explanation_traces_md": output / "risk_explanation_traces.md",
+        "demo_walkthrough": output / "demo_walkthrough.md",
         "results_summary": output / "results_summary.md",
         "thesis_results_section": output / "thesis_results_section.md",
         "limitations_and_validity": output / "limitations_and_validity.md",
@@ -131,6 +132,15 @@ def generate_thesis_artifacts(
     write_report_json({"traces": explanation_traces}, files["risk_explanation_traces"])
     files["risk_explanation_traces_md"].write_text(
         _risk_explanation_traces_markdown(explanation_traces),
+        encoding="utf-8",
+    )
+    files["demo_walkthrough"].write_text(
+        _demo_walkthrough_markdown(
+            scenario=scenario,
+            records=records,
+            baselines=evaluation.get("baselines") or {},
+            ablation_report=ablation_report,
+        ),
         encoding="utf-8",
     )
     files["results_summary"].write_text(
@@ -978,6 +988,100 @@ def _thesis_defense_pack_markdown() -> str:
             "### What would be required for production use?",
             "",
             "Production use would require stronger authentication and authorization, deployment hardening, larger validated data feeds, asset inventory integration, external labels, monitoring, governance, and operational review workflows.",
+        ]
+    ) + "\n"
+
+
+def _demo_walkthrough_markdown(
+    *,
+    scenario: Mapping[str, Any],
+    records: Sequence[EvaluationRecord],
+    baselines: Mapping[str, Any],
+    ablation_report: Mapping[str, Any],
+) -> str:
+    decision_counts = _decision_counts(scenario.get("correlation_decisions") or [])
+    supported_ablation_count = len(ablation_report.get("supported") or {})
+    unsupported_ablation_count = len(ablation_report.get("unsupported") or {})
+    strategy_count = len(baselines)
+
+    return "\n".join(
+        [
+            "# Thesis Demo Walkthrough",
+            "",
+            "## What This Demo Runs",
+            "",
+            "`make thesis-demo` runs the deterministic thesis scenario, regenerates the thesis artifact bundle, and then runs the artifact quality gate. The flow is local, deterministic, and does not require live network access.",
+            "",
+            "The demo uses a deterministic controlled fixture for behavioral validation. It is not a live CTI benchmark and does not support statistical significance or real-world validation claims.",
+            "",
+            "## Output Files",
+            "",
+            _markdown_table(
+                ["Output", "Purpose"],
+                [
+                    ["`reports/thesis_scenario_report.json`", "Structured deterministic scenario report."],
+                    ["`reports/thesis/manifest.json`", "Generated artifact inventory and record counts."],
+                    ["`reports/thesis/demo_walkthrough.md`", "This demo-oriented walkthrough."],
+                    ["`reports/thesis/thesis_defense_pack.md`", "Concise defense preparation summary and Q&A."],
+                    ["`reports/thesis/results_summary.md`", "Compact technical results summary."],
+                    ["`reports/thesis/risk_explanation_traces.md`", "Readable end-to-end explanation traces."],
+                ],
+                align=["left", "left"],
+            ),
+            "",
+            "## Key Demonstrated Capabilities",
+            "",
+            f"- Deterministic controlled fixture with {len(records)} CVE-like evaluation records.",
+            f"- Baseline ranking comparison across {strategy_count} ranking strategies.",
+            f"- Ablation analysis with {supported_ablation_count} supported variant(s) and {unsupported_ablation_count} explicitly unsupported variant(s).",
+            "- Bounded sensitivity analysis over heuristic scoring weights.",
+            "- Explanation traces linking inputs, normalized signals, evidence decisions, confidence, and operational risk.",
+            "- Evidence-gated correlation decisions with accepted, manual_review, and rejected outcomes.",
+            "- Asset-aware operational-risk examples that remain separate from generic CVE risk.",
+            "- Dread is optional, experimental, bounded, default-off, and not treated as ground truth.",
+            "",
+            "## How to Read the Results",
+            "",
+            "Start with `manifest.json` to verify the artifact inventory, then open this walkthrough and `thesis_defense_pack.md`. Use `benchmark_summary.md` for baseline ranking comparison, `ablation_summary.md` for ablation analysis, `scoring_sensitivity.md` for bounded sensitivity analysis, and `risk_explanation_traces.md` for explanation traces.",
+            "",
+            "The artifact quality gate checks that required files, headings, columns, case studies, traces, Markdown tables, and thesis-safe wording are present before material is copied into thesis text.",
+            "",
+            "## Asset-Aware Operational Risk Example",
+            "",
+            "The case studies include asset-aware operational-risk examples for applicability, public exposure, criticality, patch state, and compensating controls. These examples show how operational risk can differ from generic CVE risk while preserving both concepts separately.",
+            "",
+            "Open `case_studies.json` and `risk_explanation_traces.json` for machine-readable examples, or `risk_explanation_traces.md` for a concise readable trace.",
+            "",
+            "## Evidence-Gating and False-Positive Handling",
+            "",
+            "The correlation export demonstrates evidence-gated correlation decisions. Accepted decisions can support risk and confidence; rejected and manual-review decisions remain diagnostic and do not automatically increase risk as accepted evidence.",
+            "",
+            _markdown_table(
+                ["Decision", "Count"],
+                [[decision, count] for decision, count in sorted(decision_counts.items())],
+                align=["left", "right"],
+            ),
+            "",
+            "False-positive stress cases cover keyword-only evidence, stale evidence, unrelated product overlap, and manual-review evidence that should not boost risk like accepted correlation.",
+            "",
+            "## Reproducibility Notes",
+            "",
+            "Run the complete local demo with:",
+            "",
+            "```bash",
+            "make thesis-demo",
+            "```",
+            "",
+            "The flow regenerates artifacts and runs `make thesis-artifact-quality`. No live Dread access is required, and no live Dread crawling is performed.",
+            "",
+            "## Claim Boundaries",
+            "",
+            "- The project is a multi-agent-inspired and agent-supported modular CTI risk-analysis prototype.",
+            "- It is not a fully autonomous LLM-agent system.",
+            "- The evaluation is controlled behavioral validation, not statistical real-world validation.",
+            "- Scoring weights are heuristic engineering choices tested through bounded sensitivity analysis.",
+            "- Dread is optional, experimental, bounded, default-off, and not treated as ground truth.",
+            "- Persistent graph databases such as Neo4j are future work, not current thesis scope.",
         ]
     ) + "\n"
 

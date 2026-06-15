@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: help setup-python test-python thesis-scenario thesis-artifacts thesis-artifact-quality e2e-system real-cve-export real-benchmark balanced-benchmark run-api run-worker setup-frontend run-frontend build-frontend test-go docker-up docker-worker docker-down clean
+.PHONY: help setup-python test-python thesis-scenario thesis-artifacts thesis-artifact-quality thesis-demo e2e-system real-cve-export real-benchmark balanced-benchmark run-api run-worker setup-frontend run-frontend build-frontend test-go docker-up docker-worker docker-down clean
 
 help:
 	@echo "Available targets:"
@@ -9,6 +9,7 @@ help:
 	@echo "  thesis-scenario Run deterministic local thesis scenario"
 	@echo "  thesis-artifacts Generate deterministic thesis artifact bundle"
 	@echo "  thesis-artifact-quality Validate generated thesis artifact bundle"
+	@echo "  thesis-demo      Generate and validate deterministic thesis demo bundle"
 	@echo "  e2e-system      Run Go -> MongoDB -> Python worker -> FastAPI E2E scenario"
 	@echo "  real-cve-export Generate curated CVE model results; set REAL_CVE_FLAGS"
 	@echo "  real-benchmark  Run curated KEV/EPSS benchmark; set MODEL_RESULTS and REAL_BENCHMARK_FLAGS"
@@ -39,6 +40,16 @@ thesis-artifacts:
 
 thesis-artifact-quality:
 	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.thesis_artifact_quality --artifact-dir reports/thesis
+
+thesis-demo:
+	$(MAKE) thesis-artifacts
+	$(MAKE) thesis-artifact-quality
+	@echo "Thesis demo ready."
+	@echo "Scenario report: agent-python/reports/thesis_scenario_report.json"
+	@echo "Artifact directory: agent-python/reports/thesis"
+	@echo "Manifest: agent-python/reports/thesis/manifest.json"
+	@echo "Demo walkthrough: agent-python/reports/thesis/demo_walkthrough.md"
+	@echo "Quality gate: passed"
 
 e2e-system:
 	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m integration.e2e_system --output-dir $(HOME)/thesis-artifacts/e2e-system --generated-at 2026-06-10T00:00:00+00:00

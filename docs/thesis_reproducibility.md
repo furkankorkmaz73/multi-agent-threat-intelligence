@@ -35,6 +35,12 @@ Expected result:
 - `make thesis-artifact-quality` returns a passing JSON summary.
 - `git status --short` shows only intentional working-tree changes, if any.
 
+For a demo-oriented flow that runs artifact generation and the quality gate together, use:
+
+```bash
+make thesis-demo
+```
+
 ## Generated Artifact Inventory
 
 The deterministic bundle is written under `agent-python/reports/thesis/`:
@@ -54,6 +60,7 @@ reports/thesis/correlation_decisions.csv
 reports/thesis/case_studies.json
 reports/thesis/risk_explanation_traces.json
 reports/thesis/risk_explanation_traces.md
+reports/thesis/demo_walkthrough.md
 reports/thesis/results_summary.md
 reports/thesis/thesis_results_section.md
 reports/thesis/limitations_and_validity.md
@@ -78,6 +85,7 @@ reports/thesis/methodology_summary.md
 - `case_studies.json`: selected thesis case studies for scoring, Dread, false-positive resistance, and asset-aware risk.
 - `risk_explanation_traces.json`: structured end-to-end traces from raw inputs to risk, confidence, and operational risk.
 - `risk_explanation_traces.md`: readable appendix-style explanation traces.
+- `demo_walkthrough.md`: concise defense-demo walkthrough for reading generated outputs.
 - `results_summary.md`: compact generated technical results summary.
 - `thesis_results_section.md`: English thesis-ready Results and Evaluation draft section.
 - `limitations_and_validity.md`: generated conservative limitations and validity summary.
@@ -116,7 +124,7 @@ The quality gate validates structure and formatting of the generated bundle. It 
 A passing run prints a JSON summary similar to:
 
 ```json
-{"artifact_dir":"reports/thesis","checked_files":19,"checked_markdown_files":11,"status":"passed"}
+{"artifact_dir":"reports/thesis","checked_files":20,"checked_markdown_files":12,"status":"passed"}
 ```
 
 The quality gate does not validate statistical correctness, does not prove real-world generalization, and does not change model behavior.

@@ -21,6 +21,7 @@ EXPECTED_MANIFEST_KEYS = {
     "case_studies",
     "risk_explanation_traces",
     "risk_explanation_traces_md",
+    "demo_walkthrough",
     "results_summary",
     "thesis_results_section",
     "limitations_and_validity",
@@ -153,6 +154,18 @@ THESIS_DEFENSE_PACK_HEADINGS = (
     "## Suggested Defense Q&A",
 )
 
+DEMO_WALKTHROUGH_HEADINGS = (
+    "# Thesis Demo Walkthrough",
+    "## What This Demo Runs",
+    "## Output Files",
+    "## Key Demonstrated Capabilities",
+    "## How to Read the Results",
+    "## Asset-Aware Operational Risk Example",
+    "## Evidence-Gating and False-Positive Handling",
+    "## Reproducibility Notes",
+    "## Claim Boundaries",
+)
+
 METHODOLOGY_SAFE_FRAMING = (
     "deterministic controlled fixture",
     "behavioral validation",
@@ -199,6 +212,7 @@ def validate_thesis_artifacts(artifact_dir: str | Path) -> dict[str, Any]:
     _validate_csv_columns(root / "scoring_sensitivity.csv", REQUIRED_SENSITIVITY_COLUMNS, errors)
     _validate_required_markdown_sections(root / "limitations_and_validity.md", LIMITATIONS_AND_VALIDITY_HEADINGS, errors)
     _validate_required_markdown_sections(root / "thesis_defense_pack.md", THESIS_DEFENSE_PACK_HEADINGS, errors)
+    _validate_required_markdown_sections(root / "demo_walkthrough.md", DEMO_WALKTHROUGH_HEADINGS, errors)
     _validate_methodology_framing(root / "methodology_summary.md", errors)
     checked_markdown = _validate_markdown_files(root, errors)
 

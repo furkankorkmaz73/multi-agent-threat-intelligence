@@ -158,6 +158,22 @@ The command writes `agent-python/reports/thesis_scenario_report.json`.
 
 For reproducible thesis artifact generation and validation, see [`docs/thesis_reproducibility.md`](docs/thesis_reproducibility.md). For conservative thesis claim boundaries, see [`docs/thesis_limitations.md`](docs/thesis_limitations.md). For claim-to-evidence mapping, see [`docs/thesis_claim_evidence_map.md`](docs/thesis_claim_evidence_map.md). For a chapter-by-chapter English writing plan, see [`docs/thesis_chapter_blueprint.md`](docs/thesis_chapter_blueprint.md).
 
+## Reproducible Thesis Demo
+
+Run the deterministic thesis demo flow:
+
+```bash
+make thesis-demo
+```
+
+The demo flow regenerates the deterministic thesis fixture artifacts, runs the artifact quality gate, and prints the key output paths. It is intended for thesis defense and portfolio review as behavioral validation, not as a live CTI benchmark.
+
+Open these files first:
+
+- `agent-python/reports/thesis/demo_walkthrough.md`
+- `agent-python/reports/thesis/thesis_defense_pack.md`
+- `agent-python/reports/thesis/manifest.json`
+
 ## Production-like E2E Scenario
 
 Prerequisites: Docker, Go, and the Python virtualenv under `agent-python/.venv`.

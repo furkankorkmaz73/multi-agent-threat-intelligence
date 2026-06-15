@@ -134,6 +134,20 @@ def test_quality_gate_fails_when_new_artifact_heading_is_missing(tmp_path):
     assert any("## Graph Persistence Limitation" in error for error in errors)
 
 
+def test_quality_gate_fails_when_demo_walkthrough_heading_is_missing(tmp_path):
+    output_dir = _generate_bundle(tmp_path)
+    markdown_path = output_dir / "demo_walkthrough.md"
+    markdown_path.write_text(
+        markdown_path.read_text(encoding="utf-8").replace("## Output Files\n", ""),
+        encoding="utf-8",
+    )
+
+    errors = _quality_errors(output_dir)
+
+    assert any("demo_walkthrough.md missing required headings" in error for error in errors)
+    assert any("## Output Files" in error for error in errors)
+
+
 def test_quality_gate_fails_when_methodology_safe_framing_is_missing(tmp_path):
     output_dir = _generate_bundle(tmp_path)
     markdown_path = output_dir / "methodology_summary.md"
