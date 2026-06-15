@@ -86,6 +86,21 @@ PREDICTION_COLUMNS = [
     "learned_prediction",
 ]
 
+DISAGREEMENT_COLUMNS = [
+    "strategy",
+    "cve_id",
+    "cvss_score",
+    "risk_score",
+    "risk_level",
+    "confidence",
+    "learned_probability",
+    "proxy_label",
+    "key_signals",
+    "coverage_limitations",
+    "disagreement_type",
+    "reason",
+]
+
 
 def extract_calibration_row(doc: Mapping[str, Any]) -> dict[str, Any] | None:
     source = deepcopy(dict(doc))
@@ -287,10 +302,13 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     model_summary_path = output / "learned_calibration_model_summary.md"
     comparison_path = output / "learned_vs_heuristic_comparison.json"
     comparison_summary_path = output / "learned_vs_heuristic_comparison.md"
+    disagreements_path = output / "learned_calibration_disagreements.csv"
+    disagreements_summary_path = output / "learned_calibration_disagreements.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
     comparison = compute_learned_vs_heuristic_comparison(rows, label_rows, model_result["predictions"])
+    disagreements = compute_disagreement_cases(rows, label_rows, model_result["predictions"])
     with dataset_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=DATASET_COLUMNS)
         writer.writeheader()
@@ -314,6 +332,12 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     model_summary_path.write_text(render_model_summary_markdown(model_result["report"]), encoding="utf-8")
     comparison_path.write_text(json.dumps(comparison, indent=2, sort_keys=True, default=str), encoding="utf-8")
     comparison_summary_path.write_text(render_learned_vs_heuristic_markdown(comparison), encoding="utf-8")
+    with disagreements_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=DISAGREEMENT_COLUMNS)
+        writer.writeheader()
+        for row in disagreements:
+            writer.writerow({column: row.get(column, "") for column in DISAGREEMENT_COLUMNS})
+    disagreements_summary_path.write_text(render_disagreements_markdown(disagreements), encoding="utf-8")
     return {
         "dataset": str(dataset_path),
         "labels": str(labels_path),
@@ -326,6 +350,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "model_summary": str(model_summary_path),
         "learned_vs_heuristic_comparison": str(comparison_path),
         "learned_vs_heuristic_summary": str(comparison_summary_path),
+        "disagreements": str(disagreements_path),
+        "disagreements_summary": str(disagreements_summary_path),
     }
 
 
@@ -675,6 +701,142 @@ def render_learned_vs_heuristic_markdown(comparison: Mapping[str, Any]) -> str:
         )
     lines.append("")
     return "\n".join(lines)
+
+
+def compute_disagreement_cases(
+    rows: Sequence[Mapping[str, Any]],
+    label_rows: Sequence[Mapping[str, Any]],
+    prediction_rows: Sequence[Mapping[str, Any]],
+    *,
+    max_examples_per_category: int = 5,
+) -> list[dict[str, Any]]:
+    rows_by_cve = {str(row.get("cve_id", "")): row for row in rows}
+    label_by_cve = {str(row.get("cve_id", "")): row for row in label_rows}
+    by_category: dict[str, list[dict[str, Any]]] = {}
+    predictions_by_strategy: dict[str, list[Mapping[str, Any]]] = {}
+    for prediction in prediction_rows:
+        predictions_by_strategy.setdefault(str(prediction.get("strategy", "")), []).append(prediction)
+    for strategy, predictions in predictions_by_strategy.items():
+        learned_ranks = {
+            str(prediction.get("cve_id", "")): rank
+            for rank, prediction in enumerate(
+                sorted(
+                    predictions,
+                    key=lambda row: (-_safe_float(row.get("learned_probability")), str(row.get("cve_id", ""))),
+                ),
+                start=1,
+            )
+        }
+        heuristic_ranks = {
+            cve_id: rank
+            for rank, (cve_id, _row) in enumerate(
+                sorted(rows_by_cve.items(), key=lambda item: (-_safe_float(item[1].get("risk_score")), item[0])),
+                start=1,
+            )
+        }
+        for prediction in predictions:
+            cve_id = str(prediction.get("cve_id", ""))
+            row = rows_by_cve.get(cve_id)
+            if row is None:
+                continue
+            probability = _safe_float(prediction.get("learned_probability"))
+            categories = _disagreement_categories(
+                row,
+                probability=probability,
+                learned_rank=learned_ranks.get(cve_id, 999999),
+                heuristic_rank=heuristic_ranks.get(cve_id, 999999),
+                proxy_label=str((label_by_cve.get(cve_id) or {}).get(f"proxy_label_{strategy}", "")),
+            )
+            for category, reason in categories:
+                by_category.setdefault(category, []).append(
+                    _disagreement_row(row, label_by_cve.get(cve_id) or {}, strategy, probability, category, reason)
+                )
+    output: list[dict[str, Any]] = []
+    for category in sorted(by_category):
+        output.extend(by_category[category][:max_examples_per_category])
+    return output
+
+
+def render_disagreements_markdown(rows: Sequence[Mapping[str, Any]]) -> str:
+    lines = [
+        "# Learned Calibration Disagreement Cases",
+        "",
+        "This artifact lists thesis-useful disagreements between experimental learned probabilities and heuristic risk scoring.",
+        "It is empty when learned predictions are unavailable.",
+        "",
+    ]
+    if not rows:
+        lines.extend(["No disagreement cases were exported because learned predictions are unavailable.", ""])
+        return "\n".join(lines)
+    counts: dict[str, int] = {}
+    for row in rows:
+        category = str(row.get("disagreement_type", ""))
+        counts[category] = counts.get(category, 0) + 1
+    lines.extend(f"- `{category}`: {count}" for category, count in sorted(counts.items()))
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _disagreement_categories(
+    row: Mapping[str, Any],
+    *,
+    probability: float,
+    learned_rank: int,
+    heuristic_rank: int,
+    proxy_label: str,
+) -> list[tuple[str, str]]:
+    categories: list[tuple[str, str]] = []
+    risk = _safe_float(row.get("risk_score"))
+    cvss = _safe_float(row.get("cvss_score"))
+    confidence = _safe_float(row.get("confidence"))
+    external = _accepted_external_count(row)
+    limitations = str(row.get("coverage_limitations") or "")
+    if risk >= 7.0 and probability < 0.4:
+        categories.append(("heuristic_high_learned_low", "heuristic risk is high while learned probability is low"))
+    if probability >= 0.7 and risk < 7.0:
+        categories.append(("learned_high_heuristic_medium_low", "learned probability is high while heuristic risk is below high"))
+    if cvss >= 9.8 and probability < 0.7:
+        categories.append(("cvss_10_learned_probability_not_high", "critical CVSS does not map to high learned probability"))
+    if _truthy(row.get("intrinsic_criticality_floor_applied")) and probability < 0.4:
+        categories.append(("intrinsic_floor_applied_learned_probability_low", "intrinsic floor is applied but learned probability is low"))
+    if confidence < 0.4 and probability >= 0.7:
+        categories.append(("low_confidence_high_learned_probability", "low confidence conflicts with high learned probability"))
+    if risk >= 7.0 and external == 0:
+        categories.append(("high_risk_missing_external_evidence", "high heuristic risk has no accepted external evidence"))
+    if heuristic_rank <= 10 and proxy_label not in {"high"}:
+        categories.append(("high_heuristic_rank_low_proxy_support", "top heuristic rank has low proxy-label support"))
+    if learned_rank <= 10 and limitations:
+        categories.append(("high_learned_rank_limited_coverage", "top learned rank has coverage limitations"))
+    return categories
+
+
+def _disagreement_row(
+    row: Mapping[str, Any],
+    label_row: Mapping[str, Any],
+    strategy: str,
+    probability: float,
+    category: str,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "strategy": strategy,
+        "cve_id": row.get("cve_id", ""),
+        "cvss_score": row.get("cvss_score", ""),
+        "risk_score": row.get("risk_score", ""),
+        "risk_level": row.get("risk_level", ""),
+        "confidence": row.get("confidence", ""),
+        "learned_probability": round(probability, 6),
+        "proxy_label": label_row.get(f"proxy_label_{strategy}", ""),
+        "key_signals": _key_signal_summary(row),
+        "coverage_limitations": row.get("coverage_limitations", ""),
+        "disagreement_type": category,
+        "reason": reason,
+    }
+
+
+def _key_signal_summary(row: Mapping[str, Any]) -> str:
+    keys = ("severity_signal", "epss_signal", "kev_signal", "recency_signal", "correlation_signal", "graph_signal", "nlp_context_signal")
+    return "; ".join(f"{key}={row.get(key, '')}" for key in keys)
 
 
 def _comparison_for_strategy(

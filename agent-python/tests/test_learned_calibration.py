@@ -10,12 +10,14 @@ from pymongo.errors import ServerSelectionTimeoutError
 import evaluation.learned_calibration as learned_calibration
 from evaluation.learned_calibration import (
     DATASET_COLUMNS,
+    DISAGREEMENT_COLUMNS,
     LABEL_COLUMNS,
     MODEL_FEATURE_COLUMNS,
     build_proxy_label_row,
     build_proxy_label_rows,
     build_feasibility_report,
     compute_baseline_metrics,
+    compute_disagreement_cases,
     compute_learned_vs_heuristic_comparison,
     export_from_documents,
     extract_calibration_row,
@@ -217,6 +219,8 @@ def test_export_writes_three_output_files(tmp_path):
     model_summary = tmp_path / "learned_calibration_model_summary.md"
     comparison = tmp_path / "learned_vs_heuristic_comparison.json"
     comparison_summary = tmp_path / "learned_vs_heuristic_comparison.md"
+    disagreements = tmp_path / "learned_calibration_disagreements.csv"
+    disagreements_summary = tmp_path / "learned_calibration_disagreements.md"
     assert result["paths"] == {
         "dataset": str(dataset),
         "labels": str(labels),
@@ -229,6 +233,8 @@ def test_export_writes_three_output_files(tmp_path):
         "model_summary": str(model_summary),
         "learned_vs_heuristic_comparison": str(comparison),
         "learned_vs_heuristic_summary": str(comparison_summary),
+        "disagreements": str(disagreements),
+        "disagreements_summary": str(disagreements_summary),
     }
     assert dataset.exists()
     assert labels.exists()
@@ -241,6 +247,8 @@ def test_export_writes_three_output_files(tmp_path):
     assert model_summary.exists()
     assert comparison.exists()
     assert comparison_summary.exists()
+    assert disagreements.exists()
+    assert disagreements_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
     assert rows[0]["cve_id"] == "CVE-2026-1234"
     label_rows = list(csv.DictReader(labels.open(encoding="utf-8")))
@@ -257,6 +265,9 @@ def test_export_writes_three_output_files(tmp_path):
     assert model_payload["leakage_guard"]["risk_score_used_as_feature"] is False
     comparison_payload = json.loads(comparison.read_text(encoding="utf-8"))
     assert comparison_payload["status"] in {"completed", "skipped"}
+    disagreement_rows = list(csv.DictReader(disagreements.open(encoding="utf-8")))
+    if disagreement_rows:
+        assert list(disagreement_rows[0].keys()) == DISAGREEMENT_COLUMNS
     text = summary.read_text(encoding="utf-8")
     assert "Proxy labels are not ground truth" in text
     assert "production `risk_score` behavior is unchanged" in text
@@ -545,3 +556,66 @@ def test_learned_vs_heuristic_comparison_skips_without_predictions():
     assert comparison["status"] == "skipped"
     assert comparison["strategies"]["strategy_a"]["status"] == "skipped"
     assert comparison["strategies"]["strategy_a"]["skip_reason"] == "no learned predictions available for this strategy"
+
+
+def test_disagreement_cases_include_expected_categories_and_reasons():
+    rows = [
+        _row(
+            cve_id="CVE-HIGH",
+            cvss_score=10.0,
+            risk_score=8.2,
+            risk_level="HIGH",
+            confidence=0.35,
+            severity_signal=1.0,
+            nlp_context_signal=0.9,
+            intrinsic_criticality_floor_applied=True,
+            coverage_limitations="epss_unavailable;kev_status_unknown",
+        ),
+        _row(
+            cve_id="CVE-LEARNED",
+            cvss_score=5.0,
+            risk_score=4.0,
+            risk_level="MEDIUM",
+            confidence=0.3,
+            coverage_limitations="no_accepted_external_evidence",
+        ),
+    ]
+    labels = build_proxy_label_rows(rows)
+    predictions = [
+        {"cve_id": "CVE-HIGH", "strategy": "strategy_a", "learned_probability": 0.2},
+        {"cve_id": "CVE-LEARNED", "strategy": "strategy_a", "learned_probability": 0.95},
+    ]
+
+    cases = compute_disagreement_cases(rows, labels, predictions)
+    by_type = {case["disagreement_type"]: case for case in cases}
+
+    assert by_type["heuristic_high_learned_low"]["cve_id"] == "CVE-HIGH"
+    assert "heuristic risk is high" in by_type["heuristic_high_learned_low"]["reason"]
+    assert by_type["cvss_10_learned_probability_not_high"]["cve_id"] == "CVE-HIGH"
+    assert by_type["intrinsic_floor_applied_learned_probability_low"]["cve_id"] == "CVE-HIGH"
+    assert by_type["learned_high_heuristic_medium_low"]["cve_id"] == "CVE-LEARNED"
+    assert by_type["low_confidence_high_learned_probability"]["cve_id"] == "CVE-LEARNED"
+
+
+def test_disagreement_cases_limit_examples_per_category():
+    rows = [
+        _row(cve_id=f"CVE-{index}", risk_score=8.0, risk_level="HIGH", cvss_score=9.8)
+        for index in range(10)
+    ]
+    labels = build_proxy_label_rows(rows)
+    predictions = [
+        {"cve_id": row["cve_id"], "strategy": "strategy_a", "learned_probability": 0.1}
+        for row in rows
+    ]
+
+    cases = compute_disagreement_cases(rows, labels, predictions, max_examples_per_category=3)
+    high_low = [case for case in cases if case["disagreement_type"] == "heuristic_high_learned_low"]
+
+    assert len(high_low) == 3
+
+
+def test_disagreement_cases_empty_when_predictions_unavailable():
+    rows = [_row(cve_id="CVE-1")]
+    labels = build_proxy_label_rows(rows)
+
+    assert compute_disagreement_cases(rows, labels, []) == []
