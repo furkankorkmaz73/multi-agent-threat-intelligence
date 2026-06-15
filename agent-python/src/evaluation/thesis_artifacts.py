@@ -10,6 +10,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from evaluation.balanced_benchmark import build_ablation_report
 from evaluation.datasets import EvaluationRecord, safe_float
 from evaluation.runner import write_report_json
+from evaluation.scoring_sensitivity import build_scoring_sensitivity_report
 
 
 DEFAULT_SCENARIO_REPORT = Path("reports/thesis_scenario_report.json")
@@ -77,6 +78,8 @@ def generate_thesis_artifacts(
         "scoring_summary": output / "scoring_summary.md",
         "scoring_distribution": output / "scoring_distribution.csv",
         "scoring_distribution_md": output / "scoring_distribution.md",
+        "scoring_sensitivity": output / "scoring_sensitivity.csv",
+        "scoring_sensitivity_md": output / "scoring_sensitivity.md",
         "benchmark_summary": output / "benchmark_summary.csv",
         "benchmark_summary_md": output / "benchmark_summary.md",
         "ablation_summary": output / "ablation_summary.csv",
@@ -97,6 +100,12 @@ def generate_thesis_artifacts(
     _write_csv(scoring_distribution_rows, files["scoring_distribution"], SCORING_DISTRIBUTION_FIELDS)
     files["scoring_distribution_md"].write_text(
         _scoring_distribution_markdown(records, scoring_distribution_rows),
+        encoding="utf-8",
+    )
+    sensitivity_report = build_scoring_sensitivity_report(records, k_values=k_values) if records else {"variants": []}
+    _write_scoring_sensitivity(sensitivity_report, files["scoring_sensitivity"])
+    files["scoring_sensitivity_md"].write_text(
+        _scoring_sensitivity_markdown(sensitivity_report),
         encoding="utf-8",
     )
     _write_benchmark_summary(evaluation.get("baselines") or {}, files["benchmark_summary"])
@@ -365,6 +374,110 @@ def _scoring_distribution_markdown(records: Sequence[EvaluationRecord], rows: Se
         f"- CSV rows emitted: {len(rows)}.",
     ]
     return "\n".join(lines) + "\n"
+
+
+def _write_scoring_sensitivity(report: Mapping[str, Any], path: Path) -> None:
+    rows = []
+    for payload in report.get("variants") or []:
+        metrics = payload.get("metrics") or {}
+        rows.append(
+            {
+                "variant": payload.get("variant"),
+                "changed_weight": payload.get("changed_weight"),
+                "direction": payload.get("direction"),
+                "precision_at_5": metrics.get("precision_at_5", ""),
+                "recall_at_5": metrics.get("recall_at_5", ""),
+                "ndcg_at_5": metrics.get("ndcg_at_5", ""),
+                "mean_kev_rank": metrics.get("mean_kev_rank", ""),
+                "top5_cves": ";".join(payload.get("top5_cves") or []),
+                "top5_overlap_with_baseline": payload.get("top5_overlap_with_baseline", ""),
+                "guardrails_passed": payload.get("guardrails_passed", ""),
+                "notes": payload.get("notes", ""),
+            }
+        )
+    _write_csv(
+        rows,
+        path,
+        [
+            "variant",
+            "changed_weight",
+            "direction",
+            "precision_at_5",
+            "recall_at_5",
+            "ndcg_at_5",
+            "mean_kev_rank",
+            "top5_cves",
+            "top5_overlap_with_baseline",
+            "guardrails_passed",
+            "notes",
+        ],
+    )
+
+
+def _scoring_sensitivity_markdown(report: Mapping[str, Any]) -> str:
+    variants = list(report.get("variants") or [])
+    changed = [item for item in variants if not item.get("guardrails_passed")]
+    rows = []
+    for payload in variants:
+        metrics = payload.get("metrics") or {}
+        rows.append(
+            [
+                payload.get("variant"),
+                payload.get("changed_weight"),
+                payload.get("direction"),
+                metrics.get("precision_at_5", ""),
+                metrics.get("recall_at_5", ""),
+                metrics.get("ndcg_at_5", ""),
+                metrics.get("mean_kev_rank", ""),
+                payload.get("top5_overlap_with_baseline", ""),
+                payload.get("guardrails_passed"),
+            ]
+        )
+    changed_rows = [
+        [payload.get("variant"), payload.get("notes")]
+        for payload in changed
+    ] or [["None", "All evaluated variants preserved the qualitative guardrails."]]
+    return "\n".join(
+        [
+            "# Scoring Sensitivity Analysis",
+            "",
+            "This deterministic offline analysis recomputes the 24-record thesis fixture from exported normalized signals under bounded scoring-weight perturbations.",
+            "It is a robustness probe for thesis behavior, not statistical calibration and not a change to production/default weights.",
+            f"Weight policy: `{report.get('weight_policy', 'bounded_multiplier_no_renormalization')}`. Variant weights are copied from the canonical defaults and are not renormalized.",
+            "",
+            "## Variant Summary",
+            "",
+            _markdown_table(
+                [
+                    "Variant",
+                    "Changed Weight",
+                    "Direction",
+                    "Precision@5",
+                    "Recall@5",
+                    "NDCG@5",
+                    "Mean KEV Rank",
+                    "Top-5 Overlap",
+                    "Guardrails Passed",
+                ],
+                rows,
+                align=["left", "left", "left", "right", "right", "right", "right", "right", "left"],
+            ),
+            "",
+            "## Qualitative Changes",
+            "",
+            _markdown_table(
+                ["Variant", "Notes"],
+                changed_rows,
+                align=["left", "left"],
+            ),
+            "",
+            "## Interpretation",
+            "",
+            "- Stable top-5 overlap and passing guardrails suggest the controlled fixture behavior is not dependent on one exact hand-picked weight setting.",
+            "- This does not prove real-world calibration or statistical significance.",
+            "- Larger NVD, EPSS, CISA KEV, URLhaus/Dread, and asset-context datasets are still required for empirical calibration.",
+        ]
+    ) + "\n"
 
 
 def _score_rank_table(

@@ -39,6 +39,12 @@ Exact ablations are reported only when exported component fields exist:
 
 Variants that require recomputing retrieval, graph construction, or accepted evidence are marked unsupported with an explicit reason. Metrics are not fabricated.
 
+## Sensitivity Analysis
+
+The thesis artifacts include an offline scoring sensitivity analysis. It recomputes model risk from exported normalized fixture signals under deterministic bounded weight perturbations while leaving the production/default scoring weights unchanged.
+
+The analysis reports top-5 overlap with the canonical baseline and whether qualitative guardrails remain true. It probes robustness to reasonable weight changes, but it is not statistical calibration and does not replace larger real-world validation.
+
 ## Thesis Artifacts
 
 Run:
@@ -54,6 +60,8 @@ agent-python/reports/thesis/
   scoring_summary.md
   scoring_distribution.csv
   scoring_distribution.md
+  scoring_sensitivity.csv
+  scoring_sensitivity.md
   benchmark_summary.csv
   benchmark_summary.md
   ablation_summary.csv

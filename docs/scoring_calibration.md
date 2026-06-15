@@ -36,6 +36,20 @@ The scoring distribution CSV exports each weighted contribution:
 
 This makes the model auditable at the record level and prevents benchmark artifacts from drifting away from the implemented formula.
 
+## Weight Sensitivity Analysis
+
+The default signal weights are heuristic engineering choices. The thesis artifact pipeline therefore includes an offline sensitivity analysis that recomputes the controlled fixture under small bounded perturbations:
+
+- severity plus/minus
+- EPSS plus/minus
+- KEV plus/minus
+- accepted correlation plus/minus
+- combined external-evidence plus/minus
+
+The analysis copies `DEFAULT_RISK_SIGNAL_WEIGHTS` and never mutates the production/default formula. Variant weights are applied as deterministic multipliers and are not renormalized; this matches the additive scoring semantics where each signal contributes bounded urgency support before the final `[0, 10]` clamp.
+
+For each variant, the artifact reports Precision@5, Recall@5, NDCG@5, mean KEV rank, top-5 overlap with the baseline, and qualitative guardrail status. Stable qualitative behavior under these perturbations supports behavioral validation, but it is not statistical calibration.
+
 ## What It Does Not Validate
 
 The deterministic fixture is not a live threat-intelligence benchmark. It does not estimate real-world prevalence, incident likelihood, statistical significance, or operational utility across all environments.

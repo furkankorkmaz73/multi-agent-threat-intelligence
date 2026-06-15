@@ -16,6 +16,14 @@ BAD_RESULTS_SUMMARY_FORMATTING = (
     "7.571429|",
     "removalrequires",
 )
+BAD_SENSITIVITY_FORMATTING = (
+    "boundedperturbation",
+    "stableunder",
+    "Variantweights",
+    "Recall@5|",
+    "6.714286|",
+    "hand-pickedweight",
+)
 
 
 def _assert_markdown_tables_have_consistent_pipe_counts(markdown: str) -> None:
@@ -146,6 +154,8 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
         "scoring_summary.md",
         "scoring_distribution.csv",
         "scoring_distribution.md",
+        "scoring_sensitivity.csv",
+        "scoring_sensitivity.md",
         "benchmark_summary.csv",
         "benchmark_summary.md",
         "ablation_summary.csv",
@@ -161,6 +171,8 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
     assert first["record_count"] == second["record_count"] == 1
     assert "scoring_distribution" in first["generated_files"]
     assert "scoring_distribution_md" in first["generated_files"]
+    assert "scoring_sensitivity" in first["generated_files"]
+    assert "scoring_sensitivity_md" in first["generated_files"]
     assert "results_summary" in first["generated_files"]
     assert "thesis_results_section" in first["generated_files"]
     assert "thesis_results_section_tr" not in first["generated_files"]
@@ -168,6 +180,7 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
         tmp_path / "second" / "benchmark_summary.csv"
     ).read_text(encoding="utf-8")
     assert "Top 10 Model-Risk CVEs" in (tmp_path / "first" / "scoring_summary.md").read_text(encoding="utf-8")
+    assert "# Scoring Sensitivity Analysis" in (tmp_path / "first" / "scoring_sensitivity.md").read_text(encoding="utf-8")
     assert "| Strategy | Top 5 CVEs | Precision@5 | Recall@5 | NDCG@5 | Mean KEV Rank |" in (
         tmp_path / "first" / "benchmark_summary.md"
     ).read_text(encoding="utf-8")
@@ -214,6 +227,8 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
     } <= case_names
     benchmark_md = (tmp_path / "out" / "benchmark_summary.md").read_text(encoding="utf-8")
     ablation_md = (tmp_path / "out" / "ablation_summary.md").read_text(encoding="utf-8")
+    sensitivity_csv = (tmp_path / "out" / "scoring_sensitivity.csv").read_text(encoding="utf-8")
+    sensitivity_md = (tmp_path / "out" / "scoring_sensitivity.md").read_text(encoding="utf-8")
     results_path = tmp_path / "out" / "results_summary.md"
     assert results_path == Path(manifest["generated_files"]["results_summary"])
     results_md = results_path.read_text(encoding="utf-8")
@@ -224,10 +239,16 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
     thesis_md = thesis_path.read_text(encoding="utf-8")
     assert "Mean KEV Rank" in benchmark_md
     assert "Mean KEV Rank" in ablation_md
+    assert "Variant weights" in sensitivity_md
+    assert "hand-picked weight" in sensitivity_md
     assert "Mean KEVRank" not in ablation_md
     assert "1.0| 5.714286" not in ablation_md
+    for regression in BAD_SENSITIVITY_FORMATTING:
+        assert regression not in sensitivity_csv
+        assert regression not in sensitivity_md
     _assert_markdown_tables_have_consistent_pipe_counts(benchmark_md)
     _assert_markdown_tables_have_consistent_pipe_counts(ablation_md)
+    _assert_markdown_tables_have_consistent_pipe_counts(sensitivity_md)
     for heading in (
         "## Evaluation Setup",
         "## Benchmark Findings",
