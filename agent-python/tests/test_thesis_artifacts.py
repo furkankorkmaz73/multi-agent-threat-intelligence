@@ -11,6 +11,18 @@ BAD_RESULTS_SUMMARY_FORMATTING = (
     "evidence,graph",
     "confidence,while",
     "donot",
+    "deterministicanalysis",
+    "acceptedcorrelation",
+    "toinfer",
+    "representsreliability",
+    "analysisperturbs",
+    "casesin",
+    "notto",
+    "doesnot",
+    "orsimilar",
+    "fieldperformance",
+    "operational-riskexamples",
+    "fixtureto",
     "Mean KEVRank",
     "1.0|",
     "7.571429|",
@@ -166,6 +178,8 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
         "risk_explanation_traces.md",
         "results_summary.md",
         "thesis_results_section.md",
+        "limitations_and_validity.md",
+        "thesis_defense_pack.md",
         "methodology_summary.md",
         "manifest.json",
     }
@@ -179,6 +193,8 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
     assert "risk_explanation_traces" in first["generated_files"]
     assert "risk_explanation_traces_md" in first["generated_files"]
     assert "thesis_results_section" in first["generated_files"]
+    assert "limitations_and_validity" in first["generated_files"]
+    assert "thesis_defense_pack" in first["generated_files"]
     assert "thesis_results_section_tr" not in first["generated_files"]
     assert (tmp_path / "first" / "benchmark_summary.csv").read_text(encoding="utf-8") == (
         tmp_path / "second" / "benchmark_summary.csv"
@@ -191,6 +207,8 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
     ).read_text(encoding="utf-8")
     assert "## Evaluation Setup" in (tmp_path / "first" / "results_summary.md").read_text(encoding="utf-8")
     assert "## Experimental Setup" in (tmp_path / "first" / "thesis_results_section.md").read_text(encoding="utf-8")
+    assert "## Claim Scope" in (tmp_path / "first" / "limitations_and_validity.md").read_text(encoding="utf-8")
+    assert "## Suggested Defense Q&A" in (tmp_path / "first" / "thesis_defense_pack.md").read_text(encoding="utf-8")
     assert not (tmp_path / "first" / "thesis_results_section_tr.md").exists()
 
 
@@ -284,9 +302,17 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
     results_md = results_path.read_text(encoding="utf-8")
     thesis_path = tmp_path / "out" / "thesis_results_section.md"
     assert thesis_path == Path(manifest["generated_files"]["thesis_results_section"])
+    limitations_path = tmp_path / "out" / "limitations_and_validity.md"
+    defense_path = tmp_path / "out" / "thesis_defense_pack.md"
+    methodology_path = tmp_path / "out" / "methodology_summary.md"
+    assert limitations_path == Path(manifest["generated_files"]["limitations_and_validity"])
+    assert defense_path == Path(manifest["generated_files"]["thesis_defense_pack"])
     assert "thesis_results_section_tr" not in manifest["generated_files"]
     assert not (tmp_path / "out" / "thesis_results_section_tr.md").exists()
     thesis_md = thesis_path.read_text(encoding="utf-8")
+    limitations_md = limitations_path.read_text(encoding="utf-8")
+    defense_md = defense_path.read_text(encoding="utf-8")
+    methodology_md = methodology_path.read_text(encoding="utf-8")
     assert "Mean KEV Rank" in benchmark_md
     assert "Mean KEV Rank" in ablation_md
     assert "Variant weights" in sensitivity_md
@@ -413,3 +439,62 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
     for regression in BAD_RESULTS_SUMMARY_FORMATTING:
         assert regression not in thesis_md
     _assert_markdown_tables_have_consistent_pipe_counts(thesis_md)
+    for heading in (
+        "## Claim Scope",
+        "## Multi-Agent Interpretation",
+        "## Controlled Fixture Limitation",
+        "## Heuristic Scoring Weights Limitation",
+        "## Sensitivity Analysis Limitation",
+        "## Dread Evidence Limitation",
+        "## Asset-Aware Operational Risk Limitation",
+        "## Graph Persistence Limitation",
+        "## Real-World Generalization Limitation",
+        "## Future Work",
+    ):
+        assert heading in limitations_md
+    for expected in (
+        "multi-agent-inspired",
+        "not a fully autonomous LLM-agent system",
+        "deterministic controlled fixture",
+        "not a live CTI benchmark",
+        "not learned parameters",
+        "not statistically optimized",
+        "not treated as ground truth",
+        "Neo4j or other persistent graph databases are future work",
+    ):
+        assert expected in limitations_md
+    for heading in (
+        "## One-Paragraph Thesis Claim",
+        "## Contributions",
+        "## What the System Does Not Claim",
+        "## Methodology Summary",
+        "## Evaluation Summary",
+        "## Key Limitations",
+        "## Suggested Defense Q&A",
+    ):
+        assert heading in defense_md
+    for expected in (
+        "multi-agent-inspired",
+        "controlled deterministic fixture",
+        "not to claim live operational generalization",
+        "does not claim learned or statistically optimized scoring weights",
+        "Why are the weights heuristic?",
+        "Why is Dread included if it is unreliable?",
+        "Why not use Neo4j?",
+    ):
+        assert expected in defense_md
+    for expected in (
+        "deterministic controlled fixture",
+        "behavioral validation",
+        "not a live CTI benchmark",
+        "not statistical calibration",
+        "heuristic engineering choices",
+        "Dread cases in thesis artifacts are local deterministic fixtures",
+        "do not require live Dread access",
+        "False-positive stress cases",
+        "Explanation traces",
+        "Asset-aware examples",
+    ):
+        assert expected in methodology_md
+    for markdown in (limitations_md, defense_md, methodology_md):
+        _assert_markdown_tables_have_consistent_pipe_counts(markdown)

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from evaluation.thesis_artifact_quality import ArtifactQualityError, validate_thesis_artifacts
+from evaluation.thesis_artifact_quality import ArtifactQualityError, _unsafe_claims, validate_thesis_artifacts
 from evaluation.thesis_artifacts import generate_thesis_artifacts
 from integration.thesis_scenario import run_thesis_scenario
 
@@ -80,13 +80,72 @@ def test_quality_gate_fails_on_malformed_markdown_regression_string(tmp_path):
     output_dir = _generate_bundle(tmp_path)
     markdown_path = output_dir / "methodology_summary.md"
     markdown_path.write_text(
-        markdown_path.read_text(encoding="utf-8") + "\nboundedperturbation\n",
+        markdown_path.read_text(encoding="utf-8") + "\nboundedperturbation\nDeterministicanalysis\n",
         encoding="utf-8",
     )
 
     errors = _quality_errors(output_dir)
 
     assert any("contains malformed text: boundedperturbation" in error for error in errors)
+    assert any("contains malformed text: deterministicanalysis" in error for error in errors)
+
+
+def test_quality_gate_fails_on_unsafe_generated_claim(tmp_path):
+    output_dir = _generate_bundle(tmp_path)
+    markdown_path = output_dir / "thesis_defense_pack.md"
+    markdown_path.write_text(
+        markdown_path.read_text(encoding="utf-8")
+        + "\nThis system is production-ready for operational SOC deployment.\n",
+        encoding="utf-8",
+    )
+
+    errors = _quality_errors(output_dir)
+
+    assert any("contains unsafe thesis claim: production-ready" in error for error in errors)
+
+
+def test_unsafe_claim_detection_rejects_claim_suffix_bypass():
+    assert _unsafe_claims("The system makes production-ready claims.") == ["production-ready"]
+
+
+def test_unsafe_claim_detection_allows_negated_and_question_framing():
+    text = "\n".join(
+        [
+            "It does not claim deployment readiness for SOC operations.",
+            "It is not a fully autonomous LLM-agent system.",
+            "### Is this a fully autonomous multi-agent system?",
+        ]
+    )
+
+    assert _unsafe_claims(text) == []
+
+
+def test_quality_gate_fails_when_new_artifact_heading_is_missing(tmp_path):
+    output_dir = _generate_bundle(tmp_path)
+    markdown_path = output_dir / "limitations_and_validity.md"
+    markdown_path.write_text(
+        markdown_path.read_text(encoding="utf-8").replace("## Graph Persistence Limitation\n", ""),
+        encoding="utf-8",
+    )
+
+    errors = _quality_errors(output_dir)
+
+    assert any("limitations_and_validity.md missing required headings" in error for error in errors)
+    assert any("## Graph Persistence Limitation" in error for error in errors)
+
+
+def test_quality_gate_fails_when_methodology_safe_framing_is_missing(tmp_path):
+    output_dir = _generate_bundle(tmp_path)
+    markdown_path = output_dir / "methodology_summary.md"
+    markdown_path.write_text(
+        markdown_path.read_text(encoding="utf-8").replace("not a live CTI benchmark", "not a benchmark"),
+        encoding="utf-8",
+    )
+
+    errors = _quality_errors(output_dir)
+
+    assert any("methodology_summary.md missing safe methodology framing" in error for error in errors)
+    assert any("not a live CTI benchmark" in error for error in errors)
 
 
 def test_quality_gate_fails_on_inconsistent_markdown_table(tmp_path):

@@ -80,6 +80,8 @@ agent-python/reports/thesis/
   risk_explanation_traces.md
   results_summary.md
   thesis_results_section.md
+  limitations_and_validity.md
+  thesis_defense_pack.md
   methodology_summary.md
   manifest.json
 ```

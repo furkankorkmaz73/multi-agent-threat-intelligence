@@ -37,7 +37,7 @@ This project is currently best described as:
 
 > **MVP+ / portfolio-grade analyst console**
 
-It is not production-ready or SOC-grade yet, but it is beyond a simple demo. The system can collect real intelligence data, persist it, analyze tens of thousands of records, and explain how prioritization decisions were made.
+It is a research and portfolio prototype rather than a hardened SOC deployment. The system can collect real intelligence data, persist it, analyze tens of thousands of records, and explain how prioritization decisions were made.
 
 Validated local dataset snapshot:
 
@@ -156,7 +156,7 @@ make thesis-scenario
 
 The command writes `agent-python/reports/thesis_scenario_report.json`.
 
-For reproducible thesis artifact generation and validation, see [`docs/thesis_reproducibility.md`](docs/thesis_reproducibility.md).
+For reproducible thesis artifact generation and validation, see [`docs/thesis_reproducibility.md`](docs/thesis_reproducibility.md). For conservative thesis claim boundaries, see [`docs/thesis_limitations.md`](docs/thesis_limitations.md).
 
 ## Production-like E2E Scenario
 
@@ -759,15 +759,15 @@ npm run build
 
 ## Current Limitations
 
-This project is not production-ready yet.
+This project is a research prototype and has not been hardened for protected operational deployment.
 
 Known limitations:
 
 - No authentication or authorization layer
 - MongoDB runs without access control in local development
 - API error handling can be improved when MongoDB is unavailable
-- No CISA KEV or EPSS integration yet
-- No asset inventory or organization-specific exposure context
+- Broader live EPSS/KEV operational validation remains future work
+- Asset-aware risk uses deterministic examples; production-grade asset inventory integration remains future work
 - No VirusTotal, passive DNS, ASN, or geolocation enrichment
 - No campaign clustering for URLhaus IOCs
 - Dread pipeline should be treated as experimental

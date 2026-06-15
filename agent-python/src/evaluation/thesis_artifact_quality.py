@@ -23,6 +23,8 @@ EXPECTED_MANIFEST_KEYS = {
     "risk_explanation_traces_md",
     "results_summary",
     "thesis_results_section",
+    "limitations_and_validity",
+    "thesis_defense_pack",
     "methodology_summary",
 }
 
@@ -112,6 +114,70 @@ MARKDOWN_REGRESSIONS = (
     "evidence,graph",
     "confidence,while",
     "donot",
+    "deterministicanalysis",
+    "acceptedcorrelation",
+    "toinfer",
+    "representsreliability",
+    "analysisperturbs",
+    "casesin",
+    "notto",
+    "doesnot",
+    "orsimilar",
+    "fieldperformance",
+    "operational-riskexamples",
+    "fixtureto",
+)
+
+LIMITATIONS_AND_VALIDITY_HEADINGS = (
+    "# Limitations and Validity",
+    "## Claim Scope",
+    "## Multi-Agent Interpretation",
+    "## Controlled Fixture Limitation",
+    "## Heuristic Scoring Weights Limitation",
+    "## Sensitivity Analysis Limitation",
+    "## Dread Evidence Limitation",
+    "## Asset-Aware Operational Risk Limitation",
+    "## Graph Persistence Limitation",
+    "## Real-World Generalization Limitation",
+    "## Future Work",
+)
+
+THESIS_DEFENSE_PACK_HEADINGS = (
+    "# Thesis Defense Pack",
+    "## One-Paragraph Thesis Claim",
+    "## Contributions",
+    "## What the System Does Not Claim",
+    "## Methodology Summary",
+    "## Evaluation Summary",
+    "## Key Limitations",
+    "## Suggested Defense Q&A",
+)
+
+METHODOLOGY_SAFE_FRAMING = (
+    "deterministic controlled fixture",
+    "behavioral validation",
+    "not a live CTI benchmark",
+    "not statistical calibration",
+    "heuristic engineering choices",
+    "Dread cases in thesis artifacts are local deterministic fixtures",
+    "do not require live Dread access",
+    "False-positive stress cases",
+    "Explanation traces",
+    "Asset-aware examples",
+)
+
+UNSAFE_CLAIM_PHRASES = (
+    "fully autonomous",
+    "production-ready",
+    "SOC-grade",
+    "statistically significant",
+    "statistically significance",
+    "statistical significance",
+    "real-world validated",
+    "optimized weights",
+    "learned optimal weights",
+    "dark web crawler",
+    "outperforms in the real world",
 )
 
 
@@ -131,6 +197,9 @@ def validate_thesis_artifacts(artifact_dir: str | Path) -> dict[str, Any]:
     _validate_traces(root, errors)
     _validate_csv_columns(root / "correlation_decisions.csv", REQUIRED_CORRELATION_COLUMNS, errors)
     _validate_csv_columns(root / "scoring_sensitivity.csv", REQUIRED_SENSITIVITY_COLUMNS, errors)
+    _validate_required_markdown_sections(root / "limitations_and_validity.md", LIMITATIONS_AND_VALIDITY_HEADINGS, errors)
+    _validate_required_markdown_sections(root / "thesis_defense_pack.md", THESIS_DEFENSE_PACK_HEADINGS, errors)
+    _validate_methodology_framing(root / "methodology_summary.md", errors)
     checked_markdown = _validate_markdown_files(root, errors)
 
     if errors:
@@ -246,11 +315,82 @@ def _validate_markdown_files(root: Path, errors: list[str]) -> int:
     for path in sorted(root.glob("*.md")):
         count += 1
         text = path.read_text(encoding="utf-8")
+        lowered_text = text.lower()
         for item in MARKDOWN_REGRESSIONS:
-            if item in text:
+            if item.lower() in lowered_text:
                 errors.append(f"{path.name} contains malformed text: {item}")
+        for item in _unsafe_claims(text):
+            errors.append(f"{path.name} contains unsafe thesis claim: {item}")
         _validate_markdown_tables(path, text, errors)
     return count
+
+
+def _validate_required_markdown_sections(path: Path, headings: Sequence[str], errors: list[str]) -> None:
+    if not path.exists():
+        errors.append(f"required Markdown artifact is missing: {path.name}")
+        return
+    text = path.read_text(encoding="utf-8")
+    missing = [heading for heading in headings if heading not in text]
+    if missing:
+        errors.append(f"{path.name} missing required headings: {', '.join(missing)}")
+
+
+def _validate_methodology_framing(path: Path, errors: list[str]) -> None:
+    if not path.exists():
+        errors.append(f"required Markdown artifact is missing: {path.name}")
+        return
+    text = path.read_text(encoding="utf-8")
+    missing = [item for item in METHODOLOGY_SAFE_FRAMING if item not in text]
+    if missing:
+        errors.append(f"{path.name} missing safe methodology framing: {', '.join(missing)}")
+
+
+def _unsafe_claims(text: str) -> list[str]:
+    unsafe: list[str] = []
+    for paragraph in _claim_units(text):
+        lowered = paragraph.lower()
+        for phrase in UNSAFE_CLAIM_PHRASES:
+            if phrase.lower() in lowered and not _is_safe_limited_claim(lowered, phrase.lower()):
+                unsafe.append(phrase)
+    return sorted(set(unsafe))
+
+
+def _claim_units(text: str) -> list[str]:
+    units: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("|") or stripped.startswith("```"):
+            continue
+        units.extend(part.strip() for part in stripped.split(".") if part.strip())
+    return units
+
+
+def _is_safe_limited_claim(text: str, phrase: str) -> bool:
+    phrase_index = text.find(phrase)
+    if phrase_index < 0:
+        return True
+    prefix = text[max(0, phrase_index - 80):phrase_index]
+    suffix = text[phrase_index + len(phrase): phrase_index + len(phrase) + 80]
+    safe_prefix_markers = (
+        "not ",
+        "not a ",
+        "not an ",
+        "does not ",
+        "do not ",
+        "no ",
+        "without ",
+        "avoid ",
+        "what the system does not claim",
+        "should not ",
+        "not be described as ",
+        "not claim ",
+        "does not claim ",
+        "cannot ",
+    )
+    safe_suffix_markers = (
+        "?",
+    )
+    return any(marker in prefix for marker in safe_prefix_markers) or any(marker in suffix for marker in safe_suffix_markers)
 
 
 def _validate_markdown_tables(path: Path, text: str, errors: list[str]) -> None:

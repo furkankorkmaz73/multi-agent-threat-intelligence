@@ -1,4 +1,5 @@
 from reporting.technical_summary import build_methodology_summary
+from evaluation.thesis_artifacts import _methodology_summary_markdown
 
 
 def test_methodology_summary_contains_expected_sections():
@@ -25,3 +26,21 @@ def test_methodology_summary_contains_expected_sections():
     assert "semantic similarity" in payload["methodology"]["analysis_layers"]
     assert payload["summary"]["record_count"] == 1
     assert payload["markdown"].startswith("# Technical Methodology Summary")
+
+
+def test_generated_thesis_methodology_summary_uses_safe_academic_framing():
+    markdown = _methodology_summary_markdown()
+
+    for expected in (
+        "deterministic controlled fixture",
+        "behavioral validation",
+        "not a live CTI benchmark",
+        "not statistical calibration",
+        "heuristic engineering choices",
+        "Dread cases in thesis artifacts are local deterministic fixtures",
+        "do not require live Dread access",
+        "False-positive stress cases",
+        "Explanation traces",
+        "Asset-aware examples",
+    ):
+        assert expected in markdown

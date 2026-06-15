@@ -56,6 +56,8 @@ reports/thesis/risk_explanation_traces.json
 reports/thesis/risk_explanation_traces.md
 reports/thesis/results_summary.md
 reports/thesis/thesis_results_section.md
+reports/thesis/limitations_and_validity.md
+reports/thesis/thesis_defense_pack.md
 reports/thesis/methodology_summary.md
 ```
 
@@ -78,7 +80,11 @@ reports/thesis/methodology_summary.md
 - `risk_explanation_traces.md`: readable appendix-style explanation traces.
 - `results_summary.md`: compact generated technical results summary.
 - `thesis_results_section.md`: English thesis-ready Results and Evaluation draft section.
+- `limitations_and_validity.md`: generated conservative limitations and validity summary.
+- `thesis_defense_pack.md`: concise defense preparation artifact with claim scope and Q&A.
 - `methodology_summary.md`: concise method summary for the deterministic artifact bundle.
+
+For the static version of the thesis claim boundaries, see [`docs/thesis_limitations.md`](thesis_limitations.md).
 
 ## Interpreting Evaluation Outputs
 
@@ -110,7 +116,7 @@ The quality gate validates structure and formatting of the generated bundle. It 
 A passing run prints a JSON summary similar to:
 
 ```json
-{"artifact_dir":"reports/thesis","checked_files":17,"checked_markdown_files":9,"status":"passed"}
+{"artifact_dir":"reports/thesis","checked_files":19,"checked_markdown_files":11,"status":"passed"}
 ```
 
 The quality gate does not validate statistical correctness, does not prove real-world generalization, and does not change model behavior.
