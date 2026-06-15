@@ -11,6 +11,7 @@ import evaluation.learned_calibration as learned_calibration
 from evaluation.learned_calibration import (
     DATASET_COLUMNS,
     LABEL_COLUMNS,
+    MODEL_FEATURE_COLUMNS,
     build_proxy_label_row,
     build_proxy_label_rows,
     build_feasibility_report,
@@ -19,6 +20,7 @@ from evaluation.learned_calibration import (
     extract_calibration_row,
     read_analyzed_cves_from_mongo,
     strict_validation_errors,
+    train_learned_calibration_models,
 )
 
 
@@ -209,6 +211,9 @@ def test_export_writes_three_output_files(tmp_path):
     summary = tmp_path / "learned_calibration_summary.md"
     baseline = tmp_path / "learned_calibration_baseline_metrics.json"
     baseline_summary = tmp_path / "learned_calibration_baseline_metrics.md"
+    predictions = tmp_path / "learned_calibration_predictions.csv"
+    model_report = tmp_path / "learned_calibration_model_report.json"
+    model_summary = tmp_path / "learned_calibration_model_summary.md"
     assert result["paths"] == {
         "dataset": str(dataset),
         "labels": str(labels),
@@ -216,6 +221,9 @@ def test_export_writes_three_output_files(tmp_path):
         "summary": str(summary),
         "baseline_metrics": str(baseline),
         "baseline_summary": str(baseline_summary),
+        "predictions": str(predictions),
+        "model_report": str(model_report),
+        "model_summary": str(model_summary),
     }
     assert dataset.exists()
     assert labels.exists()
@@ -223,6 +231,9 @@ def test_export_writes_three_output_files(tmp_path):
     assert summary.exists()
     assert baseline.exists()
     assert baseline_summary.exists()
+    assert predictions.exists()
+    assert model_report.exists()
+    assert model_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
     assert rows[0]["cve_id"] == "CVE-2026-1234"
     label_rows = list(csv.DictReader(labels.open(encoding="utf-8")))
@@ -234,6 +245,9 @@ def test_export_writes_three_output_files(tmp_path):
     baseline_payload = json.loads(baseline.read_text(encoding="utf-8"))
     assert baseline_payload["ranking_method"] == "heuristic_risk_score"
     assert "strategy_a" in baseline_payload["strategies"]
+    model_payload = json.loads(model_report.read_text(encoding="utf-8"))
+    assert model_payload["model_type"] == "LogisticRegression"
+    assert model_payload["leakage_guard"]["risk_score_used_as_feature"] is False
     text = summary.read_text(encoding="utf-8")
     assert "Proxy labels are not ground truth" in text
     assert "production `risk_score` behavior is unchanged" in text
@@ -396,3 +410,63 @@ def test_baseline_metrics_include_bucket_distributions():
     assert strategy["risk_bucket_distribution_by_proxy_class"]["low"]["LOW"] == 1
     assert strategy["confidence_distribution_by_proxy_class"]["high"]["high"] == 1
     assert strategy["confidence_distribution_by_proxy_class"]["low"]["low"] == 1
+
+
+def test_model_training_skips_when_sklearn_unavailable(monkeypatch):
+    monkeypatch.setattr(learned_calibration, "_load_sklearn", lambda: None)
+    rows = [_row(cve_id="CVE-1"), _row(cve_id="CVE-2")]
+    labels = build_proxy_label_rows(rows)
+
+    result = train_learned_calibration_models(rows, labels, generated_at="2026-06-16T00:00:00+03:00")
+
+    assert result["predictions"] == []
+    assert result["report"]["status"] == "skipped"
+    assert "scikit-learn is not installed" in result["report"]["skip_reason"]
+
+
+def test_model_features_exclude_risk_score_and_proxy_labels():
+    assert "risk_score" not in MODEL_FEATURE_COLUMNS
+    assert all(not feature.startswith("proxy_") for feature in MODEL_FEATURE_COLUMNS)
+
+
+def test_model_training_single_class_skip_if_sklearn_available():
+    pytest.importorskip("sklearn")
+    rows = [_row(cve_id=f"CVE-{index}", cvss_score=5.0 + index) for index in range(12)]
+    labels = [
+        {**build_proxy_label_row(row), "proxy_binary_high_strategy_a": 0, "proxy_label_strategy_a": "low"}
+        for row in rows
+    ]
+
+    result = train_learned_calibration_models(rows, labels, generated_at="2026-06-16T00:00:00+03:00")
+
+    assert result["report"]["strategies"]["strategy_a"]["status"] == "skipped"
+    assert result["report"]["strategies"]["strategy_a"]["skip_reason"] == "single-class proxy labels"
+
+
+def test_model_training_is_deterministic_if_sklearn_available():
+    pytest.importorskip("sklearn")
+    rows = [
+        _row(
+            cve_id=f"CVE-{index:04d}",
+            cvss_score=9.8 if index % 2 else 4.0,
+            severity_signal=0.98 if index % 2 else 0.4,
+            nlp_context_signal=0.9 if index % 2 else 0.2,
+            recency_signal=0.8 if index % 2 else 0.1,
+            intrinsic_criticality_floor_applied=bool(index % 2),
+        )
+        for index in range(40)
+    ]
+    labels = [
+        {
+            **build_proxy_label_row(row),
+            "proxy_binary_high_strategy_a": int(index % 2 == 1),
+            "proxy_label_strategy_a": "high" if index % 2 == 1 else "low",
+        }
+        for index, row in enumerate(rows)
+    ]
+
+    first = train_learned_calibration_models(rows, labels, generated_at="2026-06-16T00:00:00+03:00")
+    second = train_learned_calibration_models(rows, labels, generated_at="2026-06-16T00:00:00+03:00")
+
+    assert first["predictions"] == second["predictions"]
+    assert first["report"]["strategies"]["strategy_a"]["status"] in {"limited", "meaningful"}

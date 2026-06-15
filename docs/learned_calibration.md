@@ -28,6 +28,9 @@ Generated files:
 - `reports/thesis/learned_calibration_summary.md`
 - `reports/thesis/learned_calibration_baseline_metrics.json`
 - `reports/thesis/learned_calibration_baseline_metrics.md`
+- `reports/thesis/learned_calibration_predictions.csv`
+- `reports/thesis/learned_calibration_model_report.json`
+- `reports/thesis/learned_calibration_model_summary.md`
 
 The dataset includes exported scoring signals, confidence fields, URLhaus candidate accounting, accepted evidence counts, EPSS/KEV coverage flags, and intrinsic-criticality floor indicators when available.
 
@@ -40,6 +43,8 @@ The labels CSV adds deterministic proxy labels for later learned-calibration exp
 These labels are experimental proxies. They are not ground truth and should not be presented as real-world exploitation outcomes.
 
 The baseline metric artifacts compare the existing heuristic `risk_score` ranking against the proxy labels. They report precision@K, recall@K, nDCG@K, high-label coverage, average risk by proxy class, risk bucket distribution by proxy class, and confidence distribution by proxy class. No-positive and tiny-positive strategies are retained with explicit status fields so sparse-label limitations remain visible.
+
+If scikit-learn is available, the model artifacts train an optional deterministic LogisticRegression experiment with fixed random seed `42`. The experiment uses only underlying signals and confidence/completeness fields; it does not use production `risk_score` or proxy-label fields as model inputs. If scikit-learn is unavailable or a proxy strategy has insufficient class diversity, the artifacts are written with a clear skipped status instead of adding a dependency or fabricating results.
 
 Rows are sorted deterministically by CVE identifier. The exporter accepts the current `analysis.*` shape and legacy top-level evidence, feature, and confidence structures so older analyzed records can be inspected without rewriting database contents.
 
