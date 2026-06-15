@@ -146,6 +146,8 @@ cd agent-go && GOTOOLCHAIN=go1.24.0 go test ./... && go mod verify
 
 It also runs lightweight dependency sanity and tracked-file secret checks without external paid services.
 
+For a quick local health check before broader validation, run `make test-python`; it uses the repository Python virtual environment and the same pytest flags as the Makefile target.
+
 ## Thesis Scenario
 
 A deterministic local end-to-end scenario exercises fixture ingestion, worker lifecycle, orchestration, API-compatible result shaping, asset-aware operational risk, and KEV/EPSS evaluation without live MongoDB, OpenAI, network access, or secrets:
