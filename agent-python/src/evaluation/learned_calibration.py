@@ -145,6 +145,22 @@ CASE_STUDY_COLUMNS = [
     "case_group",
 ]
 
+PROXY_SENSITIVITY_COLUMNS = [
+    "epss_high_threshold",
+    "cvss_critical_threshold",
+    "nlp_context_threshold",
+    "recency_threshold",
+    "high_count",
+    "medium_count",
+    "low_count",
+    "high_percentage",
+    "precision_at_10",
+    "precision_at_50",
+    "precision_at_100",
+    "label_stability_vs_strategy_a",
+    "classification",
+]
+
 
 def extract_calibration_row(doc: Mapping[str, Any]) -> dict[str, Any] | None:
     source = deepcopy(dict(doc))
@@ -362,6 +378,9 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     tables_summary_path = output / "learned_calibration_tables.md"
     manifest_path = output / "learned_calibration_manifest.json"
     manifest_summary_path = output / "learned_calibration_manifest.md"
+    proxy_sensitivity_path = output / "learned_calibration_proxy_sensitivity.csv"
+    proxy_sensitivity_json_path = output / "learned_calibration_proxy_sensitivity.json"
+    proxy_sensitivity_summary_path = output / "learned_calibration_proxy_sensitivity.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
@@ -378,6 +397,7 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         ablations=ablations,
         leakage_checks=leakage_checks,
     )
+    proxy_sensitivity = compute_proxy_threshold_sensitivity(rows, label_rows)
     with dataset_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=DATASET_COLUMNS)
         writer.writeheader()
@@ -434,6 +454,13 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     case_studies_summary_path.write_text(render_case_studies_markdown(case_studies), encoding="utf-8")
     tables_path.write_text(json.dumps(publication_tables, indent=2, sort_keys=True, default=str), encoding="utf-8")
     tables_summary_path.write_text(render_publication_tables_markdown(publication_tables), encoding="utf-8")
+    with proxy_sensitivity_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=PROXY_SENSITIVITY_COLUMNS)
+        writer.writeheader()
+        for row in proxy_sensitivity["rows"]:
+            writer.writerow({column: row.get(column, "") for column in PROXY_SENSITIVITY_COLUMNS})
+    proxy_sensitivity_json_path.write_text(json.dumps(proxy_sensitivity, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    proxy_sensitivity_summary_path.write_text(render_proxy_sensitivity_markdown(proxy_sensitivity), encoding="utf-8")
     artifact_manifest = build_learned_calibration_manifest(output)
     manifest_path.write_text(json.dumps(artifact_manifest, indent=2, sort_keys=True, default=str), encoding="utf-8")
     manifest_summary_path.write_text(render_learned_calibration_manifest_markdown(artifact_manifest), encoding="utf-8")
@@ -463,6 +490,9 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "case_studies_summary": str(case_studies_summary_path),
         "tables": str(tables_path),
         "tables_summary": str(tables_summary_path),
+        "proxy_sensitivity": str(proxy_sensitivity_path),
+        "proxy_sensitivity_json": str(proxy_sensitivity_json_path),
+        "proxy_sensitivity_summary": str(proxy_sensitivity_summary_path),
         "manifest": str(manifest_path),
         "manifest_summary": str(manifest_summary_path),
     }
@@ -1348,6 +1378,135 @@ def build_learned_calibration_manifest(output_dir: str | Path) -> dict[str, Any]
     }
 
 
+def proxy_threshold_grid() -> list[dict[str, float]]:
+    return [
+        {
+            "epss_high_threshold": epss,
+            "cvss_critical_threshold": cvss,
+            "nlp_context_threshold": nlp,
+            "recency_threshold": recency,
+        }
+        for epss in (0.5, 0.6, 0.7, 0.8, 0.9)
+        for cvss in (9.0, 9.5, 9.8, 10.0)
+        for nlp in (0.6, 0.7, 0.8, 0.9)
+        for recency in (0.3, 0.5, 0.7, 0.9)
+    ]
+
+
+def compute_proxy_threshold_sensitivity(
+    rows: Sequence[Mapping[str, Any]],
+    label_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    default_labels = {
+        str(row.get("cve_id", "")): str(row.get("proxy_label_strategy_a", ""))
+        for row in label_rows
+    }
+    ranked_rows = sorted(rows, key=lambda row: (-_safe_float(row.get("risk_score")), str(row.get("cve_id", ""))))
+    output_rows = []
+    for thresholds in proxy_threshold_grid():
+        labels = [_threshold_label(row, thresholds) for row in ranked_rows]
+        high_count = sum(1 for label in labels if label == "high")
+        medium_count = sum(1 for label in labels if label == "medium")
+        low_count = sum(1 for label in labels if label == "low")
+        stability = _label_stability(ranked_rows, labels, default_labels)
+        output_rows.append(
+            {
+                **thresholds,
+                "high_count": high_count,
+                "medium_count": medium_count,
+                "low_count": low_count,
+                "high_percentage": round(high_count / max(len(labels), 1), 4),
+                "precision_at_10": _precision_at_k([int(label == "high") for label in labels], 10),
+                "precision_at_50": _precision_at_k([int(label == "high") for label in labels], 50),
+                "precision_at_100": _precision_at_k([int(label == "high") for label in labels], 100),
+                "label_stability_vs_strategy_a": stability,
+                "classification": _threshold_configuration_classification(high_count, len(labels)),
+            }
+        )
+    return {
+        "grid_size": len(output_rows),
+        "rows": output_rows,
+        "notes": [
+            "Proxy sensitivity evaluates alternate label thresholds only.",
+            "Default proxy labels and production risk scoring are unchanged.",
+            "No ML training is performed.",
+        ],
+    }
+
+
+def render_proxy_sensitivity_markdown(payload: Mapping[str, Any]) -> str:
+    rows = list(payload.get("rows") or [])
+    summary: dict[str, int] = {}
+    for row in rows:
+        label = str(row.get("classification", ""))
+        summary[label] = summary.get(label, 0) + 1
+    lines = [
+        "# Learned Calibration Proxy Threshold Sensitivity",
+        "",
+        "This artifact evaluates alternate proxy-label thresholds without changing default labels, production scoring, or evidence gates.",
+        f"- Grid size: `{payload.get('grid_size', 0)}`",
+        "",
+        "## Classification Summary",
+        "",
+    ]
+    lines.extend(f"- `{name}`: {count}" for name, count in sorted(summary.items()))
+    lines.extend(["", "## First 10 Grid Rows", "", "| EPSS | CVSS | NLP | Recency | High | Medium | Low | Stability | Class |", "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"])
+    for row in rows[:10]:
+        lines.append(
+            "| {epss} | {cvss} | {nlp} | {recency} | {high} | {medium} | {low} | {stability} | {classification} |".format(
+                epss=row.get("epss_high_threshold"),
+                cvss=row.get("cvss_critical_threshold"),
+                nlp=row.get("nlp_context_threshold"),
+                recency=row.get("recency_threshold"),
+                high=row.get("high_count"),
+                medium=row.get("medium_count"),
+                low=row.get("low_count"),
+                stability=row.get("label_stability_vs_strategy_a"),
+                classification=row.get("classification"),
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _threshold_label(row: Mapping[str, Any], thresholds: Mapping[str, float]) -> str:
+    if _truthy(row.get("kev_listed")) or _safe_float(row.get("epss_signal")) >= thresholds["epss_high_threshold"]:
+        return "high"
+    if (
+        _safe_float(row.get("cvss_score")) >= thresholds["cvss_critical_threshold"]
+        and _safe_float(row.get("nlp_context_signal")) >= thresholds["nlp_context_threshold"]
+        and _safe_float(row.get("recency_signal")) >= thresholds["recency_threshold"]
+    ):
+        return "high"
+    if _safe_float(row.get("cvss_score")) >= 7.0 or _safe_float(row.get("epss_signal")) >= 0.1 or _safe_float(row.get("nlp_context_signal")) >= 0.5:
+        return "medium"
+    return "low"
+
+
+def _label_stability(
+    rows: Sequence[Mapping[str, Any]],
+    labels: Sequence[str],
+    default_labels: Mapping[str, str],
+) -> float:
+    if not rows:
+        return 0.0
+    matches = sum(
+        1
+        for row, label in zip(rows, labels)
+        if default_labels.get(str(row.get("cve_id", ""))) == label
+    )
+    return round(matches / len(rows), 4)
+
+
+def _threshold_configuration_classification(high_count: int, total: int) -> str:
+    if total <= 0 or high_count < 10:
+        return "too_narrow"
+    high_fraction = high_count / total
+    if high_fraction > 0.25:
+        return "too_broad"
+    return "usable"
+
+
 def render_learned_calibration_manifest_markdown(manifest: Mapping[str, Any]) -> str:
     lines = [
         "# Learned Calibration Artifact Manifest",
@@ -1397,6 +1556,9 @@ def _learned_calibration_artifact_specs() -> list[dict[str, str]]:
         {"group": "tables", "filename": "learned_calibration_tables.md", "description": "Publication table markdown", "usage": "Thesis-ready compact tables."},
         {"group": "case studies", "filename": "learned_calibration_case_studies.csv", "description": "Case-study rows", "usage": "Selected examples for thesis discussion."},
         {"group": "case studies", "filename": "learned_calibration_case_studies.md", "description": "Case-study summary", "usage": "Readable summary of selected case groups."},
+        {"group": "proxy sensitivity", "filename": "learned_calibration_proxy_sensitivity.csv", "description": "Proxy threshold grid rows", "usage": "Sensitivity of proxy labels to threshold choices."},
+        {"group": "proxy sensitivity", "filename": "learned_calibration_proxy_sensitivity.json", "description": "Proxy threshold grid payload", "usage": "Machine-readable proxy threshold sensitivity analysis."},
+        {"group": "proxy sensitivity", "filename": "learned_calibration_proxy_sensitivity.md", "description": "Readable proxy sensitivity summary", "usage": "Thesis discussion of proxy threshold robustness."},
     ]
 
 

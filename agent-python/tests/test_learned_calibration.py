@@ -26,11 +26,13 @@ from evaluation.learned_calibration import (
     compute_baseline_metrics,
     compute_disagreement_cases,
     compute_learned_vs_heuristic_comparison,
+    compute_proxy_threshold_sensitivity,
     compute_ablation_experiments,
     export_from_documents,
     extract_feature_importance,
     model_registry,
     extract_calibration_row,
+    proxy_threshold_grid,
     read_analyzed_cves_from_mongo,
     select_case_studies,
     strict_validation_errors,
@@ -244,6 +246,9 @@ def test_export_writes_three_output_files(tmp_path):
     case_studies_summary = tmp_path / "learned_calibration_case_studies.md"
     tables = tmp_path / "learned_calibration_tables.json"
     tables_summary = tmp_path / "learned_calibration_tables.md"
+    proxy_sensitivity = tmp_path / "learned_calibration_proxy_sensitivity.csv"
+    proxy_sensitivity_json = tmp_path / "learned_calibration_proxy_sensitivity.json"
+    proxy_sensitivity_summary = tmp_path / "learned_calibration_proxy_sensitivity.md"
     manifest = tmp_path / "learned_calibration_manifest.json"
     manifest_summary = tmp_path / "learned_calibration_manifest.md"
     assert result["paths"] == {
@@ -272,6 +277,9 @@ def test_export_writes_three_output_files(tmp_path):
         "case_studies_summary": str(case_studies_summary),
         "tables": str(tables),
         "tables_summary": str(tables_summary),
+        "proxy_sensitivity": str(proxy_sensitivity),
+        "proxy_sensitivity_json": str(proxy_sensitivity_json),
+        "proxy_sensitivity_summary": str(proxy_sensitivity_summary),
         "manifest": str(manifest),
         "manifest_summary": str(manifest_summary),
     }
@@ -300,6 +308,9 @@ def test_export_writes_three_output_files(tmp_path):
     assert case_studies_summary.exists()
     assert tables.exists()
     assert tables_summary.exists()
+    assert proxy_sensitivity.exists()
+    assert proxy_sensitivity_json.exists()
+    assert proxy_sensitivity_summary.exists()
     assert manifest.exists()
     assert manifest_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
@@ -340,6 +351,8 @@ def test_export_writes_three_output_files(tmp_path):
     table_payload = json.loads(tables.read_text(encoding="utf-8"))
     assert "dataset_coverage_summary" in table_payload
     assert "artifact_inventory" in table_payload
+    proxy_payload = json.loads(proxy_sensitivity_json.read_text(encoding="utf-8"))
+    assert proxy_payload["grid_size"] == 320
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert manifest_payload["status"] == "complete"
     assert any(item["group"] == "dataset" for item in manifest_payload["artifacts"])
@@ -930,6 +943,9 @@ def test_learned_calibration_manifest_reports_files(tmp_path):
         "learned_calibration_tables.md",
         "learned_calibration_case_studies.csv",
         "learned_calibration_case_studies.md",
+        "learned_calibration_proxy_sensitivity.csv",
+        "learned_calibration_proxy_sensitivity.json",
+        "learned_calibration_proxy_sensitivity.md",
     ):
         (tmp_path / name).write_text("x", encoding="utf-8")
 
@@ -941,3 +957,34 @@ def test_learned_calibration_manifest_reports_files(tmp_path):
     assert dataset["exists"] is True
     assert dataset["size_bytes"] > 0
     assert dataset["producer"] == "evaluation.learned_calibration"
+
+
+def test_proxy_threshold_grid_size_and_values():
+    grid = proxy_threshold_grid()
+
+    assert len(grid) == 320
+    assert grid[0] == {
+        "epss_high_threshold": 0.5,
+        "cvss_critical_threshold": 9.0,
+        "nlp_context_threshold": 0.6,
+        "recency_threshold": 0.3,
+    }
+
+
+def test_proxy_threshold_sensitivity_stability_and_classification():
+    rows = [
+        _row(cve_id="CVE-H", risk_score=9.0, cvss_score=9.8, nlp_context_signal=0.9, recency_signal=0.8),
+        _row(cve_id="CVE-M", risk_score=5.0, cvss_score=7.0, nlp_context_signal=0.4, recency_signal=0.1),
+        _row(cve_id="CVE-L", risk_score=1.0, cvss_score=3.0, nlp_context_signal=0.1, recency_signal=0.1),
+    ]
+    labels = build_proxy_label_rows(rows)
+
+    result = compute_proxy_threshold_sensitivity(rows, labels)
+
+    assert result["grid_size"] == 320
+    first = result["rows"][0]
+    assert first["high_count"] == 1
+    assert first["medium_count"] == 1
+    assert first["low_count"] == 1
+    assert first["label_stability_vs_strategy_a"] == 1.0
+    assert first["classification"] == "too_narrow"

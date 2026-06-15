@@ -50,6 +50,9 @@ Generated files:
 - `reports/thesis/learned_calibration_tables.md`
 - `reports/thesis/learned_calibration_manifest.json`
 - `reports/thesis/learned_calibration_manifest.md`
+- `reports/thesis/learned_calibration_proxy_sensitivity.csv`
+- `reports/thesis/learned_calibration_proxy_sensitivity.json`
+- `reports/thesis/learned_calibration_proxy_sensitivity.md`
 - `reports/thesis/learned_calibration_quality_report.json`
 - `reports/thesis/learned_calibration_quality_report.md`
 
@@ -84,6 +87,8 @@ The case-study artifacts select thesis-useful examples for discussing high heuri
 The publication-table artifacts collect compact thesis-ready tables for dataset coverage, proxy-label distribution, heuristic baseline metrics, optional learned-model metrics, ablation status, leakage checks, and artifact inventory. Tables are generated from artifact payloads and include unavailable/skipped rows rather than hand-written numbers.
 
 The manifest artifacts list each learned-calibration output with file path, existence status, byte size, producer module, description, and thesis usage note.
+
+The proxy-sensitivity artifacts evaluate deterministic threshold combinations for EPSS, CVSS, NLP context, and recency. They report label counts, high-label percentage, heuristic precision@K, stability versus default Strategy A, and whether a threshold configuration is too broad, too narrow, or usable. The analysis does not change default proxy labels or production scoring.
 
 The quality report artifacts are produced by `make thesis-learned-calibration-quality`. The gate checks required learned-calibration files, JSON parseability, CSV headers, limitation language, experimental framing, unchanged production risk score wording, unchanged evidence-gate wording, and absence of real-world exploitation-proof claims.
 
