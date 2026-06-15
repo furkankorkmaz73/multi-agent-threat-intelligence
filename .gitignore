@@ -79,3 +79,12 @@ temp/
 report_outputs/
 logs/
 backups/
+
+# Local Codex task/control files
+/TASK.md
+/WORKLOG.md
+/RUNLOG.md
+/BLOCKERS.md
+/CODEX_TASK*.md
+/CODEX_WORKLOG*.md
+/codex-tasks/
