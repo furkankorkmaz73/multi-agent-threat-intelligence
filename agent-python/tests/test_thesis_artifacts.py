@@ -153,6 +153,7 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
         "correlation_decisions.csv",
         "case_studies.json",
         "results_summary.md",
+        "thesis_results_section.md",
         "methodology_summary.md",
         "manifest.json",
     }
@@ -161,6 +162,8 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
     assert "scoring_distribution" in first["generated_files"]
     assert "scoring_distribution_md" in first["generated_files"]
     assert "results_summary" in first["generated_files"]
+    assert "thesis_results_section" in first["generated_files"]
+    assert "thesis_results_section_tr" not in first["generated_files"]
     assert (tmp_path / "first" / "benchmark_summary.csv").read_text(encoding="utf-8") == (
         tmp_path / "second" / "benchmark_summary.csv"
     ).read_text(encoding="utf-8")
@@ -169,6 +172,8 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
         tmp_path / "first" / "benchmark_summary.md"
     ).read_text(encoding="utf-8")
     assert "## Evaluation Setup" in (tmp_path / "first" / "results_summary.md").read_text(encoding="utf-8")
+    assert "## Experimental Setup" in (tmp_path / "first" / "thesis_results_section.md").read_text(encoding="utf-8")
+    assert not (tmp_path / "first" / "thesis_results_section_tr.md").exists()
 
 
 def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
@@ -204,6 +209,11 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
     results_path = tmp_path / "out" / "results_summary.md"
     assert results_path == Path(manifest["generated_files"]["results_summary"])
     results_md = results_path.read_text(encoding="utf-8")
+    thesis_path = tmp_path / "out" / "thesis_results_section.md"
+    assert thesis_path == Path(manifest["generated_files"]["thesis_results_section"])
+    assert "thesis_results_section_tr" not in manifest["generated_files"]
+    assert not (tmp_path / "out" / "thesis_results_section_tr.md").exists()
+    thesis_md = thesis_path.read_text(encoding="utf-8")
     assert "Mean KEV Rank" in benchmark_md
     assert "Mean KEV Rank" in ablation_md
     assert "Mean KEVRank" not in ablation_md
@@ -265,3 +275,50 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
         assert regression not in results_md
     _assert_markdown_tables_have_consistent_pipe_counts(results_md)
     _assert_results_ablation_table_is_well_formed(results_md)
+    for heading in (
+        "## Experimental Setup",
+        "## Prioritization Results",
+        "## Scoring Distribution",
+        "## Ablation Analysis",
+        "## Correlation Decision Analysis",
+        "## Case Study Highlights",
+        "## Threats to Validity and Limitations",
+    ):
+        assert heading in thesis_md
+    for strategy in (
+        "cvss_only",
+        "epss_only",
+        "cvss_epss",
+        "kev_first",
+        "model_risk",
+        "model_confidence_weighted",
+        "model_confidence_filtered",
+        "signal_based_model",
+    ):
+        assert strategy in thesis_md
+    for variant in (
+        "without_epss",
+        "without_kev",
+        "without_correlation",
+        "without_graph",
+        "without_recency",
+        "without_confidence_weighting",
+        "without_external_evidence",
+    ):
+        assert variant in thesis_md
+    assert "not be interpreted as a live benchmark" in thesis_md
+    assert "does not support statistical significance claims" in thesis_md
+    assert "requires larger real-world datasets from NVD, EPSS, CISA KEV, URLhaus/Dread, and asset-context sources" in thesis_md
+    for case in (
+        "high_risk_correlated",
+        "medium_cvss_high_epss_kev",
+        "high_cvss_low_external_evidence",
+        "dread_only_manual_review",
+        "asset_applicability_difference",
+    ):
+        assert case in thesis_md
+    assert "| Method | Precision@5 | Recall@5 | NDCG@5 | Mean KEV Rank |" in thesis_md
+    assert "| Variant | Status | Precision@5 | Recall@5 | NDCG@5 | Mean KEV Rank | Explanation |" in thesis_md
+    for regression in BAD_RESULTS_SUMMARY_FORMATTING:
+        assert regression not in thesis_md
+    _assert_markdown_tables_have_consistent_pipe_counts(thesis_md)

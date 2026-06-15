@@ -44,6 +44,9 @@ def generate_thesis_artifacts(
 
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
+    stale_turkish_results = output / "thesis_results_section_tr.md"
+    if stale_turkish_results.exists():
+        stale_turkish_results.unlink()
 
     evaluation = dict(scenario.get("evaluation") or {})
     records = _evaluation_records(evaluation.get("records") or [])
@@ -73,6 +76,7 @@ def generate_thesis_artifacts(
         "correlation_decisions": output / "correlation_decisions.csv",
         "case_studies": output / "case_studies.json",
         "results_summary": output / "results_summary.md",
+        "thesis_results_section": output / "thesis_results_section.md",
         "methodology_summary": output / "methodology_summary.md",
         "manifest": output / "manifest.json",
     }
@@ -104,6 +108,15 @@ def generate_thesis_artifacts(
     write_report_json({"cases": scenario.get("notable_cases") or []}, files["case_studies"])
     files["results_summary"].write_text(
         _results_summary_markdown(
+            scenario=scenario,
+            records=records,
+            baselines=evaluation.get("baselines") or {},
+            ablation_report=ablation_report,
+        ),
+        encoding="utf-8",
+    )
+    files["thesis_results_section"].write_text(
+        _thesis_results_section_markdown(
             scenario=scenario,
             records=records,
             baselines=evaluation.get("baselines") or {},
@@ -461,6 +474,138 @@ def _results_summary_markdown(
         "Real-world validation requires larger NVD, EPSS, CISA KEV, URLhaus/Dread, and asset-context datasets. Dread remains optional and experimental.",
     ]
     return "\n".join(lines) + "\n"
+
+
+def _thesis_results_section_markdown(
+    *,
+    scenario: Mapping[str, Any],
+    records: Sequence[EvaluationRecord],
+    baselines: Mapping[str, Any],
+    ablation_report: Mapping[str, Any],
+) -> str:
+    risk_scores = [record.model_risk_score for record in records]
+    decision_counts = _decision_counts(scenario.get("correlation_decisions") or [])
+    cases = list(scenario.get("notable_cases") or [])
+
+    lines = [
+        "# Results and Evaluation",
+        "",
+        "## Experimental Setup",
+        "",
+        f"The evaluation used a controlled deterministic fixture containing {len(records)} CVE-like records. The artifact generation path has no live network dependency and is intended for behavioral validation rather than live operational benchmarking.",
+        "",
+        "The compared ranking strategies were `cvss_only`, `epss_only`, `cvss_epss`, `kev_first`, `model_risk`, `model_confidence_weighted`, `model_confidence_filtered`, and `signal_based_model`.",
+        "",
+        "## Prioritization Results",
+        "",
+        "In the controlled fixture, the CVSS-only baseline underperforms because high-severity records with weak supporting evidence can be ranked ahead of records with stronger operational exploitation signals. Incorporating EPSS, KEV status, recency, accepted correlation, graph context, and confidence suggests prioritization behavior that is more aligned with operational urgency.",
+        "",
+        _thesis_benchmark_findings_sentence(baselines),
+        "",
+        "The KEV-first baseline is useful because it directly prioritizes known exploited vulnerabilities. However, it is not equivalent to full risk modeling because it does not jointly account for exploit likelihood, correlation quality, graph context, evidence freshness, and confidence.",
+        "",
+        _thesis_benchmark_table(baselines),
+        "",
+        "## Scoring Distribution",
+        "",
+        "- Risk level distribution: " + _risk_level_distribution(records) + ".",
+        f"- Risk score range: min={min(risk_scores) if risk_scores else 0.0}, max={max(risk_scores) if risk_scores else 0.0}, mean={round(mean(risk_scores), 4) if risk_scores else 0.0}.",
+        "- High-CVSS records with weak evidence remain meaningful risks, but they are not automatically treated as CRITICAL.",
+        "- Medium-CVSS records with high EPSS and KEV evidence can outrank high-CVSS records that lack accepted external evidence.",
+        "- Risk and confidence are interpreted separately: risk represents prioritization urgency, while confidence represents the reliability of supporting evidence.",
+        "",
+        "## Ablation Analysis",
+        "",
+        "Removing EPSS weakens prioritization in the controlled fixture, and removing KEV weakens the ranking quality for KEV-listed records. Removing temporal or recency signals also affects ranking behavior. The external-evidence ablation is marked unsupported because exact removal would require recomputing accepted matches, graph context, temporal caps, and confidence.",
+        "",
+        _thesis_ablation_table(ablation_report),
+        "",
+        "## Correlation Decision Analysis",
+        "",
+        "The correlation export separates `accepted`, `rejected`, and `manual_review` outcomes. Accepted correlations can support risk and confidence, while rejected and manual-review cases remain diagnostic and do not automatically increase risk.",
+        "",
+        _markdown_table(
+            ["Decision", "Count"],
+            [[decision, count] for decision, count in sorted(decision_counts.items())],
+            align=["left", "right"],
+        ),
+        "",
+        "## Case Study Highlights",
+        "",
+        _case_study_highlights(cases),
+        "",
+        "## Threats to Validity and Limitations",
+        "",
+        "The fixture is deterministic and controlled, so the results support behavioral validation but should not be interpreted as a live benchmark. The artifact does not support statistical significance claims.",
+        "",
+        "Generalization requires larger real-world datasets from NVD, EPSS, CISA KEV, URLhaus/Dread, and asset-context sources. Dread remains optional and experimental in this methodology.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _thesis_benchmark_findings_sentence(baselines: Mapping[str, Any]) -> str:
+    weighted = _metric(baselines, "model_confidence_weighted", "precision_at_5")
+    model = _metric(baselines, "model_risk", "precision_at_5")
+    if weighted != "" and model != "" and safe_float(weighted) >= safe_float(model):
+        return "The confidence-weighted model shows stronger top-5 prioritization in this fixture."
+    return "The confidence-weighted model is reported separately because confidence changes the interpretation of ranking quality."
+
+
+def _thesis_benchmark_table(baselines: Mapping[str, Any]) -> str:
+    strategies = [
+        "cvss_only",
+        "epss_only",
+        "cvss_epss",
+        "kev_first",
+        "model_risk",
+        "model_confidence_weighted",
+        "model_confidence_filtered",
+        "signal_based_model",
+    ]
+    return _markdown_table(
+        ["Method", "Precision@5", "Recall@5", "NDCG@5", "Mean KEV Rank"],
+        [
+            [
+                strategy,
+                _metric(baselines, strategy, "precision_at_5"),
+                _metric(baselines, strategy, "recall_at_5"),
+                _metric(baselines, strategy, "ndcg_at_5"),
+                _metric(baselines, strategy, "mean_kev_rank"),
+            ]
+            for strategy in strategies
+        ],
+        align=["left", "right", "right", "right", "right"],
+    )
+
+
+def _thesis_ablation_table(ablation_report: Mapping[str, Any]) -> str:
+    rows = []
+    for variant, payload in sorted((ablation_report.get("supported") or {}).items()):
+        metrics = payload.get("metrics") or {}
+        rows.append(
+            [
+                variant,
+                payload.get("status"),
+                metrics.get("precision_at_5", ""),
+                metrics.get("recall_at_5", ""),
+                metrics.get("ndcg_at_5", ""),
+                metrics.get("mean_kev_rank", ""),
+                "",
+            ]
+        )
+    for variant, payload in sorted((ablation_report.get("unsupported") or {}).items()):
+        rows.append([variant, payload.get("status"), "", "", "", "", payload.get("reason")])
+    return _markdown_table(
+        ["Variant", "Status", "Precision@5", "Recall@5", "NDCG@5", "Mean KEV Rank", "Explanation"],
+        rows,
+        align=["left", "left", "right", "right", "right", "right", "left"],
+    )
+
+
+def _risk_level_distribution(records: Sequence[EvaluationRecord]) -> str:
+    counts = _risk_level_counts(records)
+    ordered = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+    return ", ".join(f"{level}={counts[level]}" for level in ordered if level in counts)
 
 
 def _benchmark_findings_sentence(baselines: Mapping[str, Any]) -> str:
