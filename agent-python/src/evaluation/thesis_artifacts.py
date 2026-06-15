@@ -718,6 +718,8 @@ def _case_study_highlights(cases: Sequence[Mapping[str, Any]]) -> str:
         "high_cvss_low_external_evidence",
         "dread_only_manual_review",
         "asset_applicability_difference",
+        "patched_asset_reduction",
+        "compensating_control_reduction",
         "stale_low_risk",
     ]
     by_name = {case.get("case"): case for case in cases}
@@ -741,6 +743,10 @@ def _case_note(case: Mapping[str, Any]) -> str:
         return f"Dread-only evidence remains manual review ({case.get('manual_review_decisions', 0)} decision)."
     if case.get("case") == "asset_applicability_difference":
         return f"Applicable asset score {case.get('applicable_asset_score')}; non-applicable asset score {case.get('non_applicable_asset_score')}."
+    if case.get("case") == "patched_asset_reduction":
+        return f"Patched asset score {case.get('patched_asset_score')}; unpatched asset score {case.get('unpatched_asset_score')}."
+    if case.get("case") == "compensating_control_reduction":
+        return f"Controlled asset score {case.get('controlled_asset_score')}; uncontrolled asset score {case.get('uncontrolled_asset_score')}."
     if case.get("case") == "stale_low_risk":
         return f"Stale case remains lower priority with risk score {case.get('risk_score')}."
     return str(case.get("description", ""))

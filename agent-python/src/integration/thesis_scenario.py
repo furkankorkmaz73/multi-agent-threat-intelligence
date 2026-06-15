@@ -368,7 +368,11 @@ def _notable_cases(repository: InMemoryScenarioRepository, operational_risk: Lis
     high = repository.get_finding_by_entity_id("cve", "CVE-2026-9001")
     stale = repository.get_finding_by_entity_id("cve", "CVE-2015-0001")
     applicable = next(item for item in operational_risk if item["cve_id"] == "CVE-2026-9001" and item["asset_id"] == "asset-vpn-prod")
+    no_controls = next(item for item in operational_risk if item["cve_id"] == "CVE-2026-9001" and item["asset_id"] == "asset-vpn-prod-no-controls")
+    patched = next(item for item in operational_risk if item["cve_id"] == "CVE-2026-9001" and item["asset_id"] == "asset-vpn-prod-patched")
     non_applicable = next(item for item in operational_risk if item["cve_id"] == "CVE-2026-9001" and item["asset_id"] == "asset-backup-internal")
+    controlled_comparison = next(item for item in operational_risk if item["cve_id"] == "CVE-2026-9002" and item["asset_id"] == "asset-vpn-prod")
+    uncontrolled_comparison = next(item for item in operational_risk if item["cve_id"] == "CVE-2026-9002" and item["asset_id"] == "asset-vpn-prod-no-controls")
     return [
         {
             "case": "high_risk_correlated",
@@ -394,14 +398,37 @@ def _notable_cases(repository: InMemoryScenarioRepository, operational_risk: Lis
         {
             "case": "asset_applicability_difference",
             "entity_id": "CVE-2026-9001",
+            "generic_cve_risk_score": applicable["source_risk_score"],
             "applicable_asset_score": applicable["final_operational_risk_score"],
             "non_applicable_asset_score": non_applicable["final_operational_risk_score"],
+            "applicable_asset_id": applicable["asset_id"],
+            "non_applicable_asset_id": non_applicable["asset_id"],
         },
         {
             "case": "non_applicable_asset",
             "entity_id": "CVE-2026-9001",
+            "generic_cve_risk_score": applicable["source_risk_score"],
             "applicable_asset_score": applicable["final_operational_risk_score"],
             "non_applicable_asset_score": non_applicable["final_operational_risk_score"],
+        },
+        {
+            "case": "patched_asset_reduction",
+            "entity_id": "CVE-2026-9001",
+            "generic_cve_risk_score": patched["source_risk_score"],
+            "unpatched_asset_score": no_controls["final_operational_risk_score"],
+            "patched_asset_score": patched["final_operational_risk_score"],
+            "unpatched_asset_id": no_controls["asset_id"],
+            "patched_asset_id": patched["asset_id"],
+        },
+        {
+            "case": "compensating_control_reduction",
+            "entity_id": "CVE-2026-9002",
+            "generic_cve_risk_score": controlled_comparison["source_risk_score"],
+            "uncontrolled_asset_score": uncontrolled_comparison["final_operational_risk_score"],
+            "controlled_asset_score": controlled_comparison["final_operational_risk_score"],
+            "compensating_control_reduction": controlled_comparison["compensating_control_reduction"],
+            "uncontrolled_asset_id": uncontrolled_comparison["asset_id"],
+            "controlled_asset_id": controlled_comparison["asset_id"],
         },
         {
             "case": "stale_low_risk",

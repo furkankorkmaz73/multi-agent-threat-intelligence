@@ -64,6 +64,20 @@ The deterministic thesis fixture uses the same helper as the scorer to derive `r
 
 EPSS is exploit likelihood, not impact [EPSS-FIRST]. KEV is active exploitation evidence, not a complete list of all exploited CVEs [CISA-KEV]. KEV absence therefore means "not listed in KEV", not "not exploited".
 
+## Asset-Aware Operational Risk
+
+Generic CVE risk and asset-aware operational risk are separate outputs. The generic CVE score describes prioritization before organization-specific context is applied. Asset-aware operational risk starts from that generic score and applies deterministic, bounded adjustments for:
+
+- product applicability against the asset inventory
+- asset criticality
+- network exposure
+- patch state
+- active compensating controls
+
+If a vulnerable product is not applicable to an asset, operational risk is treated as non-actionable and is set to zero. If applicability is uncertain, the score and confidence are capped. Public-facing critical assets can increase operational urgency, while patched assets and active compensating controls reduce it. The final operational score remains bounded in `[0, 10]`.
+
+Operational-risk exports preserve both values: `source_risk_score` / `generic_cve_risk_score` for the generic CVE score and `final_operational_risk_score` / `operational_risk_score` for the asset-aware score. The component breakdown includes applicability, match reasons, criticality, exposure, patch-state, compensating-control factors, and `operational_risk_delta`.
+
 ## Confidence Components
 
 Confidence is component-level and auditable. It includes metadata quality, CVSS availability/version, description quality, entity extraction, accepted external evidence, source reliability, evidence freshness, correlation quality, and penalties for weak descriptions, missing CVSS, stale metadata, rejected correlations, and unavailable external signals.

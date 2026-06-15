@@ -203,6 +203,8 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
         "high_cvss_low_external_evidence",
         "dread_only_manual_review",
         "asset_applicability_difference",
+        "patched_asset_reduction",
+        "compensating_control_reduction",
     } <= case_names
     benchmark_md = (tmp_path / "out" / "benchmark_summary.md").read_text(encoding="utf-8")
     ablation_md = (tmp_path / "out" / "ablation_summary.md").read_text(encoding="utf-8")

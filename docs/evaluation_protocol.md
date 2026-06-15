@@ -4,6 +4,12 @@ Evaluation uses deterministic model exports joined with optional local EPSS and 
 
 The built-in thesis fixture is a controlled evaluation set, not a live threat-intelligence benchmark. It is designed to validate ranking behavior, ablation behavior, correlation-decision exports, and artifact generation with reproducible inputs. Real-world validation should use larger NVD, EPSS, and CISA KEV exports.
 
+## Operational Risk Evaluation
+
+Generic CVE risk is evaluated separately from asset-aware operational risk. The deterministic thesis scenario applies vulnerable-product metadata to a small asset inventory so the same CVE can be compared across applicable, non-applicable, patched, exposed, and compensating-control contexts.
+
+Operational risk remains bounded in `[0, 10]` and preserves the generic CVE score as `source_risk_score`. Non-applicable CVE/asset pairs are treated as non-actionable. Patched assets and active compensating controls reduce urgency, while public-facing critical assets increase urgency. These checks validate deterministic behavior, not real-world asset inventory quality.
+
 ## Benchmark Strategies
 
 The benchmark supports:
@@ -44,14 +50,18 @@ The command runs the deterministic thesis fixture scenario and writes:
 ```text
 agent-python/reports/thesis/
   scoring_summary.md
+  scoring_distribution.csv
+  scoring_distribution.md
   benchmark_summary.csv
   benchmark_summary.md
   ablation_summary.csv
   ablation_summary.md
   correlation_decisions.csv
   case_studies.json
+  results_summary.md
+  thesis_results_section.md
   methodology_summary.md
   manifest.json
 ```
 
-The artifact bundle is intended for thesis tables and appendix material. It is not a claim of statistical significance or field prevalence.
+The artifact bundle is intended for thesis tables and appendix material. It is not a claim of statistical significance, field prevalence, or production asset-inventory accuracy. Real-world operational evaluation requires high-quality asset inventory, product/version metadata, patch-state data, exposure classification, and validated compensating-control evidence.

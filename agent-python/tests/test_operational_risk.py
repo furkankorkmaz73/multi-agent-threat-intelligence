@@ -88,25 +88,34 @@ def test_missing_asset_version_is_uncertain():
 
 def test_explicitly_patched_asset_reduces_operational_risk():
     asset = _asset(patch_state=PatchState.PATCHED)
+    unpatched = _asset(patch_state=PatchState.UNPATCHED)
     vulnerable = VulnerableProduct(name="Example VPN Gateway", vendor="Example Corp", versions=("4.2",))
 
     result = OperationalRiskService().assess(_analysis(score=7.0), (vulnerable,), asset)
+    unpatched_result = OperationalRiskService().assess(_analysis(score=7.0), (vulnerable,), unpatched)
 
+    assert result.final_operational_risk_score < unpatched_result.final_operational_risk_score
     assert result.final_operational_risk_score == 5.0
     assert result.component_breakdown["patch_state_contribution"] == -2.0
+    assert result.component_breakdown["patch_state_factor"] == -2.0
     assert result.final_risk_level == "MEDIUM"
 
 
 def test_exposed_critical_asset_increases_operational_risk():
     asset = _asset(criticality=AssetCriticality.CRITICAL, exposure=NetworkExposure.INTERNET, patch_state=PatchState.UNPATCHED)
+    internal_low = _asset(criticality=AssetCriticality.LOW, exposure=NetworkExposure.INTERNAL, patch_state=PatchState.UNPATCHED)
     vulnerable = VulnerableProduct(name="Example VPN Gateway", vendor="Example Corp", versions=("4.2",))
 
     result = OperationalRiskService().assess(_analysis(score=6.2), (vulnerable,), asset)
+    internal_result = OperationalRiskService().assess(_analysis(score=6.2), (vulnerable,), internal_low)
 
+    assert result.final_operational_risk_score > internal_result.final_operational_risk_score
     assert result.final_operational_risk_score == 9.8
     assert result.final_risk_level == "CRITICAL"
     assert result.criticality_contribution == 1.4
     assert result.exposure_contribution == 1.2
+    assert result.component_breakdown["asset_criticality_factor"] == 1.4
+    assert result.component_breakdown["network_exposure_factor"] == 1.2
 
 
 def test_low_criticality_internal_asset_keeps_operational_risk_lower():
@@ -131,11 +140,15 @@ def test_compensating_controls_reduce_but_do_not_erase_severe_applicable_risk():
             CompensatingControl(name="Inactive control", control_type="manual", effectiveness=1.0, active=False),
         ),
     )
+    uncontrolled = _asset(criticality=AssetCriticality.HIGH, exposure=NetworkExposure.INTERNET, patch_state=PatchState.UNPATCHED)
     vulnerable = VulnerableProduct(name="Example VPN Gateway", vendor="Example Corp", versions=("4.2",))
 
     result = OperationalRiskService().assess(_analysis(score=9.0), (vulnerable,), asset)
+    uncontrolled_result = OperationalRiskService().assess(_analysis(score=9.0), (vulnerable,), uncontrolled)
 
+    assert result.final_operational_risk_score < uncontrolled_result.final_operational_risk_score
     assert result.compensating_control_reduction == 2.4
+    assert result.component_breakdown["compensating_control_factor"] == -2.4
     assert result.final_operational_risk_score == 9.6
     assert result.final_risk_level == "CRITICAL"
     assert len(result.component_breakdown["active_compensating_controls"]) == 3
@@ -150,6 +163,9 @@ def test_non_applicable_asset_is_non_actionable_zero_risk():
     assert result.applicability.status == ApplicabilityStatus.NOT_APPLICABLE
     assert result.final_operational_risk_score == 0.0
     assert result.final_risk_level == "LOW"
+    assert result.component_breakdown["asset_applicable"] is False
+    assert result.component_breakdown["operational_risk_score"] == 0.0
+    assert result.component_breakdown["operational_risk_delta"] == -9.5
     assert "non-actionable" in result.explanation
 
 
@@ -173,6 +189,11 @@ def test_operational_risk_serialization_is_bounded_and_deterministic():
 
     assert serialized == result.to_dict()
     assert serialized["source_risk_score"] == 10.0
+    assert serialized["generic_cve_risk_score"] == 10.0
     assert serialized["final_operational_risk_score"] == 10.0
+    assert serialized["operational_risk_score"] == 10.0
+    assert serialized["operational_risk_delta"] == 0.0
+    assert serialized["asset_applicable"] is True
+    assert "version_match" in serialized["asset_match_reason"]
     assert serialized["confidence"] == 0.82
     assert serialized["applicability"]["status"] == "applicable"

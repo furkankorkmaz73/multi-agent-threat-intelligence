@@ -82,16 +82,23 @@ class OperationalRiskResult:
         object.__setattr__(self, "component_breakdown", dict(self.component_breakdown))
 
     def to_dict(self) -> Dict[str, Any]:
+        operational_delta = round(self.final_operational_risk_score - self.source_risk_score, 2)
+        asset_applicable = self.applicability.status == ApplicabilityStatus.APPLICABLE
         return {
             "asset_id": self.asset_id,
             "source_identifier": self.source_identifier,
             "source_risk_score": self.source_risk_score,
+            "generic_cve_risk_score": self.source_risk_score,
             "applicability": self.applicability.to_dict(),
             "criticality_contribution": self.criticality_contribution,
             "exposure_contribution": self.exposure_contribution,
             "patch_state_contribution": self.patch_state_contribution,
             "compensating_control_reduction": self.compensating_control_reduction,
             "final_operational_risk_score": self.final_operational_risk_score,
+            "operational_risk_score": self.final_operational_risk_score,
+            "operational_risk_delta": operational_delta,
+            "asset_applicable": asset_applicable,
+            "asset_match_reason": list(self.applicability.reasons),
             "final_risk_level": self.final_risk_level,
             "confidence": self.confidence,
             "explanation": self.explanation,
@@ -141,19 +148,30 @@ class OperationalRiskService:
 
         final_score = _score(final_score)
         confidence = round(_clamp(confidence), 4)
+        operational_delta = round(final_score - source_score, 2)
+        asset_applicable = applicability.status == ApplicabilityStatus.APPLICABLE
         breakdown = {
             "source_risk_score": source_score,
+            "generic_cve_risk_score": source_score,
             "applicability_status": applicability.status.value,
             "applicability_confidence": round(float(applicability.confidence), 4),
+            "asset_applicable": asset_applicable,
+            "asset_match_reason": list(applicability.reasons),
             "criticality": asset.criticality.value,
             "criticality_contribution": criticality,
+            "asset_criticality_factor": criticality,
             "exposure": asset.exposure.value,
             "exposure_contribution": exposure,
+            "network_exposure_factor": exposure,
             "patch_state": asset.patch_state.value,
             "patch_state_contribution": patch_state,
+            "patch_state_factor": patch_state,
             "compensating_control_reduction": control_reduction,
+            "compensating_control_factor": -control_reduction,
             "active_compensating_controls": [control.to_dict() for control in asset.compensating_controls if control.active],
             "bounded_final_score": final_score,
+            "operational_risk_score": final_score,
+            "operational_risk_delta": operational_delta,
         }
         return OperationalRiskResult(
             asset_id=asset.asset_id,

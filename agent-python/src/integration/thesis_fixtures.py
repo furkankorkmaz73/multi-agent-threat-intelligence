@@ -115,6 +115,42 @@ def fixture_assets() -> List[Asset]:
             tags=("edge", "vpn"),
         ),
         Asset(
+            asset_id="asset-vpn-prod-no-controls",
+            name="vpn-prod-02",
+            environment="prod",
+            owner_team="platform",
+            criticality=AssetCriticality.CRITICAL,
+            exposure=NetworkExposure.INTERNET,
+            installed_products=(
+                InstalledProduct(
+                    name="Example VPN Gateway",
+                    vendor="Example Corp",
+                    version="4.2",
+                    identifiers=("cpe:2.3:a:example:vpn_gateway:4.2:*:*:*:*:*:*:*",),
+                ),
+            ),
+            patch_state=PatchState.UNPATCHED,
+            tags=("edge", "vpn", "control-comparison"),
+        ),
+        Asset(
+            asset_id="asset-vpn-prod-patched",
+            name="vpn-prod-03",
+            environment="prod",
+            owner_team="platform",
+            criticality=AssetCriticality.CRITICAL,
+            exposure=NetworkExposure.INTERNET,
+            installed_products=(
+                InstalledProduct(
+                    name="Example VPN Gateway",
+                    vendor="Example Corp",
+                    version="4.2",
+                    identifiers=("cpe:2.3:a:example:vpn_gateway:4.2:*:*:*:*:*:*:*",),
+                ),
+            ),
+            patch_state=PatchState.PATCHED,
+            tags=("edge", "vpn", "patched-comparison"),
+        ),
+        Asset(
             asset_id="asset-backup-internal",
             name="backup-01",
             environment="prod",

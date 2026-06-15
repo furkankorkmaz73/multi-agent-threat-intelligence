@@ -12,7 +12,7 @@ def test_full_fixture_pipeline_execution_generates_report(tmp_path):
     assert report_path.exists()
     assert json.loads(report_path.read_text(encoding="utf-8")) == report
     assert report["fixture_metadata"] == {
-        "asset_count": 2,
+        "asset_count": 4,
         "cve_count": 3,
         "dread_count": 2,
         "epss_count": 24,
@@ -53,13 +53,36 @@ def test_asset_operational_risk_differs_by_applicability_and_exposure():
     rows = report["asset_operational_risk"]
 
     applicable = next(item for item in rows if item["cve_id"] == "CVE-2026-9001" and item["asset_id"] == "asset-vpn-prod")
+    no_controls = next(item for item in rows if item["cve_id"] == "CVE-2026-9001" and item["asset_id"] == "asset-vpn-prod-no-controls")
+    patched = next(item for item in rows if item["cve_id"] == "CVE-2026-9001" and item["asset_id"] == "asset-vpn-prod-patched")
     non_applicable = next(item for item in rows if item["cve_id"] == "CVE-2026-9001" and item["asset_id"] == "asset-backup-internal")
 
     assert applicable["applicability"]["status"] == "applicable"
     assert applicable["final_operational_risk_score"] > 0
     assert applicable["component_breakdown"]["exposure_contribution"] > 0
+    assert applicable["component_breakdown"]["asset_applicable"] is True
+    assert applicable["source_risk_score"] == applicable["generic_cve_risk_score"]
+    assert applicable["final_operational_risk_score"] == applicable["operational_risk_score"]
+    assert no_controls["compensating_control_reduction"] == 0.0
+    assert applicable["compensating_control_reduction"] > no_controls["compensating_control_reduction"]
+    assert no_controls["final_operational_risk_score"] >= applicable["final_operational_risk_score"]
+    assert patched["final_operational_risk_score"] < no_controls["final_operational_risk_score"]
     assert non_applicable["applicability"]["status"] == "not_applicable"
     assert non_applicable["final_operational_risk_score"] == 0.0
+    assert non_applicable["component_breakdown"]["asset_applicable"] is False
+    assert all(0.0 <= item["final_operational_risk_score"] <= 10.0 for item in rows)
+
+
+def test_asset_operational_risk_case_studies_cover_adjustments():
+    report = run_thesis_scenario()
+    cases = {item["case"]: item for item in report["notable_cases"]}
+
+    assert "asset_applicability_difference" in cases
+    assert cases["asset_applicability_difference"]["applicable_asset_score"] > cases["asset_applicability_difference"]["non_applicable_asset_score"]
+    assert "patched_asset_reduction" in cases
+    assert cases["patched_asset_reduction"]["patched_asset_score"] < cases["patched_asset_reduction"]["unpatched_asset_score"]
+    assert "compensating_control_reduction" in cases
+    assert cases["compensating_control_reduction"]["controlled_asset_score"] < cases["compensating_control_reduction"]["uncontrolled_asset_score"]
 
 
 def test_api_compatible_response_keys_are_preserved():
