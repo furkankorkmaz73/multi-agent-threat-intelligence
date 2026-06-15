@@ -133,6 +133,18 @@ LEAKAGE_CHECK_COLUMNS = [
     "details",
 ]
 
+CASE_STUDY_COLUMNS = [
+    "cve_id",
+    "cvss_score",
+    "risk_score",
+    "confidence",
+    "proxy_label",
+    "learned_probability",
+    "coverage_limitations",
+    "key_reason",
+    "case_group",
+]
+
 
 def extract_calibration_row(doc: Mapping[str, Any]) -> dict[str, Any] | None:
     source = deepcopy(dict(doc))
@@ -344,6 +356,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     leakage_summary_path = output / "learned_calibration_leakage_checks.md"
     thesis_section_path = output / "learned_calibration_thesis_section.md"
     limitations_path = output / "learned_calibration_limitations.md"
+    case_studies_path = output / "learned_calibration_case_studies.csv"
+    case_studies_summary_path = output / "learned_calibration_case_studies.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
@@ -352,6 +366,7 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     feature_importance = extract_feature_importance(model_result["report"], rows)
     ablations = compute_ablation_experiments(model_result["report"])
     leakage_checks = build_leakage_checks(model_result["report"], report, summary_text=render_summary_markdown(report))
+    case_studies = select_case_studies(rows, label_rows, model_result["predictions"])
     with dataset_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=DATASET_COLUMNS)
         writer.writeheader()
@@ -400,6 +415,12 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         encoding="utf-8",
     )
     limitations_path.write_text(render_learned_calibration_limitations(report, model_result["report"], leakage_checks), encoding="utf-8")
+    with case_studies_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=CASE_STUDY_COLUMNS)
+        writer.writeheader()
+        for row in case_studies:
+            writer.writerow({column: row.get(column, "") for column in CASE_STUDY_COLUMNS})
+    case_studies_summary_path.write_text(render_case_studies_markdown(case_studies), encoding="utf-8")
     return {
         "dataset": str(dataset_path),
         "labels": str(labels_path),
@@ -422,6 +443,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "leakage_checks_summary": str(leakage_summary_path),
         "thesis_section": str(thesis_section_path),
         "limitations": str(limitations_path),
+        "case_studies": str(case_studies_path),
+        "case_studies_summary": str(case_studies_summary_path),
     }
 
 
@@ -1168,6 +1191,104 @@ def _strategy_status_summary(metrics: Mapping[str, Any]) -> str:
         f"{strategy}={payload.get('status', '')}"
         for strategy, payload in (metrics.get("strategies") or {}).items()
     )
+
+
+def select_case_studies(
+    rows: Sequence[Mapping[str, Any]],
+    label_rows: Sequence[Mapping[str, Any]],
+    prediction_rows: Sequence[Mapping[str, Any]],
+    *,
+    max_per_group: int = 5,
+) -> list[dict[str, Any]]:
+    label_by_cve = {str(row.get("cve_id", "")): row for row in label_rows}
+    probability_by_cve = _best_probability_by_cve(prediction_rows)
+    groups: dict[str, list[dict[str, Any]]] = {
+        "high_heuristic_risk_and_high_learned_probability": [],
+        "high_heuristic_risk_but_low_learned_probability": [],
+        "low_medium_heuristic_risk_but_high_learned_probability": [],
+        "intrinsic_floor_applied": [],
+        "missing_epss_kev_high_intrinsic_severity": [],
+        "no_accepted_external_evidence_high_proxy_label": [],
+        "rejected_ignored_urlhaus_heavy": [],
+        "low_confidence_but_high_risk": [],
+    }
+    for row in sorted(rows, key=lambda item: (-_safe_float(item.get("risk_score")), str(item.get("cve_id", "")))):
+        cve_id = str(row.get("cve_id", ""))
+        label = str((label_by_cve.get(cve_id) or {}).get("proxy_label_strategy_a", ""))
+        probability = probability_by_cve.get(cve_id)
+        if _safe_float(row.get("risk_score")) >= 7.0 and probability is not None and probability >= 0.7:
+            groups["high_heuristic_risk_and_high_learned_probability"].append(_case_study_row(row, label, probability, "high_heuristic_risk_and_high_learned_probability", "high heuristic risk and high learned probability"))
+        if _safe_float(row.get("risk_score")) >= 7.0 and probability is not None and probability < 0.4:
+            groups["high_heuristic_risk_but_low_learned_probability"].append(_case_study_row(row, label, probability, "high_heuristic_risk_but_low_learned_probability", "high heuristic risk but low learned probability"))
+        if _safe_float(row.get("risk_score")) < 7.0 and probability is not None and probability >= 0.7:
+            groups["low_medium_heuristic_risk_but_high_learned_probability"].append(_case_study_row(row, label, probability, "low_medium_heuristic_risk_but_high_learned_probability", "low or medium heuristic risk but high learned probability"))
+        if _truthy(row.get("intrinsic_criticality_floor_applied")):
+            groups["intrinsic_floor_applied"].append(_case_study_row(row, label, probability, "intrinsic_floor_applied", "intrinsic criticality floor was applied"))
+        if _safe_float(row.get("cvss_score")) >= 9.8 and not _truthy(row.get("epss_available")) and not _truthy(row.get("kev_status_known")):
+            groups["missing_epss_kev_high_intrinsic_severity"].append(_case_study_row(row, label, probability, "missing_epss_kev_high_intrinsic_severity", "high intrinsic severity with missing EPSS/KEV coverage"))
+        if _accepted_external_count(row) == 0 and label == "high":
+            groups["no_accepted_external_evidence_high_proxy_label"].append(_case_study_row(row, label, probability, "no_accepted_external_evidence_high_proxy_label", "high proxy label without accepted external evidence"))
+        if _safe_int(row.get("urlhaus_ignored_low_signal_count")) + _safe_int(row.get("urlhaus_rejected_match_count")) >= 5:
+            groups["rejected_ignored_urlhaus_heavy"].append(_case_study_row(row, label, probability, "rejected_ignored_urlhaus_heavy", "many URLhaus candidates were ignored or rejected"))
+        if _safe_float(row.get("confidence")) < 0.4 and _safe_float(row.get("risk_score")) >= 7.0:
+            groups["low_confidence_but_high_risk"].append(_case_study_row(row, label, probability, "low_confidence_but_high_risk", "high risk with low confidence"))
+    output: list[dict[str, Any]] = []
+    for group in groups.values():
+        output.extend(group[:max_per_group])
+    return output
+
+
+def render_case_studies_markdown(rows: Sequence[Mapping[str, Any]]) -> str:
+    lines = [
+        "# Learned Calibration Case Studies",
+        "",
+        "These case studies are selected for thesis discussion from deterministic learned-calibration artifacts.",
+        "They do not claim ground truth exploitation; they illustrate proxy-label and ranking behavior.",
+        "",
+    ]
+    if not rows:
+        lines.extend(["No case studies matched the configured groups.", ""])
+        return "\n".join(lines)
+    counts: dict[str, int] = {}
+    for row in rows:
+        group = str(row.get("case_group", ""))
+        counts[group] = counts.get(group, 0) + 1
+    lines.append("## Case Groups")
+    lines.append("")
+    for group, count in sorted(counts.items()):
+        lines.append(f"- `{group}`: {count}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _best_probability_by_cve(prediction_rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
+    probabilities: dict[str, float] = {}
+    for row in prediction_rows:
+        cve_id = str(row.get("cve_id", ""))
+        value = _safe_float(row.get("learned_probability"))
+        if cve_id and (cve_id not in probabilities or value > probabilities[cve_id]):
+            probabilities[cve_id] = value
+    return probabilities
+
+
+def _case_study_row(
+    row: Mapping[str, Any],
+    proxy_label: str,
+    probability: float | None,
+    group: str,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "cve_id": row.get("cve_id", ""),
+        "cvss_score": row.get("cvss_score", ""),
+        "risk_score": row.get("risk_score", ""),
+        "confidence": row.get("confidence", ""),
+        "proxy_label": proxy_label,
+        "learned_probability": "" if probability is None else round(probability, 6),
+        "coverage_limitations": row.get("coverage_limitations", ""),
+        "key_reason": reason,
+        "case_group": group,
+    }
 
 
 def _leakage_check(name: str, status: str, details: str) -> dict[str, str]:

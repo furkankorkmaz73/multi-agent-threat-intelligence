@@ -43,6 +43,8 @@ Generated files:
 - `reports/thesis/learned_calibration_leakage_checks.md`
 - `reports/thesis/learned_calibration_thesis_section.md`
 - `reports/thesis/learned_calibration_limitations.md`
+- `reports/thesis/learned_calibration_case_studies.csv`
+- `reports/thesis/learned_calibration_case_studies.md`
 
 The dataset includes exported scoring signals, confidence fields, URLhaus candidate accounting, accepted evidence counts, EPSS/KEV coverage flags, and intrinsic-criticality floor indicators when available.
 
@@ -69,6 +71,8 @@ The ablation artifacts define deterministic feature-removal views such as no CVS
 The leakage-check artifacts document that production `risk_score` is not used as a model feature, proxy-label fields are excluded from model inputs, learned outputs are not written back to MongoDB, Dread live crawling is not used, URLhaus/Dread gates are unchanged, and confidence is not recalibrated by the learned model.
 
 The thesis-section and limitations artifacts provide concise academic prose that can be adapted into the thesis. They emphasize that proxy labels are not ground truth, the experiment is diagnostic thesis material, and the production heuristic risk score remains unchanged and explainable.
+
+The case-study artifacts select thesis-useful examples for discussing high heuristic risk, learned-probability disagreements, intrinsic criticality, missing EPSS/KEV coverage, URLhaus ignored/rejected volume, and low-confidence/high-risk records. They illustrate proxy behavior and do not claim ground truth exploitation.
 
 Rows are sorted deterministically by CVE identifier. The exporter accepts the current `analysis.*` shape and legacy top-level evidence, feature, and confidence structures so older analyzed records can be inspected without rewriting database contents.
 

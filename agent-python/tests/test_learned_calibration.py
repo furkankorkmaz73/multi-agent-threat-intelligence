@@ -10,6 +10,7 @@ from pymongo.errors import ServerSelectionTimeoutError
 import evaluation.learned_calibration as learned_calibration
 from evaluation.learned_calibration import (
     ABLATION_COLUMNS,
+    CASE_STUDY_COLUMNS,
     DATASET_COLUMNS,
     DISAGREEMENT_COLUMNS,
     FEATURE_IMPORTANCE_COLUMNS,
@@ -29,6 +30,7 @@ from evaluation.learned_calibration import (
     model_registry,
     extract_calibration_row,
     read_analyzed_cves_from_mongo,
+    select_case_studies,
     strict_validation_errors,
     train_learned_calibration_models,
 )
@@ -236,6 +238,8 @@ def test_export_writes_three_output_files(tmp_path):
     leakage_summary = tmp_path / "learned_calibration_leakage_checks.md"
     thesis_section = tmp_path / "learned_calibration_thesis_section.md"
     limitations = tmp_path / "learned_calibration_limitations.md"
+    case_studies = tmp_path / "learned_calibration_case_studies.csv"
+    case_studies_summary = tmp_path / "learned_calibration_case_studies.md"
     assert result["paths"] == {
         "dataset": str(dataset),
         "labels": str(labels),
@@ -258,6 +262,8 @@ def test_export_writes_three_output_files(tmp_path):
         "leakage_checks_summary": str(leakage_summary),
         "thesis_section": str(thesis_section),
         "limitations": str(limitations),
+        "case_studies": str(case_studies),
+        "case_studies_summary": str(case_studies_summary),
     }
     assert dataset.exists()
     assert labels.exists()
@@ -280,6 +286,8 @@ def test_export_writes_three_output_files(tmp_path):
     assert leakage_summary.exists()
     assert thesis_section.exists()
     assert limitations.exists()
+    assert case_studies.exists()
+    assert case_studies_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
     assert rows[0]["cve_id"] == "CVE-2026-1234"
     label_rows = list(csv.DictReader(labels.open(encoding="utf-8")))
@@ -312,6 +320,9 @@ def test_export_writes_three_output_files(tmp_path):
     assert "not ground truth exploitation outcomes" in thesis_text
     assert "production risk score remains heuristic" in thesis_text
     assert "does not replace the deterministic scoring engine" in limitations_text
+    case_study_rows = list(csv.DictReader(case_studies.open(encoding="utf-8")))
+    if case_study_rows:
+        assert list(case_study_rows[0].keys()) == CASE_STUDY_COLUMNS
     text = summary.read_text(encoding="utf-8")
     assert "Proxy labels are not ground truth" in text
     assert "production `risk_score` behavior is unchanged" in text
@@ -803,3 +814,42 @@ def test_leakage_checks_fail_when_limitation_text_missing():
     assert checks["status"] == "failed"
     failed = [check for check in checks["checks"] if check["status"] == "failed"]
     assert failed[0]["check"] == "proxy_label_limitations_text_present"
+
+
+def test_case_study_selection_covers_requested_groups():
+    rows = [
+        _row(cve_id="CVE-HH", risk_score=8.0, confidence=0.6, cvss_score=9.0),
+        _row(cve_id="CVE-HL", risk_score=8.1, confidence=0.6, cvss_score=10.0, intrinsic_criticality_floor_applied=True),
+        _row(cve_id="CVE-LH", risk_score=5.0, confidence=0.2, cvss_score=5.0),
+        _row(cve_id="CVE-MISSING", risk_score=8.2, confidence=0.5, cvss_score=10.0, epss_available=False, kev_status_known=False),
+        _row(cve_id="CVE-URL", risk_score=4.5, confidence=0.5, urlhaus_ignored_low_signal_count=6),
+        _row(cve_id="CVE-LOWCONF", risk_score=7.5, confidence=0.2, cvss_score=8.8),
+    ]
+    labels = build_proxy_label_rows(rows)
+    predictions = [
+        {"cve_id": "CVE-HH", "learned_probability": 0.9, "strategy": "strategy_a"},
+        {"cve_id": "CVE-HL", "learned_probability": 0.1, "strategy": "strategy_a"},
+        {"cve_id": "CVE-LH", "learned_probability": 0.95, "strategy": "strategy_a"},
+    ]
+
+    cases = select_case_studies(rows, labels, predictions)
+    groups = {case["case_group"] for case in cases}
+
+    assert "high_heuristic_risk_and_high_learned_probability" in groups
+    assert "high_heuristic_risk_but_low_learned_probability" in groups
+    assert "low_medium_heuristic_risk_but_high_learned_probability" in groups
+    assert "intrinsic_floor_applied" in groups
+    assert "missing_epss_kev_high_intrinsic_severity" in groups
+    assert "rejected_ignored_urlhaus_heavy" in groups
+    assert "low_confidence_but_high_risk" in groups
+
+
+def test_case_study_selection_limits_examples_per_group():
+    rows = [_row(cve_id=f"CVE-{index}", risk_score=8.0, confidence=0.6) for index in range(10)]
+    labels = build_proxy_label_rows(rows)
+    predictions = [{"cve_id": row["cve_id"], "learned_probability": 0.9, "strategy": "strategy_a"} for row in rows]
+
+    cases = select_case_studies(rows, labels, predictions, max_per_group=3)
+    high = [case for case in cases if case["case_group"] == "high_heuristic_risk_and_high_learned_probability"]
+
+    assert len(high) == 3
