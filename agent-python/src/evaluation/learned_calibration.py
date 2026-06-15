@@ -101,6 +101,16 @@ DISAGREEMENT_COLUMNS = [
     "reason",
 ]
 
+FEATURE_IMPORTANCE_COLUMNS = [
+    "strategy",
+    "feature",
+    "coefficient",
+    "absolute_coefficient_rank",
+    "sign_interpretation",
+    "feature_coverage_note",
+    "warning",
+]
+
 
 def extract_calibration_row(doc: Mapping[str, Any]) -> dict[str, Any] | None:
     source = deepcopy(dict(doc))
@@ -304,11 +314,14 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     comparison_summary_path = output / "learned_vs_heuristic_comparison.md"
     disagreements_path = output / "learned_calibration_disagreements.csv"
     disagreements_summary_path = output / "learned_calibration_disagreements.md"
+    feature_importance_path = output / "learned_calibration_feature_importance.csv"
+    feature_importance_summary_path = output / "learned_calibration_feature_importance.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
     comparison = compute_learned_vs_heuristic_comparison(rows, label_rows, model_result["predictions"])
     disagreements = compute_disagreement_cases(rows, label_rows, model_result["predictions"])
+    feature_importance = extract_feature_importance(model_result["report"], rows)
     with dataset_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=DATASET_COLUMNS)
         writer.writeheader()
@@ -338,6 +351,12 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         for row in disagreements:
             writer.writerow({column: row.get(column, "") for column in DISAGREEMENT_COLUMNS})
     disagreements_summary_path.write_text(render_disagreements_markdown(disagreements), encoding="utf-8")
+    with feature_importance_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=FEATURE_IMPORTANCE_COLUMNS)
+        writer.writeheader()
+        for row in feature_importance:
+            writer.writerow({column: row.get(column, "") for column in FEATURE_IMPORTANCE_COLUMNS})
+    feature_importance_summary_path.write_text(render_feature_importance_markdown(feature_importance, model_result["report"]), encoding="utf-8")
     return {
         "dataset": str(dataset_path),
         "labels": str(labels_path),
@@ -352,6 +371,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "learned_vs_heuristic_summary": str(comparison_summary_path),
         "disagreements": str(disagreements_path),
         "disagreements_summary": str(disagreements_summary_path),
+        "feature_importance": str(feature_importance_path),
+        "feature_importance_summary": str(feature_importance_summary_path),
     }
 
 
@@ -777,6 +798,87 @@ def render_disagreements_markdown(rows: Sequence[Mapping[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def extract_feature_importance(
+    model_report: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for strategy, payload in (model_report.get("strategies") or {}).items():
+        coefficients = payload.get("coefficients") or {}
+        if not coefficients:
+            continue
+        ranked = sorted(coefficients.items(), key=lambda item: (-abs(_safe_float(item[1])), item[0]))
+        for rank, (feature, coefficient) in enumerate(ranked, start=1):
+            warning = ""
+            if feature in {"cvss_score", "severity_signal"} and rank <= 2:
+                warning = "model may be dominated by CVSS/severity"
+            output.append(
+                {
+                    "strategy": strategy,
+                    "feature": feature,
+                    "coefficient": coefficient,
+                    "absolute_coefficient_rank": rank,
+                    "sign_interpretation": _coefficient_sign_interpretation(_safe_float(coefficient)),
+                    "feature_coverage_note": _feature_coverage_note(feature, rows),
+                    "warning": warning,
+                }
+            )
+    return output
+
+
+def render_feature_importance_markdown(
+    rows: Sequence[Mapping[str, Any]],
+    model_report: Mapping[str, Any],
+) -> str:
+    lines = [
+        "# Learned Calibration Feature Importance",
+        "",
+        "This artifact exports interpretable LogisticRegression coefficients when a model is trained.",
+        "It is skipped when model training is unavailable or no strategy produces coefficients.",
+        "",
+    ]
+    if not rows:
+        reason = model_report.get("skip_reason") or "no trained model coefficients are available"
+        lines.extend([f"Skipped: {reason}.", ""])
+        return "\n".join(lines)
+    lines.extend(
+        [
+            "| Strategy | Feature | Coefficient | Abs Rank | Interpretation | Warning |",
+            "| --- | --- | ---: | ---: | --- | --- |",
+        ]
+    )
+    for row in rows:
+        lines.append(
+            "| {strategy} | {feature} | {coefficient} | {rank} | {interpretation} | {warning} |".format(
+                strategy=row.get("strategy", ""),
+                feature=row.get("feature", ""),
+                coefficient=row.get("coefficient", ""),
+                rank=row.get("absolute_coefficient_rank", ""),
+                interpretation=row.get("sign_interpretation", ""),
+                warning=row.get("warning", ""),
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _coefficient_sign_interpretation(coefficient: float) -> str:
+    if coefficient > 0:
+        return "positive association with high proxy label"
+    if coefficient < 0:
+        return "negative association with high proxy label"
+    return "no learned directional association"
+
+
+def _feature_coverage_note(feature: str, rows: Sequence[Mapping[str, Any]]) -> str:
+    if not rows:
+        return "no exported rows"
+    missing = sum(1 for row in rows if row.get(feature) in ("", None))
+    if missing == 0:
+        return "available for all exported rows"
+    return f"missing for {missing} of {len(rows)} exported rows"
+
+
 def _disagreement_categories(
     row: Mapping[str, Any],
     *,
@@ -1063,6 +1165,10 @@ def _train_strategy_model(
             "test_class_counts": _class_counts(y_test),
             "metrics": metrics,
             "learned_probability_summary": _probability_summary(probabilities),
+            "coefficients": {
+                feature: round(float(coefficient), 6)
+                for feature, coefficient in zip(MODEL_FEATURE_COLUMNS, model.coef_[0])
+            },
         },
     }
 

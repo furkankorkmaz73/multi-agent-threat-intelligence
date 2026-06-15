@@ -35,6 +35,8 @@ Generated files:
 - `reports/thesis/learned_vs_heuristic_comparison.md`
 - `reports/thesis/learned_calibration_disagreements.csv`
 - `reports/thesis/learned_calibration_disagreements.md`
+- `reports/thesis/learned_calibration_feature_importance.csv`
+- `reports/thesis/learned_calibration_feature_importance.md`
 
 The dataset includes exported scoring signals, confidence fields, URLhaus candidate accounting, accepted evidence counts, EPSS/KEV coverage flags, and intrinsic-criticality floor indicators when available.
 
@@ -53,6 +55,8 @@ If scikit-learn is available, the model artifacts train an optional deterministi
 The learned-vs-heuristic comparison artifacts compare experimental learned probability rankings with the existing heuristic `risk_score` ranking when predictions are available. They report top-K overlap, precision/recall by ranking, rank-correlation estimates, and examples where learned or heuristic ordering differs substantially. If no model predictions are available, the comparison is explicitly marked skipped.
 
 The disagreement artifacts extract thesis-useful examples such as heuristic-high/learned-low, learned-high/heuristic-medium, CVSS-critical cases with lower learned probability, intrinsic-floor disagreements, low-confidence/high-probability cases, and high-risk records with missing accepted external evidence. If learned predictions are unavailable, the CSV is header-only and the Markdown summary explains that no disagreement cases were exported.
+
+The feature-importance artifacts export LogisticRegression coefficients when a strategy is trained. Coefficients are ranked by absolute magnitude, include sign interpretation, include feature coverage notes, and flag cases where CVSS/severity dominates the top coefficients. If no model is trained, the artifact is explicitly skipped.
 
 Rows are sorted deterministically by CVE identifier. The exporter accepts the current `analysis.*` shape and legacy top-level evidence, feature, and confidence structures so older analyzed records can be inspected without rewriting database contents.
 

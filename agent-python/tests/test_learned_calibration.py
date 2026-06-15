@@ -11,6 +11,7 @@ import evaluation.learned_calibration as learned_calibration
 from evaluation.learned_calibration import (
     DATASET_COLUMNS,
     DISAGREEMENT_COLUMNS,
+    FEATURE_IMPORTANCE_COLUMNS,
     LABEL_COLUMNS,
     MODEL_FEATURE_COLUMNS,
     build_proxy_label_row,
@@ -20,6 +21,7 @@ from evaluation.learned_calibration import (
     compute_disagreement_cases,
     compute_learned_vs_heuristic_comparison,
     export_from_documents,
+    extract_feature_importance,
     extract_calibration_row,
     read_analyzed_cves_from_mongo,
     strict_validation_errors,
@@ -221,6 +223,8 @@ def test_export_writes_three_output_files(tmp_path):
     comparison_summary = tmp_path / "learned_vs_heuristic_comparison.md"
     disagreements = tmp_path / "learned_calibration_disagreements.csv"
     disagreements_summary = tmp_path / "learned_calibration_disagreements.md"
+    importance = tmp_path / "learned_calibration_feature_importance.csv"
+    importance_summary = tmp_path / "learned_calibration_feature_importance.md"
     assert result["paths"] == {
         "dataset": str(dataset),
         "labels": str(labels),
@@ -235,6 +239,8 @@ def test_export_writes_three_output_files(tmp_path):
         "learned_vs_heuristic_summary": str(comparison_summary),
         "disagreements": str(disagreements),
         "disagreements_summary": str(disagreements_summary),
+        "feature_importance": str(importance),
+        "feature_importance_summary": str(importance_summary),
     }
     assert dataset.exists()
     assert labels.exists()
@@ -249,6 +255,8 @@ def test_export_writes_three_output_files(tmp_path):
     assert comparison_summary.exists()
     assert disagreements.exists()
     assert disagreements_summary.exists()
+    assert importance.exists()
+    assert importance_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
     assert rows[0]["cve_id"] == "CVE-2026-1234"
     label_rows = list(csv.DictReader(labels.open(encoding="utf-8")))
@@ -268,6 +276,9 @@ def test_export_writes_three_output_files(tmp_path):
     disagreement_rows = list(csv.DictReader(disagreements.open(encoding="utf-8")))
     if disagreement_rows:
         assert list(disagreement_rows[0].keys()) == DISAGREEMENT_COLUMNS
+    importance_rows = list(csv.DictReader(importance.open(encoding="utf-8")))
+    if importance_rows:
+        assert list(importance_rows[0].keys()) == FEATURE_IMPORTANCE_COLUMNS
     text = summary.read_text(encoding="utf-8")
     assert "Proxy labels are not ground truth" in text
     assert "production `risk_score` behavior is unchanged" in text
@@ -619,3 +630,32 @@ def test_disagreement_cases_empty_when_predictions_unavailable():
     labels = build_proxy_label_rows(rows)
 
     assert compute_disagreement_cases(rows, labels, []) == []
+
+
+def test_feature_importance_extracts_and_sorts_coefficients():
+    report = {
+        "strategies": {
+            "strategy_a": {
+                "status": "limited",
+                "coefficients": {
+                    "severity_signal": 0.2,
+                    "epss_signal": -1.3,
+                    "recency_signal": 0.7,
+                },
+            }
+        }
+    }
+
+    rows = [_row(epss_signal=0.4, severity_signal=1.0, recency_signal=0.8)]
+    importance = extract_feature_importance(report, rows)
+
+    assert [row["feature"] for row in importance] == ["epss_signal", "recency_signal", "severity_signal"]
+    assert importance[0]["absolute_coefficient_rank"] == 1
+    assert importance[0]["sign_interpretation"] == "negative association with high proxy label"
+    assert importance[0]["feature_coverage_note"] == "available for all exported rows"
+
+
+def test_feature_importance_skips_without_coefficients():
+    report = {"strategies": {"strategy_a": {"status": "skipped"}}}
+
+    assert extract_feature_importance(report, [_row()]) == []
