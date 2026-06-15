@@ -86,6 +86,8 @@ def generate_thesis_artifacts(
         "ablation_summary_md": output / "ablation_summary.md",
         "correlation_decisions": output / "correlation_decisions.csv",
         "case_studies": output / "case_studies.json",
+        "risk_explanation_traces": output / "risk_explanation_traces.json",
+        "risk_explanation_traces_md": output / "risk_explanation_traces.md",
         "results_summary": output / "results_summary.md",
         "thesis_results_section": output / "thesis_results_section.md",
         "methodology_summary": output / "methodology_summary.md",
@@ -123,6 +125,12 @@ def generate_thesis_artifacts(
         files["correlation_decisions"],
     )
     write_report_json({"cases": scenario.get("notable_cases") or []}, files["case_studies"])
+    explanation_traces = _risk_explanation_traces(scenario, records)
+    write_report_json({"traces": explanation_traces}, files["risk_explanation_traces"])
+    files["risk_explanation_traces_md"].write_text(
+        _risk_explanation_traces_markdown(explanation_traces),
+        encoding="utf-8",
+    )
     files["results_summary"].write_text(
         _results_summary_markdown(
             scenario=scenario,
@@ -374,6 +382,313 @@ def _scoring_distribution_markdown(records: Sequence[EvaluationRecord], rows: Se
         f"- CSV rows emitted: {len(rows)}.",
     ]
     return "\n".join(lines) + "\n"
+
+
+def _risk_explanation_traces(
+    scenario: Mapping[str, Any],
+    records: Sequence[EvaluationRecord],
+) -> list[dict[str, Any]]:
+    decisions_by_cve: dict[str, list[Mapping[str, Any]]] = {}
+    for decision in scenario.get("correlation_decisions") or []:
+        decisions_by_cve.setdefault(str(decision.get("source_identifier")), []).append(decision)
+
+    assets_by_cve: dict[str, list[Mapping[str, Any]]] = {}
+    for row in scenario.get("asset_operational_risk") or []:
+        assets_by_cve.setdefault(str(row.get("cve_id") or row.get("source_identifier")), []).append(row)
+
+    traces = []
+    seen_cves: set[str] = set()
+    for record in sorted(records, key=lambda item: item.cve_id):
+        seen_cves.add(record.cve_id)
+        decisions = sorted(
+            decisions_by_cve.get(record.cve_id, []),
+            key=lambda item: (_decision_sort_key(str(item.get("status") or item.get("decision"))), str(item.get("target_identifier"))),
+        )
+        asset_rows = assets_by_cve.get(record.cve_id, [])
+        contributors = _risk_contributors(record)
+        accepted_count = sum(int(item.get("accepted_evidence_count", 0) or 0) for item in decisions)
+        manual_count = sum(int(item.get("manual_review_evidence_count", 0) or 0) for item in decisions)
+        rejected_count = sum(int(item.get("rejected_evidence_count", 0) or 0) for item in decisions)
+        dread_present = bool(
+            _feature_value(record, "related_dread_count", 0)
+            or any(item.get("dread_evidence_present") for item in decisions)
+        )
+        confidence_cap_reason = next(
+            (str(item.get("confidence_cap_reason")) for item in decisions if item.get("confidence_cap_reason")),
+            "",
+        )
+        traces.append(
+            {
+                "cve_id": record.cve_id,
+                "cvss_score": record.cvss_score,
+                "epss_score": record.epss_score,
+                "is_kev": record.is_kev,
+                "normalized_signals": {
+                    name: _feature_value(record, name, 0.0)
+                    for name in (
+                        "severity_signal",
+                        "epss_signal",
+                        "kev_signal",
+                        "recency_signal",
+                        "correlation_signal",
+                        "graph_signal",
+                        "nlp_context_signal",
+                    )
+                },
+                "risk_signal_weights": _feature_value(record, "risk_signal_weights", {}),
+                "weighted_signal_contributions": _feature_value(record, "risk_signal_contributions", {}),
+                "generic_cve_risk_score": record.model_risk_score,
+                "confidence": record.model_confidence,
+                "risk_level": _risk_level(record.model_risk_score),
+                "top_positive_risk_contributors": contributors,
+                "top_evidence_decisions": [_decision_trace(item) for item in decisions[:8]],
+                "accepted_evidence_count": accepted_count,
+                "manual_review_evidence_count": manual_count,
+                "rejected_evidence_count": rejected_count,
+                "dread_evidence_present": dread_present,
+                "confidence_cap_reason": confidence_cap_reason,
+                "asset_operational_risk_examples": _asset_examples(asset_rows),
+                "explanation": _trace_explanation(record, contributors, accepted_count, manual_count, rejected_count, confidence_cap_reason, asset_rows),
+            }
+        )
+    for row in sorted(scenario.get("source_results") or [], key=lambda item: str(item.get("entity_id"))):
+        cve_id = str(row.get("entity_id") or "")
+        if not cve_id.startswith("CVE-") or cve_id in seen_cves:
+            continue
+        decisions = sorted(
+            decisions_by_cve.get(cve_id, []),
+            key=lambda item: (_decision_sort_key(str(item.get("status") or item.get("decision"))), str(item.get("target_identifier"))),
+        )
+        asset_rows = assets_by_cve.get(cve_id, [])
+        accepted_count = sum(int(item.get("accepted_evidence_count", 0) or 0) for item in decisions)
+        manual_count = sum(int(item.get("manual_review_evidence_count", 0) or 0) for item in decisions)
+        rejected_count = sum(int(item.get("rejected_evidence_count", 0) or 0) for item in decisions)
+        confidence_cap_reason = next(
+            (str(item.get("confidence_cap_reason")) for item in decisions if item.get("confidence_cap_reason")),
+            "",
+        )
+        traces.append(
+            {
+                "cve_id": cve_id,
+                "cvss_score": None,
+                "epss_score": None,
+                "is_kev": False,
+                "normalized_signals": {},
+                "risk_signal_weights": {},
+                "weighted_signal_contributions": {},
+                "generic_cve_risk_score": row.get("risk_score", 0.0),
+                "confidence": row.get("confidence", 0.0),
+                "risk_level": row.get("risk_level") or _risk_level(safe_float(row.get("risk_score"))),
+                "top_positive_risk_contributors": [],
+                "top_evidence_decisions": [_decision_trace(item) for item in decisions[:8]],
+                "accepted_evidence_count": accepted_count,
+                "manual_review_evidence_count": manual_count,
+                "rejected_evidence_count": rejected_count,
+                "dread_evidence_present": any(item.get("dread_evidence_present") for item in decisions),
+                "confidence_cap_reason": confidence_cap_reason,
+                "asset_operational_risk_examples": _asset_examples(asset_rows),
+                "explanation": _fallback_trace_explanation(cve_id, row, accepted_count, manual_count, rejected_count, confidence_cap_reason, asset_rows),
+            }
+        )
+    return traces
+
+
+def _risk_explanation_traces_markdown(traces: Sequence[Mapping[str, Any]]) -> str:
+    required = {
+        "CVE-2026-9001",
+        "CVE-2026-9002",
+        "CVE-2026-9007",
+        "CVE-2026-9017",
+        "CVE-2015-0001",
+    }
+    rows = [trace for trace in traces if trace.get("cve_id") in required]
+    lines = [
+        "# Risk Explanation Traces",
+        "",
+        "Deterministic traces link exported normalized signals, evidence-gate decisions, confidence context, and asset-aware operational risk examples.",
+        "",
+    ]
+    for trace in rows:
+        lines.extend(
+            [
+                f"## {trace.get('cve_id')}",
+                f"- Generic risk: {trace.get('generic_cve_risk_score')}",
+                f"- Confidence: {trace.get('confidence')}",
+                f"- Risk level: {trace.get('risk_level')}",
+                f"- Evidence counts: accepted={trace.get('accepted_evidence_count')}, manual_review={trace.get('manual_review_evidence_count')}, rejected={trace.get('rejected_evidence_count')}",
+                f"- Confidence cap: {trace.get('confidence_cap_reason') or 'none'}",
+                "",
+                "Main contributors:",
+                _markdown_table(
+                    ["Signal", "Contribution", "Weight", "Signal Value"],
+                    [
+                        [
+                            item.get("signal"),
+                            item.get("contribution"),
+                            item.get("weight"),
+                            item.get("normalized_signal"),
+                        ]
+                        for item in trace.get("top_positive_risk_contributors", [])[:5]
+                    ],
+                    align=["left", "right", "right", "right"],
+                ),
+                "",
+                "Evidence decisions:",
+                _markdown_table(
+                    ["Target", "Source", "Decision", "Reason", "Gate", "Confidence"],
+                    [
+                        [
+                            item.get("target_identifier"),
+                            item.get("source"),
+                            item.get("decision"),
+                            item.get("primary_reason"),
+                            item.get("evidence_gate_passed"),
+                            item.get("final_confidence"),
+                        ]
+                        for item in trace.get("top_evidence_decisions", [])[:5]
+                    ]
+                    or [["none", "", "", "", "", ""]],
+                    align=["left", "left", "left", "left", "left", "right"],
+                ),
+                "",
+                "Asset-aware operational risk:",
+                _markdown_table(
+                    ["Asset", "Applicable", "Operational Risk", "Delta", "Level"],
+                    [
+                        [
+                            item.get("asset_id"),
+                            item.get("asset_applicable"),
+                            item.get("operational_risk_score"),
+                            item.get("operational_risk_delta"),
+                            item.get("final_risk_level"),
+                        ]
+                        for item in trace.get("asset_operational_risk_examples", [])[:5]
+                    ]
+                    or [["none", "", "", "", ""]],
+                    align=["left", "left", "right", "right", "left"],
+                ),
+                "",
+                f"Explanation: {trace.get('explanation')}",
+                "",
+            ]
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _risk_contributors(record: EvaluationRecord) -> list[dict[str, Any]]:
+    contributions = _feature_value(record, "risk_signal_contributions", {})
+    weights = _feature_value(record, "risk_signal_weights", {})
+    if not isinstance(contributions, Mapping):
+        contributions = {}
+    if not isinstance(weights, Mapping):
+        weights = {}
+    rows = []
+    for signal, contribution in contributions.items():
+        value = safe_float(contribution)
+        if value <= 0:
+            continue
+        rows.append(
+            {
+                "signal": signal,
+                "contribution": round(value, 6),
+                "weight": weights.get(signal, ""),
+                "normalized_signal": _feature_value(record, signal, ""),
+            }
+        )
+    return sorted(rows, key=lambda item: (-safe_float(item["contribution"]), str(item["signal"])))
+
+
+def _decision_trace(decision: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "target_identifier": decision.get("target_identifier"),
+        "source": decision.get("source") or decision.get("evidence_source"),
+        "decision": decision.get("decision") or decision.get("status"),
+        "primary_reason": decision.get("primary_reason") or (decision.get("reasons") or [""])[0],
+        "final_confidence": decision.get("final_confidence"),
+        "evidence_gate_passed": decision.get("evidence_gate_passed"),
+        "evidence_gate_reason": decision.get("evidence_gate_reason"),
+        "rejection_reason": decision.get("rejection_reason"),
+        "manual_review_reason": decision.get("manual_review_reason"),
+        "evidence_reliability": decision.get("evidence_reliability"),
+        "dread_evidence_present": decision.get("dread_evidence_present"),
+        "dread_only_evidence": decision.get("dread_only_evidence"),
+        "corroborated_dread_evidence": decision.get("corroborated_dread_evidence"),
+        "confidence_cap_reason": decision.get("confidence_cap_reason"),
+        "false_positive_control": decision.get("false_positive_control"),
+    }
+
+
+def _asset_examples(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    selected: list[Mapping[str, Any]] = []
+    for predicate in (
+        lambda row: bool(row.get("asset_applicable")),
+        lambda row: not bool(row.get("asset_applicable")),
+        lambda row: safe_float(row.get("patch_state_contribution")) < 0,
+        lambda row: safe_float(row.get("compensating_control_reduction")) > 0,
+    ):
+        match = next((row for row in rows if predicate(row) and row not in selected), None)
+        if match is not None:
+            selected.append(match)
+    for row in sorted(rows, key=lambda item: str(item.get("asset_id"))):
+        if len(selected) >= 5:
+            break
+        if row not in selected:
+            selected.append(row)
+    examples = []
+    for row in selected[:5]:
+        examples.append(
+            {
+                "asset_id": row.get("asset_id"),
+                "asset_applicable": row.get("asset_applicable"),
+                "asset_match_reason": row.get("asset_match_reason"),
+                "generic_cve_risk_score": row.get("generic_cve_risk_score") or row.get("source_risk_score"),
+                "operational_risk_score": row.get("final_operational_risk_score") or row.get("operational_risk_score"),
+                "operational_risk_delta": row.get("operational_risk_delta"),
+                "final_risk_level": row.get("final_risk_level"),
+                "confidence": row.get("confidence"),
+                "explanation": row.get("explanation"),
+            }
+        )
+    return examples
+
+
+def _trace_explanation(
+    record: EvaluationRecord,
+    contributors: Sequence[Mapping[str, Any]],
+    accepted_count: int,
+    manual_count: int,
+    rejected_count: int,
+    confidence_cap_reason: str,
+    asset_rows: Sequence[Mapping[str, Any]],
+) -> str:
+    top = ", ".join(str(item.get("signal")) for item in contributors[:3]) or "no positive exported signal contributions"
+    evidence = f"{accepted_count} accepted, {manual_count} manual-review, and {rejected_count} rejected evidence decision(s)"
+    cap = f" Confidence is capped by {confidence_cap_reason}." if confidence_cap_reason else ""
+    assets = f" {len(asset_rows)} asset-context row(s) show operational risk can differ from generic CVE risk." if asset_rows else ""
+    return f"{record.cve_id} risk is driven mainly by {top}. The trace includes {evidence}.{cap}{assets}"
+
+
+def _fallback_trace_explanation(
+    cve_id: str,
+    row: Mapping[str, Any],
+    accepted_count: int,
+    manual_count: int,
+    rejected_count: int,
+    confidence_cap_reason: str,
+    asset_rows: Sequence[Mapping[str, Any]],
+) -> str:
+    cap = f" Confidence is capped by {confidence_cap_reason}." if confidence_cap_reason else ""
+    assets = f" {len(asset_rows)} asset-context row(s) show operational risk context." if asset_rows else ""
+    return (
+        f"{cve_id} is traced from scenario source results rather than benchmark evaluation records. "
+        f"Generic risk is {row.get('risk_score')} with confidence {row.get('confidence')}; "
+        f"the trace includes {accepted_count} accepted, {manual_count} manual-review, and {rejected_count} rejected evidence decision(s)."
+        f"{cap}{assets}"
+    )
+
+
+def _decision_sort_key(status: str) -> int:
+    return {"accepted": 0, "manual_review": 1, "rejected": 2}.get(status, 3)
 
 
 def _write_scoring_sensitivity(report: Mapping[str, Any], path: Path) -> None:

@@ -47,6 +47,12 @@ The thesis artifacts include an offline scoring sensitivity analysis. It recompu
 
 The analysis reports top-5 overlap with the canonical baseline and whether qualitative guardrails remain true. It probes robustness to reasonable weight changes, but it is not statistical calibration and does not replace larger real-world validation.
 
+## Explanation Traces
+
+The thesis artifacts include deterministic risk explanation traces generated from the structured scenario report. These traces link CVSS, EPSS, KEV, normalized scoring signals, weighted contributions, evidence-gate decisions, confidence context, and asset-aware operational-risk examples.
+
+The traces support auditability and appendix/debugging use. They do not change scoring behavior and should not be interpreted as statistical validation.
+
 ## Thesis Artifacts
 
 Run:
@@ -70,6 +76,8 @@ agent-python/reports/thesis/
   ablation_summary.md
   correlation_decisions.csv
   case_studies.json
+  risk_explanation_traces.json
+  risk_explanation_traces.md
   results_summary.md
   thesis_results_section.md
   methodology_summary.md

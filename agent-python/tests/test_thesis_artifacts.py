@@ -162,6 +162,8 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
         "ablation_summary.md",
         "correlation_decisions.csv",
         "case_studies.json",
+        "risk_explanation_traces.json",
+        "risk_explanation_traces.md",
         "results_summary.md",
         "thesis_results_section.md",
         "methodology_summary.md",
@@ -174,6 +176,8 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
     assert "scoring_sensitivity" in first["generated_files"]
     assert "scoring_sensitivity_md" in first["generated_files"]
     assert "results_summary" in first["generated_files"]
+    assert "risk_explanation_traces" in first["generated_files"]
+    assert "risk_explanation_traces_md" in first["generated_files"]
     assert "thesis_results_section" in first["generated_files"]
     assert "thesis_results_section_tr" not in first["generated_files"]
     assert (tmp_path / "first" / "benchmark_summary.csv").read_text(encoding="utf-8") == (
@@ -181,6 +185,7 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
     ).read_text(encoding="utf-8")
     assert "Top 10 Model-Risk CVEs" in (tmp_path / "first" / "scoring_summary.md").read_text(encoding="utf-8")
     assert "# Scoring Sensitivity Analysis" in (tmp_path / "first" / "scoring_sensitivity.md").read_text(encoding="utf-8")
+    assert "# Risk Explanation Traces" in (tmp_path / "first" / "risk_explanation_traces.md").read_text(encoding="utf-8")
     assert "| Strategy | Top 5 CVEs | Precision@5 | Recall@5 | NDCG@5 | Mean KEV Rank |" in (
         tmp_path / "first" / "benchmark_summary.md"
     ).read_text(encoding="utf-8")
@@ -239,6 +244,41 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
     ablation_md = (tmp_path / "out" / "ablation_summary.md").read_text(encoding="utf-8")
     sensitivity_csv = (tmp_path / "out" / "scoring_sensitivity.csv").read_text(encoding="utf-8")
     sensitivity_md = (tmp_path / "out" / "scoring_sensitivity.md").read_text(encoding="utf-8")
+    trace_path = tmp_path / "out" / "risk_explanation_traces.json"
+    trace_md_path = tmp_path / "out" / "risk_explanation_traces.md"
+    traces = json.loads(trace_path.read_text(encoding="utf-8"))["traces"]
+    traces_by_cve = {trace["cve_id"]: trace for trace in traces}
+    assert trace_path == Path(manifest["generated_files"]["risk_explanation_traces"])
+    assert trace_md_path == Path(manifest["generated_files"]["risk_explanation_traces_md"])
+    required_traces = {
+        "CVE-2026-9001",
+        "CVE-2026-9002",
+        "CVE-2026-9007",
+        "CVE-2026-9017",
+        "CVE-2015-0001",
+    }
+    assert required_traces <= set(traces_by_cve)
+    for cve_id in required_traces:
+        trace = traces_by_cve[cve_id]
+        assert "generic_cve_risk_score" in trace
+        assert "confidence" in trace
+        assert "risk_level" in trace
+        assert isinstance(trace["top_positive_risk_contributors"], list)
+        assert "top_evidence_decisions" in trace
+        assert "asset_operational_risk_examples" in trace
+        assert trace["explanation"]
+    dread_trace = traces_by_cve["CVE-2026-9017"]
+    assert dread_trace["dread_evidence_present"] is True
+    assert dread_trace["confidence_cap_reason"] == "dread_manual_review_cap"
+    assert dread_trace["manual_review_evidence_count"] >= 1
+    high_trace = traces_by_cve["CVE-2026-9001"]
+    assert any(item["asset_applicable"] is True for item in high_trace["asset_operational_risk_examples"])
+    assert any(item["asset_applicable"] is False for item in high_trace["asset_operational_risk_examples"])
+    trace_md = trace_md_path.read_text(encoding="utf-8")
+    assert "# Risk Explanation Traces" in trace_md
+    for cve_id in required_traces:
+        assert f"## {cve_id}" in trace_md
+    _assert_markdown_tables_have_consistent_pipe_counts(trace_md)
     results_path = tmp_path / "out" / "results_summary.md"
     assert results_path == Path(manifest["generated_files"]["results_summary"])
     results_md = results_path.read_text(encoding="utf-8")
