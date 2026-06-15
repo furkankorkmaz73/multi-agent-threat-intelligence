@@ -648,6 +648,7 @@ def train_learned_calibration_models(
                 "risk_score_used_as_feature": "risk_score" in MODEL_FEATURE_COLUMNS,
                 "proxy_label_fields_used_as_features": [],
             },
+            "model_registry": model_registry(sklearn_bundle),
             "strategies": strategies,
             "interpretation": _model_interpretation(strategies),
         },
@@ -1240,10 +1241,15 @@ def _skipped_model_report(*, generated_at: str, reason: str) -> dict[str, Any]:
             "risk_score_used_as_feature": "risk_score" in MODEL_FEATURE_COLUMNS,
             "proxy_label_fields_used_as_features": [],
         },
+        "model_registry": model_registry(None),
         "skip_reason": reason,
         "strategies": {
             strategy: {"status": "skipped", "skip_reason": reason}
             for strategy in ("strategy_a", "strategy_b", "strategy_c")
+        },
+        "alternative_models": {
+            model_name: {"status": "skipped", "skip_reason": reason}
+            for model_name in ("random_forest", "hist_gradient_boosting", "dummy")
         },
         "interpretation": "skipped",
     }
@@ -1291,6 +1297,14 @@ def _train_strategy_model(
     test_probabilities = [float(prob[1]) for prob in model.predict_proba(x_test)]
     test_predictions = [int(value >= 0.5) for value in test_probabilities]
     metrics = _classification_metrics(y_test, test_predictions, test_probabilities, sklearn_bundle)
+    model_reports = {
+        "logistic_regression": {
+            "status": "evaluated",
+            "metrics": metrics,
+            "random_seed": 42,
+        }
+    }
+    model_reports.update(_train_alternative_models(x_train, x_test, y_train, y_test, sklearn_bundle))
     return {
         "predictions": predictions,
         "report": {
@@ -1300,6 +1314,7 @@ def _train_strategy_model(
             "train_class_counts": _class_counts(y_train),
             "test_class_counts": _class_counts(y_test),
             "metrics": metrics,
+            "models": model_reports,
             "learned_probability_summary": _probability_summary(probabilities),
             "coefficients": {
                 feature: round(float(coefficient), 6)
@@ -1307,6 +1322,53 @@ def _train_strategy_model(
             },
         },
     }
+
+
+def model_registry(sklearn_bundle: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
+    if sklearn_bundle is None:
+        return {
+            model_name: {"available": False, "skip_reason": "scikit-learn is not installed in the current Python environment"}
+            for model_name in ("logistic_regression", "random_forest", "hist_gradient_boosting", "dummy")
+        }
+    return {
+        "logistic_regression": {"available": "LogisticRegression" in sklearn_bundle, "random_seed": 42},
+        "random_forest": {"available": "RandomForestClassifier" in sklearn_bundle, "random_seed": 42},
+        "hist_gradient_boosting": {"available": "HistGradientBoostingClassifier" in sklearn_bundle, "random_seed": 42},
+        "dummy": {"available": "DummyClassifier" in sklearn_bundle, "random_seed": 42},
+    }
+
+
+def _train_alternative_models(
+    x_train: Sequence[Sequence[float]],
+    x_test: Sequence[Sequence[float]],
+    y_train: Sequence[int],
+    y_test: Sequence[int],
+    sklearn_bundle: Mapping[str, Any],
+) -> dict[str, Any]:
+    model_specs = {
+        "random_forest": ("RandomForestClassifier", {"random_state": 42, "n_estimators": 100, "class_weight": "balanced"}),
+        "hist_gradient_boosting": ("HistGradientBoostingClassifier", {"random_state": 42}),
+        "dummy": ("DummyClassifier", {"strategy": "most_frequent", "random_state": 42}),
+    }
+    reports: dict[str, Any] = {}
+    for model_name, (class_name, kwargs) in model_specs.items():
+        model_class = sklearn_bundle.get(class_name)
+        if model_class is None:
+            reports[model_name] = {"status": "skipped", "skip_reason": f"{class_name} is unavailable"}
+            continue
+        model = model_class(**kwargs)
+        model.fit(x_train, y_train)
+        if hasattr(model, "predict_proba"):
+            probabilities = [float(prob[1]) for prob in model.predict_proba(x_test)]
+        else:
+            probabilities = [float(value) for value in model.predict(x_test)]
+        predictions = [int(value >= 0.5) for value in probabilities]
+        reports[model_name] = {
+            "status": "evaluated",
+            "metrics": _classification_metrics(y_test, predictions, probabilities, sklearn_bundle),
+            "random_seed": 42,
+        }
+    return reports
 
 
 def _classification_metrics(
@@ -1378,12 +1440,17 @@ def _model_interpretation(strategies: Mapping[str, Mapping[str, Any]]) -> str:
 def _load_sklearn() -> Mapping[str, Any] | None:
     try:
         from sklearn import metrics
+        from sklearn.dummy import DummyClassifier
+        from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
         from sklearn.linear_model import LogisticRegression
         from sklearn.model_selection import train_test_split
     except ImportError:
         return None
     return {
+        "DummyClassifier": DummyClassifier,
+        "HistGradientBoostingClassifier": HistGradientBoostingClassifier,
         "LogisticRegression": LogisticRegression,
+        "RandomForestClassifier": RandomForestClassifier,
         "train_test_split": train_test_split,
         "metrics": metrics,
     }

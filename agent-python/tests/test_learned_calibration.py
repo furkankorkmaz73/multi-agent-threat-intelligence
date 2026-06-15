@@ -25,6 +25,7 @@ from evaluation.learned_calibration import (
     compute_ablation_experiments,
     export_from_documents,
     extract_feature_importance,
+    model_registry,
     extract_calibration_row,
     read_analyzed_cves_from_mongo,
     strict_validation_errors,
@@ -280,6 +281,7 @@ def test_export_writes_three_output_files(tmp_path):
     model_payload = json.loads(model_report.read_text(encoding="utf-8"))
     assert model_payload["model_type"] == "LogisticRegression"
     assert model_payload["leakage_guard"]["risk_score_used_as_feature"] is False
+    assert "random_forest" in model_payload["model_registry"]
     comparison_payload = json.loads(comparison.read_text(encoding="utf-8"))
     assert comparison_payload["status"] in {"completed", "skipped"}
     disagreement_rows = list(csv.DictReader(disagreements.open(encoding="utf-8")))
@@ -464,11 +466,35 @@ def test_model_training_skips_when_sklearn_unavailable(monkeypatch):
     assert result["predictions"] == []
     assert result["report"]["status"] == "skipped"
     assert "scikit-learn is not installed" in result["report"]["skip_reason"]
+    assert result["report"]["alternative_models"]["dummy"]["status"] == "skipped"
 
 
 def test_model_features_exclude_risk_score_and_proxy_labels():
     assert "risk_score" not in MODEL_FEATURE_COLUMNS
     assert all(not feature.startswith("proxy_") for feature in MODEL_FEATURE_COLUMNS)
+
+
+def test_model_registry_reports_unavailable_models_without_sklearn():
+    registry = model_registry(None)
+
+    assert registry["random_forest"]["available"] is False
+    assert registry["hist_gradient_boosting"]["available"] is False
+    assert registry["dummy"]["available"] is False
+
+
+def test_model_registry_uses_fixed_random_seed_for_available_models():
+    registry = model_registry(
+        {
+            "LogisticRegression": object,
+            "RandomForestClassifier": object,
+            "HistGradientBoostingClassifier": object,
+            "DummyClassifier": object,
+        }
+    )
+
+    assert registry["random_forest"]["available"] is True
+    assert registry["hist_gradient_boosting"]["random_seed"] == 42
+    assert registry["dummy"]["random_seed"] == 42
 
 
 def test_model_training_single_class_skip_if_sklearn_available():
