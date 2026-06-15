@@ -191,6 +191,14 @@ COVERAGE_STRATA_COLUMNS = [
     "interpretation_note",
 ]
 
+LIMITATIONS_MATRIX_COLUMNS = [
+    "limitation",
+    "impact_on_interpretation",
+    "mitigation_already_implemented",
+    "future_work",
+    "thesis_safe_wording",
+]
+
 
 def extract_calibration_row(doc: Mapping[str, Any]) -> dict[str, Any] | None:
     source = deepcopy(dict(doc))
@@ -427,6 +435,9 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     reviewer_checklist_path = output / "learned_calibration_reviewer_checklist.json"
     reviewer_checklist_summary_path = output / "learned_calibration_reviewer_checklist.md"
     defense_qa_path = output / "learned_calibration_defense_qa.md"
+    limitations_matrix_path = output / "learned_calibration_limitations_matrix.csv"
+    limitations_matrix_json_path = output / "learned_calibration_limitations_matrix.json"
+    limitations_matrix_summary_path = output / "learned_calibration_limitations_matrix.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
@@ -533,6 +544,14 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     reviewer_checklist_path.write_text(json.dumps(reviewer_checklist, indent=2, sort_keys=True, default=str), encoding="utf-8")
     reviewer_checklist_summary_path.write_text(render_reviewer_checklist_markdown(reviewer_checklist), encoding="utf-8")
     defense_qa_path.write_text(render_learned_calibration_defense_qa(model_result["report"], report), encoding="utf-8")
+    limitations_matrix = build_limitations_matrix()
+    with limitations_matrix_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=LIMITATIONS_MATRIX_COLUMNS)
+        writer.writeheader()
+        for row in limitations_matrix["rows"]:
+            writer.writerow({column: row.get(column, "") for column in LIMITATIONS_MATRIX_COLUMNS})
+    limitations_matrix_json_path.write_text(json.dumps(limitations_matrix, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    limitations_matrix_summary_path.write_text(render_limitations_matrix_markdown(limitations_matrix), encoding="utf-8")
     appendix_path.write_text(
         render_learned_calibration_appendix(
             feasibility_report=report,
@@ -620,6 +639,9 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "reviewer_checklist": str(reviewer_checklist_path),
         "reviewer_checklist_summary": str(reviewer_checklist_summary_path),
         "defense_qa": str(defense_qa_path),
+        "limitations_matrix": str(limitations_matrix_path),
+        "limitations_matrix_json": str(limitations_matrix_json_path),
+        "limitations_matrix_summary": str(limitations_matrix_summary_path),
         "manifest": str(manifest_path),
         "manifest_summary": str(manifest_summary_path),
     }
@@ -2503,6 +2525,136 @@ def render_learned_calibration_defense_qa(
     return "\n".join(lines)
 
 
+def build_limitations_matrix() -> dict[str, Any]:
+    rows = [
+        _limitation_row(
+            "proxy labels are not ground truth",
+            "Proxy-label metrics cannot be interpreted as verified exploitation prediction.",
+            "Artifacts repeatedly label proxy outcomes as deterministic thesis aids.",
+            "Use curated external exploitation or incident labels.",
+            "Proxy labels support feasibility discussion, not ground-truth validation.",
+        ),
+        _limitation_row(
+            "EPSS coverage sparse or unavailable",
+            "Exploit-likelihood context is incomplete where EPSS is missing.",
+            "Coverage fields and strata expose EPSS availability explicitly.",
+            "Ingest vetted EPSS snapshots and document version dates.",
+            "Missing EPSS is a coverage limitation, not evidence of low risk.",
+        ),
+        _limitation_row(
+            "KEV status sparse or unavailable",
+            "Active-exploitation evidence may be absent or unknown.",
+            "KEV-known and KEV-listed fields are exported separately.",
+            "Add reproducible CISA KEV snapshot enrichment.",
+            "Unknown KEV status should not be treated as proof of no exploitation.",
+        ),
+        _limitation_row(
+            "accepted external evidence sparse or absent",
+            "Evidence-supported labels and confidence remain limited.",
+            "Accepted, rejected, manual-review, and ignored evidence are separated.",
+            "Evaluate with richer URLhaus, KEV, EPSS, and asset-context data.",
+            "Sparse accepted evidence limits confidence and learned calibration claims.",
+        ),
+        _limitation_row(
+            "Dread live crawling disabled",
+            "Dread evidence is not available as live validation in this experiment.",
+            "Dread remains optional, bounded, default-off, and not ground truth.",
+            "Use ethically reviewed, static, corroborated datasets if needed.",
+            "Live Dread crawling was not used in learned-calibration artifacts.",
+        ),
+        _limitation_row(
+            "URLhaus correlation evidence gated and conservative",
+            "Accepted URLhaus evidence may be zero even when candidates exist.",
+            "Strict gates prevent weak keyword overlap from boosting risk.",
+            "Improve high-quality IOC-to-CVE linkage datasets.",
+            "Zero accepted URLhaus can reflect conservative gates, not system failure.",
+        ),
+        _limitation_row(
+            "model training skipped if scikit-learn unavailable",
+            "Learned model metrics may be unavailable in the local environment.",
+            "Model report records skipped status and dependency reason.",
+            "Run in an approved environment with pinned dependencies.",
+            "Skipped model training is reported transparently, not filled with fabricated results.",
+        ),
+        _limitation_row(
+            "CVSS/severity dominance risk",
+            "Proxy labels may be partly aligned with technical severity.",
+            "Negative controls and sensitivity artifacts expose CVSS-only behavior.",
+            "Use labels independent of CVSS-driven scoring signals.",
+            "CVSS dominance is a limitation of proxy-label interpretation.",
+        ),
+        _limitation_row(
+            "confidence not equivalent to correctness",
+            "Confidence measures support quality, not factual correctness of outcomes.",
+            "Risk and confidence remain separate exported fields.",
+            "Validate against external outcomes and analyst review.",
+            "Confidence is evidence reliability, not a correctness guarantee.",
+        ),
+        _limitation_row(
+            "deterministic fixture validation is not real-world generalization",
+            "Controlled behavior does not establish field performance.",
+            "Artifacts explicitly frame deterministic tests as behavioral validation.",
+            "Evaluate on larger curated real-world datasets with external labels.",
+            "Deterministic validation supports reproducibility, not generalization claims.",
+        ),
+        _limitation_row(
+            "learned calibration does not replace production scoring",
+            "Learned artifacts are diagnostic and do not change runtime decisions.",
+            "Leakage checks and docs state production risk_score remains heuristic.",
+            "Consider a separate reviewed calibration layer after external validation.",
+            "Learned calibration is future work and does not replace heuristic scoring.",
+        ),
+    ]
+    return {
+        "status": "available",
+        "row_count": len(rows),
+        "rows": rows,
+        "notes": [
+            "Limitations matrix is thesis-supporting documentation.",
+            "It does not change scoring, evidence gates, or model training behavior.",
+        ],
+    }
+
+
+def render_limitations_matrix_markdown(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration Limitations Matrix",
+        "",
+        "This matrix consolidates thesis-safe limitations for learned calibration. It does not change production scoring and does not treat proxy labels as ground truth.",
+        "",
+        "| Limitation | Impact | Mitigation Already Implemented | Future Work | Thesis-Safe Wording |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for row in payload.get("rows") or []:
+        lines.append(
+            "| {limitation} | {impact} | {mitigation} | {future} | {wording} |".format(
+                limitation=row.get("limitation", ""),
+                impact=row.get("impact_on_interpretation", ""),
+                mitigation=row.get("mitigation_already_implemented", ""),
+                future=row.get("future_work", ""),
+                wording=row.get("thesis_safe_wording", ""),
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _limitation_row(
+    limitation: str,
+    impact: str,
+    mitigation: str,
+    future_work: str,
+    wording: str,
+) -> dict[str, str]:
+    return {
+        "limitation": limitation,
+        "impact_on_interpretation": impact,
+        "mitigation_already_implemented": mitigation,
+        "future_work": future_work,
+        "thesis_safe_wording": wording,
+    }
+
+
 def _checklist_item(check_id: str, passed: bool, evidence_artifact: str, note: str) -> dict[str, str]:
     return {
         "check_id": check_id,
@@ -2832,6 +2984,9 @@ def _learned_calibration_artifact_specs() -> list[dict[str, str]]:
         {"group": "reviewer checklist", "filename": "learned_calibration_reviewer_checklist.json", "description": "Reviewer checklist payload", "usage": "Structured thesis/reviewer checklist for learned calibration."},
         {"group": "reviewer checklist", "filename": "learned_calibration_reviewer_checklist.md", "description": "Readable reviewer checklist", "usage": "Checklist for thesis review and defense preparation."},
         {"group": "defense preparation", "filename": "learned_calibration_defense_qa.md", "description": "Learned-calibration defense Q&A draft", "usage": "Defense-preparation answers for learned calibration and limitations."},
+        {"group": "limitations matrix", "filename": "learned_calibration_limitations_matrix.csv", "description": "Structured limitations matrix rows", "usage": "Machine-readable thesis limitations matrix."},
+        {"group": "limitations matrix", "filename": "learned_calibration_limitations_matrix.json", "description": "Structured limitations matrix payload", "usage": "JSON thesis limitations matrix."},
+        {"group": "limitations matrix", "filename": "learned_calibration_limitations_matrix.md", "description": "Readable limitations matrix", "usage": "Thesis-safe limitations table."},
     ]
 
 

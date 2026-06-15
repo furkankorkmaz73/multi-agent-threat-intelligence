@@ -17,12 +17,14 @@ from evaluation.learned_calibration import (
     DISAGREEMENT_COLUMNS,
     FEATURE_IMPORTANCE_COLUMNS,
     LABEL_COLUMNS,
+    LIMITATIONS_MATRIX_COLUMNS,
     MODEL_FEATURE_COLUMNS,
     ablation_plan,
     build_proxy_label_row,
     build_proxy_label_rows,
     build_leakage_checks,
     build_learned_calibration_manifest,
+    build_limitations_matrix,
     build_negative_control_rankings,
     build_publication_tables,
     build_reviewer_checklist,
@@ -46,6 +48,7 @@ from evaluation.learned_calibration import (
     read_analyzed_cves_from_mongo,
     render_coverage_strata_markdown,
     render_consistency_audit_markdown,
+    render_limitations_matrix_markdown,
     render_negative_controls_markdown,
     render_reviewer_checklist_markdown,
     render_runtime_snapshot_markdown,
@@ -281,6 +284,9 @@ def test_export_writes_three_output_files(tmp_path):
     reviewer_checklist = tmp_path / "learned_calibration_reviewer_checklist.json"
     reviewer_checklist_summary = tmp_path / "learned_calibration_reviewer_checklist.md"
     defense_qa = tmp_path / "learned_calibration_defense_qa.md"
+    limitations_matrix = tmp_path / "learned_calibration_limitations_matrix.csv"
+    limitations_matrix_json = tmp_path / "learned_calibration_limitations_matrix.json"
+    limitations_matrix_summary = tmp_path / "learned_calibration_limitations_matrix.md"
     manifest = tmp_path / "learned_calibration_manifest.json"
     manifest_summary = tmp_path / "learned_calibration_manifest.md"
     assert result["paths"] == {
@@ -328,6 +334,9 @@ def test_export_writes_three_output_files(tmp_path):
         "reviewer_checklist": str(reviewer_checklist),
         "reviewer_checklist_summary": str(reviewer_checklist_summary),
         "defense_qa": str(defense_qa),
+        "limitations_matrix": str(limitations_matrix),
+        "limitations_matrix_json": str(limitations_matrix_json),
+        "limitations_matrix_summary": str(limitations_matrix_summary),
         "manifest": str(manifest),
         "manifest_summary": str(manifest_summary),
     }
@@ -375,6 +384,9 @@ def test_export_writes_three_output_files(tmp_path):
     assert reviewer_checklist.exists()
     assert reviewer_checklist_summary.exists()
     assert defense_qa.exists()
+    assert limitations_matrix.exists()
+    assert limitations_matrix_json.exists()
+    assert limitations_matrix_summary.exists()
     assert manifest.exists()
     assert manifest_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
@@ -445,6 +457,10 @@ def test_export_writes_three_output_files(tmp_path):
     assert defense_text.count("## Q") >= 20
     assert "live Dread crawling was not used" in defense_text
     assert "does not prove real-world exploitation prediction" in defense_text
+    matrix_rows = list(csv.DictReader(limitations_matrix.open(encoding="utf-8")))
+    assert list(matrix_rows[0].keys()) == LIMITATIONS_MATRIX_COLUMNS
+    matrix_payload = json.loads(limitations_matrix_json.read_text(encoding="utf-8"))
+    assert matrix_payload["row_count"] >= 11
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert manifest_payload["status"] == "complete"
     assert any(item["group"] == "dataset" for item in manifest_payload["artifacts"])
@@ -1054,6 +1070,9 @@ def test_learned_calibration_manifest_reports_files(tmp_path):
         "learned_calibration_reviewer_checklist.json",
         "learned_calibration_reviewer_checklist.md",
         "learned_calibration_defense_qa.md",
+        "learned_calibration_limitations_matrix.csv",
+        "learned_calibration_limitations_matrix.json",
+        "learned_calibration_limitations_matrix.md",
     ):
         (tmp_path / name).write_text("x", encoding="utf-8")
 
@@ -1431,3 +1450,32 @@ def test_reviewer_checklist_markdown_rendering(tmp_path):
     assert "## Reproducibility Checks" in markdown
     assert "| Check ID | Status | Evidence Artifact | Reviewer Note |" in markdown
     assert "Proxy labels are not ground truth" in markdown
+
+
+def test_limitations_matrix_required_categories_present():
+    matrix = build_limitations_matrix()
+    limitations = {row["limitation"] for row in matrix["rows"]}
+
+    assert matrix["status"] == "available"
+    assert {
+        "proxy labels are not ground truth",
+        "EPSS coverage sparse or unavailable",
+        "KEV status sparse or unavailable",
+        "accepted external evidence sparse or absent",
+        "Dread live crawling disabled",
+        "URLhaus correlation evidence gated and conservative",
+        "model training skipped if scikit-learn unavailable",
+        "CVSS/severity dominance risk",
+        "confidence not equivalent to correctness",
+        "deterministic fixture validation is not real-world generalization",
+        "learned calibration does not replace production scoring",
+    }.issubset(limitations)
+    assert all(set(row) == set(LIMITATIONS_MATRIX_COLUMNS) for row in matrix["rows"])
+
+
+def test_limitations_matrix_markdown_rendering():
+    markdown = render_limitations_matrix_markdown(build_limitations_matrix())
+
+    assert "# Learned Calibration Limitations Matrix" in markdown
+    assert "| Limitation | Impact | Mitigation Already Implemented | Future Work | Thesis-Safe Wording |" in markdown
+    assert "Proxy labels support feasibility discussion" in markdown
