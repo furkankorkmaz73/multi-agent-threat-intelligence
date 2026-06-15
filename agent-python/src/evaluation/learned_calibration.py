@@ -3,11 +3,12 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-from math import log2
+from math import ceil, floor, log2
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
-from statistics import mean
+from random import Random
+from statistics import mean, pstdev
 from typing import Any, Iterable, Mapping, Sequence
 
 import pymongo
@@ -159,6 +160,21 @@ PROXY_SENSITIVITY_COLUMNS = [
     "precision_at_100",
     "label_stability_vs_strategy_a",
     "classification",
+]
+
+BOOTSTRAP_STABILITY_COLUMNS = [
+    "iteration",
+    "precision_at_10",
+    "precision_at_50",
+    "precision_at_100",
+    "recall_at_50",
+    "recall_at_100",
+    "top50_overlap_with_full",
+    "top100_overlap_with_full",
+    "sample_size",
+    "positive_count",
+    "status",
+    "skip_reason",
 ]
 
 
@@ -381,6 +397,9 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     proxy_sensitivity_path = output / "learned_calibration_proxy_sensitivity.csv"
     proxy_sensitivity_json_path = output / "learned_calibration_proxy_sensitivity.json"
     proxy_sensitivity_summary_path = output / "learned_calibration_proxy_sensitivity.md"
+    bootstrap_path = output / "learned_calibration_bootstrap_stability.csv"
+    bootstrap_json_path = output / "learned_calibration_bootstrap_stability.json"
+    bootstrap_summary_path = output / "learned_calibration_bootstrap_stability.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
@@ -398,6 +417,7 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         leakage_checks=leakage_checks,
     )
     proxy_sensitivity = compute_proxy_threshold_sensitivity(rows, label_rows)
+    bootstrap_stability = compute_bootstrap_stability(rows, label_rows)
     with dataset_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=DATASET_COLUMNS)
         writer.writeheader()
@@ -461,6 +481,13 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
             writer.writerow({column: row.get(column, "") for column in PROXY_SENSITIVITY_COLUMNS})
     proxy_sensitivity_json_path.write_text(json.dumps(proxy_sensitivity, indent=2, sort_keys=True, default=str), encoding="utf-8")
     proxy_sensitivity_summary_path.write_text(render_proxy_sensitivity_markdown(proxy_sensitivity), encoding="utf-8")
+    with bootstrap_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=BOOTSTRAP_STABILITY_COLUMNS)
+        writer.writeheader()
+        for row in bootstrap_stability["iterations"]:
+            writer.writerow({column: row.get(column, "") for column in BOOTSTRAP_STABILITY_COLUMNS})
+    bootstrap_json_path.write_text(json.dumps(bootstrap_stability, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    bootstrap_summary_path.write_text(render_bootstrap_stability_markdown(bootstrap_stability), encoding="utf-8")
     artifact_manifest = build_learned_calibration_manifest(output)
     manifest_path.write_text(json.dumps(artifact_manifest, indent=2, sort_keys=True, default=str), encoding="utf-8")
     manifest_summary_path.write_text(render_learned_calibration_manifest_markdown(artifact_manifest), encoding="utf-8")
@@ -493,6 +520,9 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "proxy_sensitivity": str(proxy_sensitivity_path),
         "proxy_sensitivity_json": str(proxy_sensitivity_json_path),
         "proxy_sensitivity_summary": str(proxy_sensitivity_summary_path),
+        "bootstrap_stability": str(bootstrap_path),
+        "bootstrap_stability_json": str(bootstrap_json_path),
+        "bootstrap_stability_summary": str(bootstrap_summary_path),
         "manifest": str(manifest_path),
         "manifest_summary": str(manifest_summary_path),
     }
@@ -1469,6 +1499,206 @@ def render_proxy_sensitivity_markdown(payload: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def bootstrap_sample_indices(size: int, *, seed: int = 42, iteration: int = 0) -> list[int]:
+    if size <= 0:
+        return []
+    rng = Random(seed + iteration)
+    return [rng.randrange(size) for _ in range(size)]
+
+
+def compute_bootstrap_stability(
+    rows: Sequence[Mapping[str, Any]],
+    label_rows: Sequence[Mapping[str, Any]],
+    *,
+    iterations: int = 100,
+    seed: int = 42,
+) -> dict[str, Any]:
+    label_by_cve = {str(row.get("cve_id", "")): _safe_int(row.get("proxy_binary_high_strategy_a")) for row in label_rows}
+    ranked_rows = sorted(rows, key=lambda row: (-_safe_float(row.get("risk_score")), str(row.get("cve_id", ""))))
+    ranked_ids = [str(row.get("cve_id", "")) for row in ranked_rows]
+    full_labels = [label_by_cve.get(cve_id, 0) for cve_id in ranked_ids]
+    positive_count = sum(full_labels)
+    if len(ranked_rows) < 10:
+        return _skipped_bootstrap_stability(rows, seed, iterations, "fewer than 10 exported rows")
+    if positive_count <= 0:
+        return _skipped_bootstrap_stability(rows, seed, iterations, "strategy_a has no positive proxy labels")
+    full_top50 = set(ranked_ids[:50])
+    full_top100 = set(ranked_ids[:100])
+    iterations_out: list[dict[str, Any]] = []
+    for iteration in range(iterations):
+        sample_indices = bootstrap_sample_indices(len(ranked_rows), seed=seed, iteration=iteration)
+        counts: dict[str, int] = {}
+        for index in sample_indices:
+            cve_id = str(rows[index].get("cve_id", ""))
+            counts[cve_id] = counts.get(cve_id, 0) + 1
+        sample_ranked_ids: list[str] = []
+        for cve_id in ranked_ids:
+            sample_ranked_ids.extend([cve_id] * counts.get(cve_id, 0))
+        sample_labels = [label_by_cve.get(cve_id, 0) for cve_id in sample_ranked_ids]
+        sample_positive_count = sum(sample_labels)
+        top50 = set(sample_ranked_ids[:50])
+        top100 = set(sample_ranked_ids[:100])
+        iterations_out.append(
+            {
+                "iteration": iteration,
+                "precision_at_10": _precision_at_k(sample_labels, 10),
+                "precision_at_50": _precision_at_k(sample_labels, 50),
+                "precision_at_100": _precision_at_k(sample_labels, 100),
+                "recall_at_50": _recall_at_k(sample_labels, 50),
+                "recall_at_100": _recall_at_k(sample_labels, 100),
+                "top50_overlap_with_full": _set_overlap(top50, full_top50),
+                "top100_overlap_with_full": _set_overlap(top100, full_top100),
+                "sample_size": len(sample_ranked_ids),
+                "positive_count": sample_positive_count,
+                "status": "evaluated",
+                "skip_reason": "",
+            }
+        )
+    return {
+        "status": "evaluated",
+        "seed": seed,
+        "iteration_count": iterations,
+        "record_count": len(ranked_rows),
+        "positive_count": positive_count,
+        "ranking_method": "heuristic_risk_score",
+        "proxy_label_strategy": "strategy_a",
+        "summary": summarize_bootstrap_metrics(iterations_out),
+        "iterations": iterations_out,
+        "notes": [
+            "Bootstrap stability resamples exported rows with replacement using fixed seed 42.",
+            "Metrics compare the unchanged heuristic risk_score ranking against Strategy A proxy labels.",
+            "This is a deterministic robustness check, not statistical calibration or real-world validation.",
+        ],
+    }
+
+
+def summarize_bootstrap_metrics(iteration_rows: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, float]]:
+    metric_names = [
+        "precision_at_10",
+        "precision_at_50",
+        "precision_at_100",
+        "recall_at_50",
+        "recall_at_100",
+        "top50_overlap_with_full",
+        "top100_overlap_with_full",
+    ]
+    return {
+        metric: _summarize_numeric_values([_safe_float(row.get(metric)) for row in iteration_rows])
+        for metric in metric_names
+    }
+
+
+def render_bootstrap_stability_markdown(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration Bootstrap Ranking Stability",
+        "",
+        "This artifact evaluates deterministic bootstrap stability for the unchanged heuristic `risk_score` ranking.",
+        "It uses Strategy A proxy labels and does not train a model or change production scoring.",
+        "",
+        f"- Status: `{payload.get('status', '')}`",
+        f"- Seed: `{payload.get('seed', '')}`",
+        f"- Iterations: `{payload.get('iteration_count', 0)}`",
+        f"- Records: `{payload.get('record_count', 0)}`",
+        f"- Strategy A positives: `{payload.get('positive_count', 0)}`",
+        "",
+    ]
+    if payload.get("status") == "skipped":
+        lines.extend(
+            [
+                "## Skipped",
+                "",
+                f"Reason: {payload.get('skip_reason', '')}",
+                "",
+            ]
+        )
+        return "\n".join(lines)
+    lines.extend(
+        [
+            "## Summary Statistics",
+            "",
+            "| Metric | Mean | Stddev | Min | Max | P05 | P95 |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for metric, stats in (payload.get("summary") or {}).items():
+        lines.append(
+            "| {metric} | {mean} | {stddev} | {minimum} | {maximum} | {p05} | {p95} |".format(
+                metric=metric,
+                mean=_format_metric(stats.get("mean")),
+                stddev=_format_metric(stats.get("stddev")),
+                minimum=_format_metric(stats.get("min")),
+                maximum=_format_metric(stats.get("max")),
+                p05=_format_metric(stats.get("p05")),
+                p95=_format_metric(stats.get("p95")),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "Stable top-K overlap suggests the ranking is not dominated by a single sampled row, while low overlap would be reported as a limitation.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _skipped_bootstrap_stability(
+    rows: Sequence[Mapping[str, Any]],
+    seed: int,
+    iterations: int,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "status": "skipped",
+        "seed": seed,
+        "iteration_count": iterations,
+        "record_count": len(rows),
+        "positive_count": 0,
+        "ranking_method": "heuristic_risk_score",
+        "proxy_label_strategy": "strategy_a",
+        "skip_reason": reason,
+        "summary": {},
+        "iterations": [],
+        "notes": [
+            "Bootstrap stability requires enough exported rows and at least one positive Strategy A proxy label.",
+            "Skipped artifacts are explicit so thesis limitations remain visible.",
+        ],
+    }
+
+
+def _summarize_numeric_values(values: Sequence[float]) -> dict[str, float]:
+    cleaned = [float(value) for value in values]
+    if not cleaned:
+        return {"mean": 0.0, "stddev": 0.0, "min": 0.0, "max": 0.0, "p05": 0.0, "p95": 0.0}
+    return {
+        "mean": round(mean(cleaned), 4),
+        "stddev": round(pstdev(cleaned), 4),
+        "min": round(min(cleaned), 4),
+        "max": round(max(cleaned), 4),
+        "p05": round(_percentile(cleaned, 0.05), 4),
+        "p95": round(_percentile(cleaned, 0.95), 4),
+    }
+
+
+def _percentile(values: Sequence[float], quantile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * quantile
+    lower = floor(position)
+    upper = ceil(position)
+    if lower == upper:
+        return ordered[int(position)]
+    weight = position - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+def _set_overlap(sample: set[str], baseline: set[str]) -> float:
+    if not baseline:
+        return 0.0
+    return round(len(sample & baseline) / len(baseline), 4)
+
+
 def _threshold_label(row: Mapping[str, Any], thresholds: Mapping[str, float]) -> str:
     if _truthy(row.get("kev_listed")) or _safe_float(row.get("epss_signal")) >= thresholds["epss_high_threshold"]:
         return "high"
@@ -1559,6 +1789,9 @@ def _learned_calibration_artifact_specs() -> list[dict[str, str]]:
         {"group": "proxy sensitivity", "filename": "learned_calibration_proxy_sensitivity.csv", "description": "Proxy threshold grid rows", "usage": "Sensitivity of proxy labels to threshold choices."},
         {"group": "proxy sensitivity", "filename": "learned_calibration_proxy_sensitivity.json", "description": "Proxy threshold grid payload", "usage": "Machine-readable proxy threshold sensitivity analysis."},
         {"group": "proxy sensitivity", "filename": "learned_calibration_proxy_sensitivity.md", "description": "Readable proxy sensitivity summary", "usage": "Thesis discussion of proxy threshold robustness."},
+        {"group": "bootstrap stability", "filename": "learned_calibration_bootstrap_stability.csv", "description": "Bootstrap ranking stability iterations", "usage": "Deterministic resampling check for heuristic ranking stability."},
+        {"group": "bootstrap stability", "filename": "learned_calibration_bootstrap_stability.json", "description": "Bootstrap ranking stability payload", "usage": "Machine-readable bootstrap summary and iteration rows."},
+        {"group": "bootstrap stability", "filename": "learned_calibration_bootstrap_stability.md", "description": "Readable bootstrap stability summary", "usage": "Thesis discussion of ranking robustness under resampling."},
     ]
 
 

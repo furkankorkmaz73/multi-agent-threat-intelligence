@@ -53,6 +53,9 @@ Generated files:
 - `reports/thesis/learned_calibration_proxy_sensitivity.csv`
 - `reports/thesis/learned_calibration_proxy_sensitivity.json`
 - `reports/thesis/learned_calibration_proxy_sensitivity.md`
+- `reports/thesis/learned_calibration_bootstrap_stability.csv`
+- `reports/thesis/learned_calibration_bootstrap_stability.json`
+- `reports/thesis/learned_calibration_bootstrap_stability.md`
 - `reports/thesis/learned_calibration_quality_report.json`
 - `reports/thesis/learned_calibration_quality_report.md`
 
@@ -89,6 +92,8 @@ The publication-table artifacts collect compact thesis-ready tables for dataset 
 The manifest artifacts list each learned-calibration output with file path, existence status, byte size, producer module, description, and thesis usage note.
 
 The proxy-sensitivity artifacts evaluate deterministic threshold combinations for EPSS, CVSS, NLP context, and recency. They report label counts, high-label percentage, heuristic precision@K, stability versus default Strategy A, and whether a threshold configuration is too broad, too narrow, or usable. The analysis does not change default proxy labels or production scoring.
+
+The bootstrap-stability artifacts run a fixed-seed deterministic bootstrap over exported CVE rows. Each iteration resamples rows with replacement, evaluates the unchanged heuristic `risk_score` ranking against Strategy A proxy labels, and records precision@10/50/100, recall@50/100, and top-50/top-100 overlap with the full-data ranking. The summary reports mean, standard deviation, min, max, and 5th/95th percentiles. This is a ranking robustness probe, not statistical calibration or evidence of real-world generalization.
 
 The quality report artifacts are produced by `make thesis-learned-calibration-quality`. The gate checks required learned-calibration files, JSON parseability, CSV headers, limitation language, experimental framing, unchanged production risk score wording, unchanged evidence-gate wording, and absence of real-world exploitation-proof claims.
 

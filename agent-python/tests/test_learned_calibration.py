@@ -10,6 +10,7 @@ from pymongo.errors import ServerSelectionTimeoutError
 import evaluation.learned_calibration as learned_calibration
 from evaluation.learned_calibration import (
     ABLATION_COLUMNS,
+    BOOTSTRAP_STABILITY_COLUMNS,
     CASE_STUDY_COLUMNS,
     DATASET_COLUMNS,
     DISAGREEMENT_COLUMNS,
@@ -23,7 +24,9 @@ from evaluation.learned_calibration import (
     build_learned_calibration_manifest,
     build_publication_tables,
     build_feasibility_report,
+    bootstrap_sample_indices,
     compute_baseline_metrics,
+    compute_bootstrap_stability,
     compute_disagreement_cases,
     compute_learned_vs_heuristic_comparison,
     compute_proxy_threshold_sensitivity,
@@ -36,6 +39,7 @@ from evaluation.learned_calibration import (
     read_analyzed_cves_from_mongo,
     select_case_studies,
     strict_validation_errors,
+    summarize_bootstrap_metrics,
     train_learned_calibration_models,
 )
 
@@ -249,6 +253,9 @@ def test_export_writes_three_output_files(tmp_path):
     proxy_sensitivity = tmp_path / "learned_calibration_proxy_sensitivity.csv"
     proxy_sensitivity_json = tmp_path / "learned_calibration_proxy_sensitivity.json"
     proxy_sensitivity_summary = tmp_path / "learned_calibration_proxy_sensitivity.md"
+    bootstrap = tmp_path / "learned_calibration_bootstrap_stability.csv"
+    bootstrap_json = tmp_path / "learned_calibration_bootstrap_stability.json"
+    bootstrap_summary = tmp_path / "learned_calibration_bootstrap_stability.md"
     manifest = tmp_path / "learned_calibration_manifest.json"
     manifest_summary = tmp_path / "learned_calibration_manifest.md"
     assert result["paths"] == {
@@ -280,6 +287,9 @@ def test_export_writes_three_output_files(tmp_path):
         "proxy_sensitivity": str(proxy_sensitivity),
         "proxy_sensitivity_json": str(proxy_sensitivity_json),
         "proxy_sensitivity_summary": str(proxy_sensitivity_summary),
+        "bootstrap_stability": str(bootstrap),
+        "bootstrap_stability_json": str(bootstrap_json),
+        "bootstrap_stability_summary": str(bootstrap_summary),
         "manifest": str(manifest),
         "manifest_summary": str(manifest_summary),
     }
@@ -311,6 +321,9 @@ def test_export_writes_three_output_files(tmp_path):
     assert proxy_sensitivity.exists()
     assert proxy_sensitivity_json.exists()
     assert proxy_sensitivity_summary.exists()
+    assert bootstrap.exists()
+    assert bootstrap_json.exists()
+    assert bootstrap_summary.exists()
     assert manifest.exists()
     assert manifest_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
@@ -353,6 +366,11 @@ def test_export_writes_three_output_files(tmp_path):
     assert "artifact_inventory" in table_payload
     proxy_payload = json.loads(proxy_sensitivity_json.read_text(encoding="utf-8"))
     assert proxy_payload["grid_size"] == 320
+    bootstrap_payload = json.loads(bootstrap_json.read_text(encoding="utf-8"))
+    assert bootstrap_payload["status"] in {"evaluated", "skipped"}
+    bootstrap_rows = list(csv.DictReader(bootstrap.open(encoding="utf-8")))
+    if bootstrap_rows:
+        assert list(bootstrap_rows[0].keys()) == BOOTSTRAP_STABILITY_COLUMNS
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert manifest_payload["status"] == "complete"
     assert any(item["group"] == "dataset" for item in manifest_payload["artifacts"])
@@ -946,6 +964,9 @@ def test_learned_calibration_manifest_reports_files(tmp_path):
         "learned_calibration_proxy_sensitivity.csv",
         "learned_calibration_proxy_sensitivity.json",
         "learned_calibration_proxy_sensitivity.md",
+        "learned_calibration_bootstrap_stability.csv",
+        "learned_calibration_bootstrap_stability.json",
+        "learned_calibration_bootstrap_stability.md",
     ):
         (tmp_path / name).write_text("x", encoding="utf-8")
 
@@ -988,3 +1009,71 @@ def test_proxy_threshold_sensitivity_stability_and_classification():
     assert first["low_count"] == 1
     assert first["label_stability_vs_strategy_a"] == 1.0
     assert first["classification"] == "too_narrow"
+
+
+def test_bootstrap_sample_indices_are_deterministic():
+    assert bootstrap_sample_indices(5, seed=42, iteration=0) == bootstrap_sample_indices(5, seed=42, iteration=0)
+    assert bootstrap_sample_indices(5, seed=42, iteration=0) != bootstrap_sample_indices(5, seed=42, iteration=1)
+    assert len(bootstrap_sample_indices(5, seed=42, iteration=0)) == 5
+
+
+def test_bootstrap_summary_statistics():
+    rows = [
+        {"precision_at_10": 0.0, "recall_at_50": 0.2, "top50_overlap_with_full": 0.5},
+        {"precision_at_10": 1.0, "recall_at_50": 0.8, "top50_overlap_with_full": 1.0},
+    ]
+
+    summary = summarize_bootstrap_metrics(rows)
+
+    assert summary["precision_at_10"]["mean"] == 0.5
+    assert summary["precision_at_10"]["stddev"] == 0.5
+    assert summary["precision_at_10"]["min"] == 0.0
+    assert summary["precision_at_10"]["max"] == 1.0
+    assert summary["precision_at_10"]["p05"] == 0.05
+    assert summary["precision_at_10"]["p95"] == 0.95
+
+
+def test_bootstrap_stability_seeded_output_is_stable():
+    rows = [
+        _row(
+            cve_id=f"CVE-{index:04d}",
+            risk_score=100 - index,
+            cvss_score=9.8 if index % 5 == 0 else 5.0,
+            nlp_context_signal=0.9 if index % 5 == 0 else 0.2,
+            recency_signal=0.8 if index % 5 == 0 else 0.2,
+        )
+        for index in range(25)
+    ]
+    labels = build_proxy_label_rows(rows)
+
+    first = compute_bootstrap_stability(rows, labels, iterations=12, seed=42)
+    second = compute_bootstrap_stability(rows, labels, iterations=12, seed=42)
+
+    assert first == second
+    assert first["status"] == "evaluated"
+    assert first["iteration_count"] == 12
+    assert len(first["iterations"]) == 12
+    assert first["iterations"][0]["sample_size"] == 25
+    assert set(first["summary"]) == {
+        "precision_at_10",
+        "precision_at_50",
+        "precision_at_100",
+        "recall_at_50",
+        "recall_at_100",
+        "top50_overlap_with_full",
+        "top100_overlap_with_full",
+    }
+
+
+def test_bootstrap_stability_skips_unusable_labels():
+    rows = [_row(cve_id=f"CVE-{index}", risk_score=10 - index, cvss_score=4.0) for index in range(12)]
+    labels = [
+        {**build_proxy_label_row(row), "proxy_binary_high_strategy_a": 0, "proxy_label_strategy_a": "low"}
+        for row in rows
+    ]
+
+    result = compute_bootstrap_stability(rows, labels, iterations=10, seed=42)
+
+    assert result["status"] == "skipped"
+    assert result["iterations"] == []
+    assert "no positive proxy labels" in result["skip_reason"]
