@@ -25,6 +25,7 @@ from evaluation.learned_calibration import (
     build_leakage_checks,
     build_learned_calibration_manifest,
     build_limitations_matrix,
+    build_no_overclaim_audit,
     build_negative_control_rankings,
     build_publication_tables,
     build_reviewer_checklist,
@@ -49,6 +50,7 @@ from evaluation.learned_calibration import (
     render_coverage_strata_markdown,
     render_consistency_audit_markdown,
     render_limitations_matrix_markdown,
+    render_no_overclaim_audit_markdown,
     render_negative_controls_markdown,
     render_reviewer_checklist_markdown,
     render_runtime_snapshot_markdown,
@@ -287,6 +289,8 @@ def test_export_writes_three_output_files(tmp_path):
     limitations_matrix = tmp_path / "learned_calibration_limitations_matrix.csv"
     limitations_matrix_json = tmp_path / "learned_calibration_limitations_matrix.json"
     limitations_matrix_summary = tmp_path / "learned_calibration_limitations_matrix.md"
+    no_overclaim_audit = tmp_path / "learned_calibration_no_overclaim_audit.json"
+    no_overclaim_audit_summary = tmp_path / "learned_calibration_no_overclaim_audit.md"
     manifest = tmp_path / "learned_calibration_manifest.json"
     manifest_summary = tmp_path / "learned_calibration_manifest.md"
     assert result["paths"] == {
@@ -337,6 +341,8 @@ def test_export_writes_three_output_files(tmp_path):
         "limitations_matrix": str(limitations_matrix),
         "limitations_matrix_json": str(limitations_matrix_json),
         "limitations_matrix_summary": str(limitations_matrix_summary),
+        "no_overclaim_audit": str(no_overclaim_audit),
+        "no_overclaim_audit_summary": str(no_overclaim_audit_summary),
         "manifest": str(manifest),
         "manifest_summary": str(manifest_summary),
     }
@@ -387,6 +393,8 @@ def test_export_writes_three_output_files(tmp_path):
     assert limitations_matrix.exists()
     assert limitations_matrix_json.exists()
     assert limitations_matrix_summary.exists()
+    assert no_overclaim_audit.exists()
+    assert no_overclaim_audit_summary.exists()
     assert manifest.exists()
     assert manifest_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
@@ -461,6 +469,8 @@ def test_export_writes_three_output_files(tmp_path):
     assert list(matrix_rows[0].keys()) == LIMITATIONS_MATRIX_COLUMNS
     matrix_payload = json.loads(limitations_matrix_json.read_text(encoding="utf-8"))
     assert matrix_payload["row_count"] >= 11
+    no_overclaim_payload = json.loads(no_overclaim_audit.read_text(encoding="utf-8"))
+    assert no_overclaim_payload["status"] == "passed"
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert manifest_payload["status"] == "complete"
     assert any(item["group"] == "dataset" for item in manifest_payload["artifacts"])
@@ -1073,6 +1083,8 @@ def test_learned_calibration_manifest_reports_files(tmp_path):
         "learned_calibration_limitations_matrix.csv",
         "learned_calibration_limitations_matrix.json",
         "learned_calibration_limitations_matrix.md",
+        "learned_calibration_no_overclaim_audit.json",
+        "learned_calibration_no_overclaim_audit.md",
     ):
         (tmp_path / name).write_text("x", encoding="utf-8")
 
@@ -1479,3 +1491,37 @@ def test_limitations_matrix_markdown_rendering():
     assert "# Learned Calibration Limitations Matrix" in markdown
     assert "| Limitation | Impact | Mitigation Already Implemented | Future Work | Thesis-Safe Wording |" in markdown
     assert "Proxy labels support feasibility discussion" in markdown
+
+
+def test_no_overclaim_audit_passes_safe_generated_bundle(tmp_path):
+    export_from_documents([_synthetic_doc()], tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+
+    audit = build_no_overclaim_audit(tmp_path)
+    markdown = render_no_overclaim_audit_markdown(audit)
+
+    assert audit["status"] == "passed"
+    assert audit["findings"] == []
+    assert "# Learned Calibration No-Overclaim Audit" in markdown
+
+
+def test_no_overclaim_audit_flags_unsafe_positive_claim(tmp_path):
+    (tmp_path / "learned_calibration_summary.md").write_text(
+        "This system has statistically proven real-world performance.",
+        encoding="utf-8",
+    )
+
+    audit = build_no_overclaim_audit(tmp_path)
+
+    assert audit["status"] == "failed"
+    assert audit["findings"][0]["phrase"] == "statistically proven real-world performance"
+
+
+def test_no_overclaim_audit_allows_negated_ground_truth_wording(tmp_path):
+    (tmp_path / "learned_calibration_summary.md").write_text(
+        "Proxy labels are not ground truth and do not replace production scoring.",
+        encoding="utf-8",
+    )
+
+    audit = build_no_overclaim_audit(tmp_path)
+
+    assert audit["status"] == "passed"

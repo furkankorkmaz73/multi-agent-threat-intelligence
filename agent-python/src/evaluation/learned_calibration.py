@@ -438,6 +438,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     limitations_matrix_path = output / "learned_calibration_limitations_matrix.csv"
     limitations_matrix_json_path = output / "learned_calibration_limitations_matrix.json"
     limitations_matrix_summary_path = output / "learned_calibration_limitations_matrix.md"
+    no_overclaim_audit_path = output / "learned_calibration_no_overclaim_audit.json"
+    no_overclaim_audit_summary_path = output / "learned_calibration_no_overclaim_audit.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
@@ -552,6 +554,9 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
             writer.writerow({column: row.get(column, "") for column in LIMITATIONS_MATRIX_COLUMNS})
     limitations_matrix_json_path.write_text(json.dumps(limitations_matrix, indent=2, sort_keys=True, default=str), encoding="utf-8")
     limitations_matrix_summary_path.write_text(render_limitations_matrix_markdown(limitations_matrix), encoding="utf-8")
+    no_overclaim_audit = build_no_overclaim_audit(output)
+    no_overclaim_audit_path.write_text(json.dumps(no_overclaim_audit, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    no_overclaim_audit_summary_path.write_text(render_no_overclaim_audit_markdown(no_overclaim_audit), encoding="utf-8")
     appendix_path.write_text(
         render_learned_calibration_appendix(
             feasibility_report=report,
@@ -642,6 +647,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "limitations_matrix": str(limitations_matrix_path),
         "limitations_matrix_json": str(limitations_matrix_json_path),
         "limitations_matrix_summary": str(limitations_matrix_summary_path),
+        "no_overclaim_audit": str(no_overclaim_audit_path),
+        "no_overclaim_audit_summary": str(no_overclaim_audit_summary_path),
         "manifest": str(manifest_path),
         "manifest_summary": str(manifest_summary_path),
     }
@@ -2655,6 +2662,135 @@ def _limitation_row(
     }
 
 
+def build_no_overclaim_audit(artifact_dir: str | Path) -> dict[str, Any]:
+    root = Path(artifact_dir)
+    findings: list[dict[str, str]] = []
+    scanned_files = _no_overclaim_scan_files(root)
+    for path in scanned_files:
+        findings.extend(_unsafe_claim_findings(path))
+    return {
+        "status": "passed" if not findings else "failed",
+        "scanned_file_count": len(scanned_files),
+        "findings": findings,
+        "unsafe_phrases": _unsafe_overclaim_phrases(),
+        "notes": [
+            "This audit flags unsafe learned-calibration claims unless they are explicitly negated or framed as limitations.",
+            "Proxy labels are not ground truth, and learned calibration does not replace production scoring.",
+        ],
+    }
+
+
+def render_no_overclaim_audit_markdown(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration No-Overclaim Audit",
+        "",
+        "This audit checks learned-calibration docs and generated reports for unsafe thesis claims. Safe negated or limitation wording is allowed.",
+        "",
+        f"- Status: `{payload.get('status', '')}`",
+        f"- Scanned files: `{payload.get('scanned_file_count', 0)}`",
+        f"- Findings: `{len(payload.get('findings') or [])}`",
+        "",
+        "| File | Phrase | Line | Excerpt |",
+        "| --- | --- | ---: | --- |",
+    ]
+    findings = list(payload.get("findings") or [])
+    if findings:
+        for finding in findings:
+            lines.append(
+                "| {file} | {phrase} | {line} | {excerpt} |".format(
+                    file=finding.get("file", ""),
+                    phrase=finding.get("phrase", ""),
+                    line=finding.get("line", ""),
+                    excerpt=finding.get("excerpt", ""),
+                )
+            )
+    else:
+        lines.append("| none | none | 0 | No unsafe overclaim wording detected. |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _unsafe_claim_findings(path: Path) -> list[dict[str, str]]:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except FileNotFoundError:
+        return []
+    findings: list[dict[str, str]] = []
+    for line_number, line in enumerate(lines, start=1):
+        lower = line.lower()
+        for phrase in _unsafe_overclaim_phrases():
+            if phrase in lower and not _is_safe_overclaim_context(lower):
+                findings.append(
+                    {
+                        "file": str(path),
+                        "phrase": phrase,
+                        "line": str(line_number),
+                        "excerpt": line.strip()[:240],
+                    }
+                )
+    return findings
+
+
+def _unsafe_overclaim_phrases() -> list[str]:
+    return [
+        "ground truth",
+        "proven exploitation prediction",
+        "production-ready",
+        "autonomous agent",
+        "optimal weights",
+        "dark web crawler",
+        "statistically proven real-world performance",
+        "learned model replaces heuristic scoring",
+        "confidence equals correctness",
+    ]
+
+
+def _is_safe_overclaim_context(line: str) -> bool:
+    safe_markers = [
+        "not ground truth",
+        "not a ground truth",
+        "not treated as ground truth",
+        "not negative ground truth",
+        "what would change with real ground truth labels",
+        "not factual correctness",
+        "not equivalent to correctness",
+        "does not prove",
+        "does not replace",
+        "do not claim",
+        "avoid claims",
+        "unsafe claims",
+        "limitation",
+        "limitations",
+        "future work",
+        "would require",
+        "would allow",
+        "requires",
+        "required",
+        "disabled",
+        "was not used",
+        "not used",
+        "no ",
+    ]
+    return any(marker in line for marker in safe_markers)
+
+
+def _no_overclaim_scan_files(root: Path) -> list[Path]:
+    filenames = {
+        "learned_calibration_report.json",
+        "learned_calibration_summary.md",
+        *[
+            spec["filename"]
+            for spec in _learned_calibration_artifact_specs()
+            if "no_overclaim_audit" not in spec["filename"] and "consistency_audit" not in spec["filename"]
+        ],
+    }
+    files = [root / filename for filename in sorted(filenames) if (root / filename).exists()]
+    docs_path = Path(__file__).resolve().parents[3] / "docs" / "learned_calibration.md"
+    if docs_path.exists():
+        files.append(docs_path)
+    return files
+
+
 def _checklist_item(check_id: str, passed: bool, evidence_artifact: str, note: str) -> dict[str, str]:
     return {
         "check_id": check_id,
@@ -2987,6 +3123,8 @@ def _learned_calibration_artifact_specs() -> list[dict[str, str]]:
         {"group": "limitations matrix", "filename": "learned_calibration_limitations_matrix.csv", "description": "Structured limitations matrix rows", "usage": "Machine-readable thesis limitations matrix."},
         {"group": "limitations matrix", "filename": "learned_calibration_limitations_matrix.json", "description": "Structured limitations matrix payload", "usage": "JSON thesis limitations matrix."},
         {"group": "limitations matrix", "filename": "learned_calibration_limitations_matrix.md", "description": "Readable limitations matrix", "usage": "Thesis-safe limitations table."},
+        {"group": "no-overclaim audit", "filename": "learned_calibration_no_overclaim_audit.json", "description": "No-overclaim audit payload", "usage": "Checks learned-calibration docs and reports for unsafe claims."},
+        {"group": "no-overclaim audit", "filename": "learned_calibration_no_overclaim_audit.md", "description": "Readable no-overclaim audit", "usage": "Final thesis claim-safety audit."},
     ]
 
 

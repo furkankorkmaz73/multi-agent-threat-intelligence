@@ -72,6 +72,8 @@ Generated files:
 - `reports/thesis/learned_calibration_limitations_matrix.csv`
 - `reports/thesis/learned_calibration_limitations_matrix.json`
 - `reports/thesis/learned_calibration_limitations_matrix.md`
+- `reports/thesis/learned_calibration_no_overclaim_audit.json`
+- `reports/thesis/learned_calibration_no_overclaim_audit.md`
 - `reports/thesis/learned_calibration_quality_report.json`
 - `reports/thesis/learned_calibration_quality_report.md`
 
@@ -126,6 +128,8 @@ The reviewer-checklist artifacts provide structured thesis review items across r
 The defense Q&A artifact provides concise academic answers for common thesis-defense questions about proxy labels, heuristic scoring, skipped model training, URLhaus/Dread limitations, confidence-vs-risk separation, sensitivity, bootstrap stability, negative controls, and safe thesis claims.
 
 The limitations-matrix artifacts consolidate thesis-safe limitations into structured CSV, JSON, and Markdown forms. They map each limitation to interpretive impact, implemented mitigation, future work, and wording that can be reused in thesis text.
+
+The no-overclaim audit artifacts scan learned-calibration docs and generated reports for unsafe claims such as ground-truth prediction, production readiness, autonomous-agent claims, optimal weights, or learned-model replacement of heuristic scoring. Explicitly negated or limitation-framed wording is allowed.
 
 The quality report artifacts are produced by `make thesis-learned-calibration-quality`. The gate checks required learned-calibration files, JSON parseability, CSV headers, limitation language, experimental framing, unchanged production risk score wording, unchanged evidence-gate wording, and absence of real-world exploitation-proof claims.
 
