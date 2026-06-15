@@ -148,12 +148,14 @@ def test_cve_medium_severity_with_limited_evidence_is_locked(monkeypatch):
     )
 
     assert result["risk_score"] == 5.25
-    assert result["confidence"] == 0.525
+    assert result["confidence"] == 0.485
     assert result["risk_level"] == "MEDIUM"
     assert result["evidence"]["related_urlhaus_count"] == 0
     assert result["evidence"]["related_dread_count"] == 0
     assert result["evidence"]["dread_match_stats"]["accepted_match_count"] == 0
     assert result["confidence_breakdown"]["signals"]["accepted_external_evidence"] == 0
+    assert result["confidence_breakdown"]["signals"]["dread_only_evidence"] is True
+    assert result["confidence_breakdown"]["signals"]["confidence_cap_reason"] == "dread_only_evidence_cap"
     assert result["feature_breakdown"]["base_cvss_component"] == 4.68
     assert result["feature_breakdown"]["dread_correlation_bonus"] == 0.0
     assert result["feature_breakdown"]["age_penalty"] == 0.15

@@ -44,8 +44,16 @@ def test_correlation_decision_status_coverage():
     assert {decision["status"] for decision in decisions} == {"accepted", "manual_review", "rejected"}
     assert any(decision["target_identifier"] == "UH-9001" and decision["status"] == "accepted" for decision in decisions)
     assert any(decision["target_identifier"] == "UH-9002" and decision["status"] == "manual_review" for decision in decisions)
+    assert any(decision["target_identifier"] == "DR-9001" and decision["status"] == "accepted" for decision in decisions)
+    assert any(decision["target_identifier"] == "DR-9017" and decision["status"] == "manual_review" for decision in decisions)
+    assert any(decision["target_identifier"] == "DR-9002" and decision["status"] == "rejected" for decision in decisions)
     assert all(decision["evidence_references"] for decision in decisions)
     assert all(decision["provenance_summary"] for decision in decisions)
+    assert all("evidence_reliability" in decision for decision in decisions)
+    dread_decisions = [decision for decision in decisions if decision["evidence_source"] == "dread"]
+    assert any(decision["confidence_cap_reason"] == "dread_source_reliability_cap" for decision in dread_decisions)
+    assert any(decision["confidence_cap_reason"] == "dread_manual_review_cap" for decision in dread_decisions)
+    assert any(decision["confidence_cap_reason"] == "rejected_dread_no_confidence" for decision in dread_decisions)
 
 
 def test_asset_operational_risk_differs_by_applicability_and_exposure():
@@ -83,6 +91,10 @@ def test_asset_operational_risk_case_studies_cover_adjustments():
     assert cases["patched_asset_reduction"]["patched_asset_score"] < cases["patched_asset_reduction"]["unpatched_asset_score"]
     assert "compensating_control_reduction" in cases
     assert cases["compensating_control_reduction"]["controlled_asset_score"] < cases["compensating_control_reduction"]["uncontrolled_asset_score"]
+    assert "dread_corroborated_by_urlhaus_or_kev" in cases
+    assert cases["dread_corroborated_by_urlhaus_or_kev"]["accepted_dread_decisions"] >= 1
+    assert "weak_dread_rejected" in cases
+    assert cases["weak_dread_rejected"]["rejected_dread_decisions"] >= 1
 
 
 def test_api_compatible_response_keys_are_preserved():

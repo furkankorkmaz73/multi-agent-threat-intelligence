@@ -20,9 +20,17 @@ Dread content can be illegal, harmful, inaccurate, fabricated, or operationally 
 
 Dread posts are difficult to reproduce and verify. Posts can be deleted, edited, misleading, or intentionally deceptive. Attribution is weak. A post mentioning a product or keyword is not verified exploitation evidence.
 
-## Scoring Treatment
+## Bounded Evidence Treatment
 
-Dread-only evidence normally produces low or medium confidence unless corroborated by stronger evidence such as exact CVE references, URLhaus IOC evidence, EPSS likelihood, or CISA KEV listing. Rejected or manual-review Dread candidates remain diagnostic and do not increase risk, graph bonus, or confidence.
+Dread is not treated as ground truth. The reliability order used by the deterministic model is:
+
+```text
+CISA KEV / exact CVE match / URLhaus IOC > EPSS probability > structured correlation > Dread mention > keyword-only match
+```
+
+Dread-only evidence normally routes to manual review or weak diagnostic state. It is capped to low or medium confidence and cannot create CRITICAL risk by itself. Rejected or manual-review Dread candidates remain diagnostic and do not increase risk, graph bonus, or confidence.
+
+Corroborated Dread evidence can support confidence modestly when paired with stronger evidence such as an exact CVE reference, accepted URLhaus IOC evidence, or CISA KEV listing. This support remains bounded and does not override CVSS, EPSS, KEV, or accepted structured evidence.
 
 ## Reproducibility
 

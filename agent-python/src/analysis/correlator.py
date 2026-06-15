@@ -144,7 +144,7 @@ def _score_matches(
     source: str,
 ) -> Tuple[float, List[str], Dict[str, Any]]:
     if not matches:
-        return 0.0, [], _empty_match_stats()
+        return 0.0, [], _empty_match_stats(source=source)
 
     cfg = SETTINGS.scoring
     base_terms = _normalize_terms(base_keywords or [])
@@ -165,6 +165,7 @@ def _score_matches(
     online_hits = 0
     entity_hits = 0
     rejected_count = 0
+    manual_review_count = 0
     strongest_match_score = 0.0
 
     for match in matches[:8]:
@@ -188,6 +189,8 @@ def _score_matches(
 
         if decision.status is not CorrelationDecisionStatus.ACCEPTED:
             rejected_count += 1
+            if decision.status is CorrelationDecisionStatus.MANUAL_REVIEW:
+                manual_review_count += 1
             continue
 
         score = (
@@ -224,7 +227,11 @@ def _score_matches(
 
     cap = cfg.urlhaus_score_cap if source == "urlhaus" else cfg.dread_score_cap
     if not accepted_scores:
-        return 0.0, [], _empty_match_stats(rejected_count=len(matches[:8]))
+        return 0.0, [], _empty_match_stats(
+            rejected_count=len(matches[:8]),
+            manual_review_count=manual_review_count,
+            source=source,
+        )
 
     # Diminishing returns: three weak similar posts should not outweigh one strong exact correlation.
     accepted_scores.sort(reverse=True)
@@ -259,6 +266,7 @@ def _score_matches(
         "avg_entity_score": avg_entity,
         "accepted_match_count": len(accepted_scores),
         "rejected_match_count": rejected_count,
+        "manual_review_match_count": manual_review_count,
         "exact_cve_hits": exact_cve_hits,
         "online_hits": online_hits,
         "high_signal_hits": high_signal_hits,
@@ -269,6 +277,11 @@ def _score_matches(
         "accepted_matches": accepted_matches[:8],
         "candidate_count": len(matches[:8]),
         "hybrid_score_cap": cap,
+        "evidence_source": source,
+        "evidence_reliability": _source_reliability(source),
+        "dread_evidence_present": source == "dread" and bool(matches[:8]),
+        "dread_only_evidence": source == "dread",
+        "corroborated_dread_evidence": False,
     }
     return min(round(total_score, 4), cap), explanations, stats
 
@@ -519,7 +532,7 @@ def _avg(values: List[float]) -> float:
     return round(sum(values) / len(values), 4) if values else 0.0
 
 
-def _empty_match_stats(rejected_count: int = 0) -> Dict[str, Any]:
+def _empty_match_stats(rejected_count: int = 0, manual_review_count: int = 0, source: str = "unknown") -> Dict[str, Any]:
     return {
         "avg_overlap_ratio": 0.0,
         "avg_lexical_score": 0.0,
@@ -528,6 +541,7 @@ def _empty_match_stats(rejected_count: int = 0) -> Dict[str, Any]:
         "avg_entity_score": 0.0,
         "accepted_match_count": 0,
         "rejected_match_count": rejected_count,
+        "manual_review_match_count": manual_review_count,
         "exact_cve_hits": 0,
         "online_hits": 0,
         "high_signal_hits": 0,
@@ -537,7 +551,20 @@ def _empty_match_stats(rejected_count: int = 0) -> Dict[str, Any]:
         "acceptance_reasons": [],
         "accepted_matches": [],
         "candidate_count": rejected_count,
+        "evidence_source": source,
+        "evidence_reliability": _source_reliability(source),
+        "dread_evidence_present": source == "dread" and rejected_count > 0,
+        "dread_only_evidence": source == "dread" and rejected_count > 0,
+        "corroborated_dread_evidence": False,
     }
+
+
+def _source_reliability(source: str) -> float:
+    if source == "urlhaus":
+        return 0.84
+    if source == "dread":
+        return 0.38
+    return 0.0
 
 
 def correlate_keywords(source_keywords=None, candidate_texts=None, **kwargs):

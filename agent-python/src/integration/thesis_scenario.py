@@ -330,6 +330,20 @@ def _build_correlation_decisions() -> List[Dict[str, Any]]:
         ),
         build_correlation_candidate(
             source="dread",
+            source_identifier="CVE-2026-9001",
+            target_identifier="DR-9001",
+            relation_type="cve_forum",
+            lexical=0.32,
+            semantic=0.34,
+            temporal=0.7,
+            entity_score=0.48,
+            shared_term_count=2,
+            exact_cve=True,
+            high_signal_term_hits=2,
+            raw_reference="dread://DR-9001",
+        ),
+        build_correlation_candidate(
+            source="dread",
             source_identifier="CVE-2026-9017",
             target_identifier="DR-9017",
             relation_type="cve_forum",
@@ -394,6 +408,37 @@ def _notable_cases(repository: InMemoryScenarioRepository, operational_risk: Lis
             "case": "dread_only_manual_review",
             "entity_id": "CVE-2026-9017",
             "manual_review_decisions": sum(1 for item in decisions if item["source_identifier"] == "CVE-2026-9017" and item["status"] == "manual_review"),
+            "dread_only_evidence": True,
+            "confidence_cap_reason": next(
+                (
+                    item.get("confidence_cap_reason")
+                    for item in decisions
+                    if item["source_identifier"] == "CVE-2026-9017" and item["source"] == "dread"
+                ),
+                "",
+            ),
+        },
+        {
+            "case": "dread_corroborated_by_urlhaus_or_kev",
+            "entity_id": "CVE-2026-9001",
+            "description": "Dread exact-CVE mention is accepted only as bounded support in a case also supported by URLhaus and KEV evidence.",
+            "accepted_dread_decisions": sum(1 for item in decisions if item["target_identifier"] == "DR-9001" and item["status"] == "accepted"),
+            "corroborated_by": ["urlhaus", "kev"],
+            "confidence_cap_reason": next(
+                (
+                    item.get("confidence_cap_reason")
+                    for item in decisions
+                    if item["target_identifier"] == "DR-9001" and item["source"] == "dread"
+                ),
+                "",
+            ),
+        },
+        {
+            "case": "weak_dread_rejected",
+            "entity_id": "CVE-2015-0001",
+            "description": "Vague Dread mention is rejected and remains diagnostic only.",
+            "rejected_dread_decisions": sum(1 for item in decisions if item["target_identifier"] == "DR-9002" and item["status"] == "rejected"),
+            "dread_only_evidence": True,
         },
         {
             "case": "asset_applicability_difference",

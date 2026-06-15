@@ -1,6 +1,7 @@
 from analysis.correlation_decisions import CorrelationDecisionStatus
-from analysis.correlator import build_correlation_decision_rows, build_correlation_decisions, score_urlhaus_matches
+from analysis.correlator import build_correlation_decision_rows, build_correlation_decisions, score_dread_matches, score_urlhaus_matches
 from analysis.evidence_models import Evidence, EvidenceSource, EvidenceType, Provenance
+from config import DreadConfig
 
 
 def test_exact_cve_reference_is_accepted_with_provenance_serialization():
@@ -30,7 +31,7 @@ def test_exact_cve_reference_is_accepted_with_provenance_serialization():
     assert any(item["evidence_type"] == "cve_reference" for item in serialized["evidence_references"])
 
 
-def test_high_signal_overlap_is_accepted_without_changing_public_stats():
+def test_dread_high_signal_overlap_routes_to_manual_review_without_exact_cve():
     matches = [
         {
             "title": "RCE exploit sale",
@@ -47,8 +48,65 @@ def test_high_signal_overlap_is_accepted_without_changing_public_stats():
         source="dread",
     )
 
-    assert decisions[0].status is CorrelationDecisionStatus.ACCEPTED
-    assert decisions[0].primary_reason in {"entity_alignment", "high_signal_terms", "lexical_overlap"}
+    assert decisions[0].status is CorrelationDecisionStatus.MANUAL_REVIEW
+    assert decisions[0].primary_reason == "ambiguous_support"
+    assert decisions[0].final_confidence <= 0.35
+    assert decisions[0].dread_only_evidence is True
+    assert decisions[0].confidence_cap_reason == "dread_manual_review_cap"
+
+
+def test_dread_exact_cve_can_be_accepted_but_confidence_is_capped():
+    decisions = build_correlation_decisions(
+        [
+            {
+                "title": "CVE-2026-4242 exploit sale",
+                "content": "Selling exploit for CVE-2026-4242 with rce loader access.",
+                "category": "market",
+                "created_at": "2026-05-02T00:00:00+00:00",
+            }
+        ],
+        base_keywords=["cve-2026-4242", "remote code execution", "exploit"],
+        entity_time="2026-05-01T00:00:00+00:00",
+        source="dread",
+    )
+
+    decision = decisions[0]
+    assert decision.status is CorrelationDecisionStatus.ACCEPTED
+    assert decision.primary_reason == "exact_cve"
+    assert decision.final_confidence <= 0.62
+    assert decision.evidence_reliability < 0.7
+    assert decision.corroborated_dread_evidence is True
+    assert decision.confidence_cap_reason == "dread_source_reliability_cap"
+
+
+def test_weak_dread_candidate_does_not_increase_score_or_confidence():
+    matches = [
+        {
+            "title": "Admin discussion",
+            "content": "Generic access discussion without CVE, exploit, malware, or product-specific detail.",
+            "category": "forum",
+            "created_at": "2026-05-02T00:00:00+00:00",
+        }
+    ]
+
+    decisions = build_correlation_decisions(
+        matches,
+        base_keywords=["cve-2026-4242", "example vpn remote code execution"],
+        entity_time="2026-05-01T00:00:00+00:00",
+        source="dread",
+    )
+    score, explanations, _, stats = score_dread_matches(
+        matches,
+        base_keywords=["cve-2026-4242", "example vpn remote code execution"],
+        entity_time="2026-05-01T00:00:00+00:00",
+    )
+
+    assert decisions[0].status is CorrelationDecisionStatus.REJECTED
+    assert decisions[0].final_confidence <= 0.15
+    assert score == 0.0
+    assert explanations == []
+    assert stats["accepted_match_count"] == 0
+    assert stats["dread_evidence_present"] is True
 
 
 def test_generic_keyword_only_urlhaus_candidate_is_rejected():
@@ -203,3 +261,14 @@ def test_correlation_decision_rows_include_component_scores():
     assert row["decision"] == "accepted"
     assert row["primary_reason"] == "exact_cve"
     assert {"source_identifier", "target_identifier", "lexical_score", "semantic_score", "final_confidence"} <= set(row)
+    assert {"evidence_source", "evidence_reliability", "confidence_cap_reason"} <= set(row)
+
+
+def test_dread_is_default_off_when_environment_is_unset(monkeypatch):
+    monkeypatch.delenv("DREAD_ENABLED", raising=False)
+    monkeypatch.delenv("DREAD_ONION_URL", raising=False)
+
+    cfg = DreadConfig()
+
+    assert cfg.enabled is False
+    assert cfg.onion_url is None

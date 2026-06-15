@@ -136,4 +136,7 @@ def test_dread_only_weak_evidence_does_not_produce_high_confidence():
 
     assert result["evidence"]["related_urlhaus_count"] == 0
     assert result["confidence"] < 0.7
-    assert result["confidence_breakdown"]["signals"]["dread_only"] in {False, True}
+    signals = result["confidence_breakdown"]["signals"]
+    assert signals["dread_evidence_present"] is True
+    assert signals["dread_only_evidence"] is True
+    assert signals["confidence_cap_reason"] == "dread_only_evidence_cap"

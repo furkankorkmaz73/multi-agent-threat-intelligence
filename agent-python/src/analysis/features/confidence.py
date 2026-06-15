@@ -47,11 +47,18 @@ def calculate_cve_confidence(
 
     accepted_external = urlhaus_match_count + dread_match_count
     rejected_correlations = int(urlhaus_stats.get("rejected_match_count", 0) or 0) + int(dread_stats.get("rejected_match_count", 0) or 0)
-    exact_hits = int(urlhaus_stats.get("exact_cve_hits", 0) or 0) + int(dread_stats.get("exact_cve_hits", 0) or 0)
+    urlhaus_exact_hits = int(urlhaus_stats.get("exact_cve_hits", 0) or 0)
+    dread_exact_hits = int(dread_stats.get("exact_cve_hits", 0) or 0)
+    exact_hits = urlhaus_exact_hits + dread_exact_hits
     high_signal_hits = int(urlhaus_stats.get("high_signal_hits", 0) or 0) + int(dread_stats.get("high_signal_hits", 0) or 0)
     entity_hits = int(urlhaus_stats.get("entity_overlap_hits", 0) or 0) + int(dread_stats.get("entity_overlap_hits", 0) or 0)
     shared_terms = set(urlhaus_stats.get("shared_terms") or []) | set(dread_stats.get("shared_terms") or [])
     acceptance_reasons = set(urlhaus_stats.get("acceptance_reasons") or []) | set(dread_stats.get("acceptance_reasons") or [])
+    dread_candidate_count = int(dread_stats.get("candidate_count", 0) or 0)
+    dread_evidence_present = dread_candidate_count > 0 or dread_match_count > 0
+    stronger_corroboration_present = urlhaus_match_count > 0 or urlhaus_exact_hits > 0 or kev_listed
+    dread_only_evidence = dread_evidence_present and not stronger_corroboration_present
+    corroborated_dread_evidence = dread_evidence_present and stronger_corroboration_present
     semantic_signal = max(
         float(urlhaus_stats.get("avg_semantic_score", 0.0) or 0.0),
         float(dread_stats.get("avg_semantic_score", 0.0) or 0.0),
@@ -145,7 +152,7 @@ def calculate_cve_confidence(
         accepted_external_evidence_count=accepted_external,
         evidence_freshness_signal=normalize_recency(age_days),
         rejected_correlation_count=rejected_correlations,
-        dread_only=dread_match_count > 0 and urlhaus_match_count == 0 and not exact_hits,
+        dread_only=dread_only_evidence,
     )
     source_reliability_confidence = external_signal_components["source_reliability_confidence"]
     external_signal_penalties = external_signal_components["external_signal_penalties"]
@@ -182,8 +189,12 @@ def calculate_cve_confidence(
         raw_confidence = min(raw_confidence, 0.35)
         if keyword_count <= 3 and llm_fields_count == 0:
             raw_confidence = min(raw_confidence, 0.28)
-    if dread_match_count > 0 and urlhaus_match_count == 0 and not exact_hits and not kev_listed:
-        raw_confidence = min(raw_confidence, 0.68 if high_signal_hits else 0.55)
+    confidence_cap_reason = ""
+    if dread_only_evidence:
+        raw_confidence = min(raw_confidence, 0.58 if dread_exact_hits or high_signal_hits else 0.52)
+        confidence_cap_reason = "dread_only_evidence_cap"
+    elif corroborated_dread_evidence:
+        confidence_cap_reason = "corroborated_dread_modest_support"
 
     confidence = round(max(0.05, min(raw_confidence, 0.95)), 3)
     breakdown = {
@@ -213,7 +224,18 @@ def calculate_cve_confidence(
             "kev_status_known": bool(kev_status_known),
             "kev_listed": bool(kev_listed),
             "rejected_correlation_count": rejected_correlations,
-            "dread_only": dread_match_count > 0 and urlhaus_match_count == 0 and not exact_hits,
+            "urlhaus_exact_hits": urlhaus_exact_hits,
+            "dread_exact_hits": dread_exact_hits,
+            "dread_evidence_present": dread_evidence_present,
+            "dread_only": dread_only_evidence,
+            "dread_only_evidence": dread_only_evidence,
+            "corroborated_dread_evidence": corroborated_dread_evidence,
+            "confidence_cap_reason": confidence_cap_reason,
+            "evidence_reliability": {
+                "kev": 0.90 if kev_listed else 0.0,
+                "urlhaus": 0.84 if urlhaus_match_count > 0 else 0.0,
+                "dread": 0.38 if dread_evidence_present else 0.0,
+            },
         },
     }
     return ConfidenceResult(confidence=confidence, breakdown=breakdown)

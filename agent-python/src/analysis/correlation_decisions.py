@@ -57,6 +57,13 @@ class CorrelationDecision:
     evidence_references: tuple[Evidence, ...]
     reasons: tuple[str, ...]
     provenance_summary: Mapping[str, Any]
+    evidence_source: str = "unknown"
+    evidence_reliability: float = 0.0
+    dread_evidence_present: bool = False
+    dread_only_evidence: bool = False
+    corroborated_dread_evidence: bool = False
+    manual_review_reason: str = ""
+    confidence_cap_reason: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "final_confidence", max(0.0, min(float(self.final_confidence), 1.0)))
@@ -75,6 +82,13 @@ class CorrelationDecision:
             "evidence_references": [item.to_dict() for item in self.evidence_references],
             "reasons": list(self.reasons),
             "provenance_summary": dict(self.provenance_summary),
+            "evidence_source": self.evidence_source,
+            "evidence_reliability": round(float(self.evidence_reliability), 4),
+            "dread_evidence_present": bool(self.dread_evidence_present),
+            "dread_only_evidence": bool(self.dread_only_evidence),
+            "corroborated_dread_evidence": bool(self.corroborated_dread_evidence),
+            "manual_review_reason": self.manual_review_reason,
+            "confidence_cap_reason": self.confidence_cap_reason,
         }
 
 
@@ -118,6 +132,13 @@ def correlation_decision_row(candidate: CorrelationCandidate, decision: Correlat
         "final_confidence": round(float(decision.final_confidence), 4),
         "evidence_types": ",".join(decision.provenance_summary.get("evidence_types", [])),
         "provenance_sources": ",".join(decision.provenance_summary.get("sources", [])),
+        "evidence_source": decision.evidence_source,
+        "evidence_reliability": round(float(decision.evidence_reliability), 4),
+        "dread_evidence_present": bool(decision.dread_evidence_present),
+        "dread_only_evidence": bool(decision.dread_only_evidence),
+        "corroborated_dread_evidence": bool(decision.corroborated_dread_evidence),
+        "manual_review_reason": decision.manual_review_reason,
+        "confidence_cap_reason": decision.confidence_cap_reason,
     }
 
 
@@ -244,18 +265,15 @@ def _accepted_reason(
         if entity_score >= 0.35 and has_meaningful_support and (semantic >= 0.18 or lexical >= 0.08):
             return "entity_alignment"
     elif source == "dread":
-        if entity_score >= 0.45 and high_signal_term_hits >= 1 and shared_term_count >= 1 and (semantic >= 0.22 or lexical >= 0.12):
-            return "entity_alignment"
+        # Non-exact Dread mentions are diagnostic unless corroborated elsewhere.
+        # The standalone candidate cannot prove that corroboration, so it is
+        # routed to manual review by _requires_manual_review instead of being
+        # accepted as high-confidence evidence.
+        return ""
     elif entity_score >= 0.30 and (semantic >= 0.10 or lexical >= 0.04):
         return "entity_alignment"
 
     if source == "dread":
-        if high_signal_term_hits >= 2 and (shared_term_count >= 1 or temporal >= 0.2) and (lexical >= 0.06 or semantic >= 0.18):
-            return "high_signal_terms"
-        if shared_term_count >= max(min_shared_terms + 1, 3) and high_signal_term_hits >= 1 and lexical >= max(min_lexical_overlap * 1.5, 0.14):
-            return "lexical_overlap"
-        if semantic >= max(min_semantic_support, 0.34) and temporal >= 0.3 and shared_term_count >= 1 and high_signal_term_hits >= 1:
-            return "semantic_temporal_support"
         return ""
 
     if high_signal_term_hits >= 2 and (lexical >= 0.06 or semantic >= 0.18):
@@ -286,7 +304,26 @@ def _requires_manual_review(candidate: CorrelationCandidate) -> bool:
 def _decision(candidate: CorrelationCandidate, status: CorrelationDecisionStatus, reason: str) -> CorrelationDecision:
     provenance_sources = sorted({item.provenance.source.value for item in candidate.evidence})
     evidence_types = sorted({item.evidence_type.value for item in candidate.evidence})
-    final_confidence = max((item.confidence for item in candidate.evidence), default=0.0)
+    raw_confidence = max((item.confidence for item in candidate.evidence), default=0.0)
+    final_confidence = raw_confidence
+    manual_review_reason = reason if status is CorrelationDecisionStatus.MANUAL_REVIEW else ""
+    confidence_cap_reason = ""
+    is_dread = candidate.source == EvidenceSource.DREAD.value
+    if is_dread:
+        if status is CorrelationDecisionStatus.ACCEPTED:
+            final_confidence = min(raw_confidence, 0.62 if candidate.exact_cve else 0.50)
+            confidence_cap_reason = "dread_source_reliability_cap"
+        elif status is CorrelationDecisionStatus.MANUAL_REVIEW:
+            final_confidence = min(raw_confidence, 0.35)
+            confidence_cap_reason = "dread_manual_review_cap"
+        else:
+            final_confidence = min(raw_confidence, 0.15)
+            confidence_cap_reason = "rejected_dread_no_confidence"
+    elif status is CorrelationDecisionStatus.MANUAL_REVIEW:
+        final_confidence = min(raw_confidence, 0.45)
+        confidence_cap_reason = "manual_review_confidence_cap"
+    elif status is CorrelationDecisionStatus.REJECTED:
+        final_confidence = min(raw_confidence, 0.20)
     return CorrelationDecision(
         status=status,
         source_identifier=candidate.source_identifier,
@@ -300,7 +337,30 @@ def _decision(candidate: CorrelationCandidate, status: CorrelationDecisionStatus
             "evidence_types": evidence_types,
             "evidence_count": len(candidate.evidence),
         },
+        evidence_source=candidate.source,
+        evidence_reliability=_evidence_reliability(candidate.source, status, candidate.exact_cve),
+        dread_evidence_present=is_dread,
+        dread_only_evidence=is_dread and status is not CorrelationDecisionStatus.ACCEPTED,
+        corroborated_dread_evidence=is_dread and status is CorrelationDecisionStatus.ACCEPTED and candidate.exact_cve,
+        manual_review_reason=manual_review_reason,
+        confidence_cap_reason=confidence_cap_reason,
     )
+
+
+def _evidence_reliability(source: str, status: CorrelationDecisionStatus, exact_cve: bool) -> float:
+    if status is CorrelationDecisionStatus.REJECTED:
+        return 0.10 if source == EvidenceSource.DREAD.value else 0.20
+    if status is CorrelationDecisionStatus.MANUAL_REVIEW:
+        return 0.28 if source == EvidenceSource.DREAD.value else 0.42
+    if exact_cve and source == EvidenceSource.URLHAUS.value:
+        return 0.92
+    if exact_cve and source == EvidenceSource.DREAD.value:
+        return 0.58
+    if source == EvidenceSource.URLHAUS.value:
+        return 0.84
+    if source == EvidenceSource.DREAD.value:
+        return 0.45
+    return 0.55
 
 
 def _evidence(

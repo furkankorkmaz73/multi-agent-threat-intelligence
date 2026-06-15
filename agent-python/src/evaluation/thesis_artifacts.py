@@ -717,6 +717,8 @@ def _case_study_highlights(cases: Sequence[Mapping[str, Any]]) -> str:
         "medium_cvss_high_epss_kev",
         "high_cvss_low_external_evidence",
         "dread_only_manual_review",
+        "dread_corroborated_by_urlhaus_or_kev",
+        "weak_dread_rejected",
         "asset_applicability_difference",
         "patched_asset_reduction",
         "compensating_control_reduction",
@@ -740,7 +742,11 @@ def _case_note(case: Mapping[str, Any]) -> str:
     if case.get("case") == "high_cvss_low_external_evidence":
         return "High CVSS remains meaningful but lacks strong external support."
     if case.get("case") == "dread_only_manual_review":
-        return f"Dread-only evidence remains manual review ({case.get('manual_review_decisions', 0)} decision)."
+        return f"Dread-only evidence remains manual review ({case.get('manual_review_decisions', 0)} decision) with cap {case.get('confidence_cap_reason', '')}."
+    if case.get("case") == "dread_corroborated_by_urlhaus_or_kev":
+        return f"Corroborated Dread support is bounded by {case.get('confidence_cap_reason', '')}."
+    if case.get("case") == "weak_dread_rejected":
+        return f"Weak Dread mention rejected ({case.get('rejected_dread_decisions', 0)} decision)."
     if case.get("case") == "asset_applicability_difference":
         return f"Applicable asset score {case.get('applicable_asset_score')}; non-applicable asset score {case.get('non_applicable_asset_score')}."
     if case.get("case") == "patched_asset_reduction":
@@ -902,6 +908,13 @@ def _write_correlation_decisions(decisions: Sequence[Mapping[str, Any]], path: P
                 "decision": decision.get("decision") or decision.get("status"),
                 "primary_reason": decision.get("primary_reason") or (decision.get("reasons") or [""])[0],
                 "final_confidence": decision.get("final_confidence"),
+                "evidence_source": decision.get("evidence_source", ""),
+                "evidence_reliability": decision.get("evidence_reliability", ""),
+                "dread_evidence_present": decision.get("dread_evidence_present", ""),
+                "dread_only_evidence": decision.get("dread_only_evidence", ""),
+                "corroborated_dread_evidence": decision.get("corroborated_dread_evidence", ""),
+                "manual_review_reason": decision.get("manual_review_reason", ""),
+                "confidence_cap_reason": decision.get("confidence_cap_reason", ""),
             }
         )
 
@@ -922,6 +935,13 @@ def _write_correlation_decisions(decisions: Sequence[Mapping[str, Any]], path: P
             "decision",
             "primary_reason",
             "final_confidence",
+            "evidence_source",
+            "evidence_reliability",
+            "dread_evidence_present",
+            "dread_only_evidence",
+            "corroborated_dread_evidence",
+            "manual_review_reason",
+            "confidence_cap_reason",
         ],
     )
 

@@ -195,6 +195,10 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
     assert "accepted" in correlation_csv
     assert "manual_review" in correlation_csv
     assert "rejected" in correlation_csv
+    assert "evidence_reliability" in correlation_csv
+    assert "dread_only_evidence" in correlation_csv
+    assert "corroborated_dread_evidence" in correlation_csv
+    assert "confidence_cap_reason" in correlation_csv
     cases = json.loads((tmp_path / "out" / "case_studies.json").read_text(encoding="utf-8"))["cases"]
     case_names = {case["case"] for case in cases}
     assert {
@@ -202,6 +206,8 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
         "medium_cvss_high_epss_kev",
         "high_cvss_low_external_evidence",
         "dread_only_manual_review",
+        "dread_corroborated_by_urlhaus_or_kev",
+        "weak_dread_rejected",
         "asset_applicability_difference",
         "patched_asset_reduction",
         "compensating_control_reduction",
@@ -260,6 +266,8 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
         "medium_cvss_high_epss_kev",
         "high_cvss_low_external_evidence",
         "dread_only_manual_review",
+        "dread_corroborated_by_urlhaus_or_kev",
+        "weak_dread_rejected",
         "asset_applicability_difference",
     ):
         assert case in results_md
@@ -316,6 +324,8 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
         "medium_cvss_high_epss_kev",
         "high_cvss_low_external_evidence",
         "dread_only_manual_review",
+        "dread_corroborated_by_urlhaus_or_kev",
+        "weak_dread_rejected",
         "asset_applicability_difference",
     ):
         assert case in thesis_md

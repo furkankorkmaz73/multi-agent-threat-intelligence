@@ -4,6 +4,8 @@ Evaluation uses deterministic model exports joined with optional local EPSS and 
 
 The built-in thesis fixture is a controlled evaluation set, not a live threat-intelligence benchmark. It is designed to validate ranking behavior, ablation behavior, correlation-decision exports, and artifact generation with reproducible inputs. Real-world validation should use larger NVD, EPSS, and CISA KEV exports.
 
+The fixture includes bounded Dread cases for behavioral validation: Dread-only manual review, Dread corroborated by stronger URLhaus/KEV evidence, and weak Dread rejection. These cases do not require live Dread access and do not treat Dread as ground truth.
+
 ## Operational Risk Evaluation
 
 Generic CVE risk is evaluated separately from asset-aware operational risk. The deterministic thesis scenario applies vulnerable-product metadata to a small asset inventory so the same CVE can be compared across applicable, non-applicable, patched, exposed, and compensating-control contexts.
