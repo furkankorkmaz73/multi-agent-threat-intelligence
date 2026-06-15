@@ -77,4 +77,4 @@ jobs:
       - uses: actions/checkout@v4
       - name: Accidental secret scan
         run: |
-          ! git grep -nE '(AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|OPENAI_API_KEY=sk-|LLM_API_KEY=sk-|API_KEYS=.*[A-Za-z0-9_-]{20,})' -- ':!*.lock' ':!agent-python/frontend/package-lock.json' ':!agent-go/go.sum'
+          ! git grep -nE '(AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|OPENAI_API_KEY=[s]k-|LLM_API_KEY=[s]k-|API_KEY[S]=.*[A-Za-z0-9_-]{20,})' -- ':!*.lock' ':!agent-python/frontend/package-lock.json' ':!agent-go/go.sum'
