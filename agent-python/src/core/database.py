@@ -13,6 +13,21 @@ from config import APP_VERSION, DB_NAME, MONGO_URI, get_settings
 
 
 SETTINGS = get_settings()
+CVE_ID_RE = re.compile(r"^cve-\d{4}-\d{4,7}$", re.I)
+URLHAUS_RETRIEVAL_WEAK_TERMS = {
+    "affected", "allow", "allows", "application", "arbitrary", "attack",
+    "attacker", "buffer", "client", "code", "crafted", "denial", "error",
+    "escalation", "execution", "flaw", "http", "https", "issue", "linux",
+    "only", "overflow", "privilege", "remote", "server", "service",
+    "software", "supporting", "system", "tcp", "these", "udp", "user",
+    "users", "vulnerability", "vulnerabilities", "web", "windows",
+}
+URLHAUS_RETRIEVAL_STRONG_TERMS = {
+    "0day", "backdoor", "botnet", "cobaltstrike", "dropper", "exploit",
+    "loader", "malware", "ransomware", "rce", "stealer", "trojan",
+    "webshell", "zeroday",
+}
+VERSION_LIKE_RE = re.compile(r"^v?\d+(?:[._-]\d+){0,4}$", re.I)
 
 
 def _object_id_candidate(value: Any) -> Optional[ObjectId]:
@@ -261,7 +276,10 @@ class DatabaseManager:
         return f"{source}-{int(datetime.now(timezone.utc).timestamp())}"
 
     def find_related_urlhaus(self, keywords: List[str], limit: int = 20) -> List[Dict[str, Any]]:
-        return self._find_related("urlhaus", keywords, fields=["url", "threat", "tags", "normalized_fields.search_text"], limit=limit)
+        terms = _urlhaus_retrieval_terms(keywords)
+        if not terms:
+            return []
+        return self._find_related("urlhaus", terms, fields=["url", "threat", "tags", "normalized_fields.search_text"], limit=limit)
 
     def find_related_dread(self, keywords: List[str], limit: int = 20) -> List[Dict[str, Any]]:
         return self._find_related("dread", keywords, fields=["title", "content", "category", "normalized_fields.search_text"], limit=limit)
@@ -285,3 +303,42 @@ class DatabaseManager:
             return list(cursor)
         except PyMongoError:
             return []
+
+
+def _urlhaus_retrieval_terms(keywords: List[str]) -> List[str]:
+    terms: List[str] = []
+    seen: set[str] = set()
+    for keyword in keywords:
+        for token in _keyword_tokens(keyword):
+            normalized = token.lower().strip("._-")
+            if not _is_urlhaus_strong_retrieval_term(normalized):
+                continue
+            if normalized not in seen:
+                seen.add(normalized)
+                terms.append(normalized)
+            if len(terms) >= SETTINGS.retrieval.search_field_limit:
+                return terms
+    return terms
+
+
+def _keyword_tokens(value: Any) -> List[str]:
+    text = str(value or "").strip()
+    if not text:
+        return []
+    return re.findall(r"cve-\d{4}-\d{4,7}|[A-Za-z0-9][A-Za-z0-9_.-]*", text, flags=re.I)
+
+
+def _is_urlhaus_strong_retrieval_term(term: str) -> bool:
+    if not term:
+        return False
+    if CVE_ID_RE.fullmatch(term):
+        return True
+    if term in URLHAUS_RETRIEVAL_STRONG_TERMS:
+        return True
+    if len(term) < 4:
+        return False
+    if term in URLHAUS_RETRIEVAL_WEAK_TERMS:
+        return False
+    if term.isdigit() or VERSION_LIKE_RE.fullmatch(term):
+        return False
+    return len(term) >= 5

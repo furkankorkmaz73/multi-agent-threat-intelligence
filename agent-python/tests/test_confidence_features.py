@@ -62,11 +62,13 @@ def test_cve_weak_metadata_without_external_evidence_has_low_confidence():
         nlp_entities={},
     )
 
-    assert result.confidence == 0.158
+    assert result.confidence == 0.203
     assert result.breakdown["metadata_confidence"] == 0.28
-    assert result.breakdown["penalties"] == -0.245
+    assert result.breakdown["penalties"] == -0.2
     assert result.breakdown["signals"]["epss_available"] is False
     assert result.breakdown["signals"]["kev_status_known"] is False
+    assert "epss_unavailable" in result.breakdown["coverage_limitations"]
+    assert "kev_status_unknown" in result.breakdown["coverage_limitations"]
 
 
 def test_cve_missing_evidence_uses_minimum_confidence_floor():
@@ -109,7 +111,76 @@ def test_cve_conflicting_entity_alignment_evidence_is_penalized():
 
     assert result.breakdown["signals"]["entity_alignment_only"] is True
     assert result.breakdown["external_evidence_confidence"] == 0.04
-    assert result.breakdown["penalties"] == -0.075
+    assert result.breakdown["penalties"] == -0.03
+
+
+def test_metadata_rich_cve_without_epss_kev_can_reach_moderate_confidence():
+    result = calculate_cve_confidence(
+        has_cvss=True,
+        cvss_score=9.0,
+        cvss_version="CVSS v3.1",
+        description=(
+            "A remote code execution vulnerability in Example VPN Gateway allows "
+            "unauthenticated attackers to execute commands on exposed appliances. "
+            "The record includes affected product and impact context."
+        ),
+        age_days=12,
+        urlhaus_match_count=0,
+        dread_match_count=0,
+        keyword_count=12,
+        llm_fields_count=0,
+        graph_score=0.0,
+        nlp_entities={
+            "products": ["example vpn gateway"],
+            "vuln_types": ["remote_code_execution"],
+            "impacts": ["takeover"],
+            "threat_terms": ["exploit"],
+        },
+        epss_available=False,
+        kev_status_known=False,
+    )
+
+    assert 0.55 <= result.confidence < 0.8
+    assert result.breakdown["assessment_confidence"] >= 0.55
+    assert result.breakdown["data_completeness"] < 0.8
+    assert result.breakdown["signals"]["accepted_external_evidence"] == 0
+    assert "epss_unavailable" in result.breakdown["coverage_limitations"]
+    assert "kev_status_unknown" in result.breakdown["coverage_limitations"]
+
+
+def test_ignored_low_signal_candidates_do_not_add_confidence_penalty():
+    base = calculate_cve_confidence(
+        has_cvss=True,
+        cvss_score=7.5,
+        cvss_version="CVSS v3.1",
+        description="A detailed vulnerability in Example Product allows service disruption.",
+        age_days=40,
+        urlhaus_match_count=0,
+        dread_match_count=0,
+        keyword_count=8,
+        llm_fields_count=0,
+        graph_score=0.0,
+        nlp_entities={"products": ["example product"], "vuln_types": ["denial_of_service"]},
+    )
+    ignored = calculate_cve_confidence(
+        has_cvss=True,
+        cvss_score=7.5,
+        cvss_version="CVSS v3.1",
+        description="A detailed vulnerability in Example Product allows service disruption.",
+        age_days=40,
+        urlhaus_match_count=0,
+        dread_match_count=0,
+        keyword_count=8,
+        llm_fields_count=0,
+        graph_score=0.0,
+        nlp_entities={"products": ["example product"], "vuln_types": ["denial_of_service"]},
+        urlhaus_stats={"ignored_low_signal_count": 25},
+    )
+
+    assert ignored.confidence == base.confidence
+    assert ignored.breakdown["penalties"] == base.breakdown["penalties"]
+    assert ignored.breakdown["signals"]["ignored_low_signal_candidate_count"] == 25
+    assert "ignored_low_signal_candidates_present" in ignored.breakdown["coverage_limitations"]
 
 
 def test_rejected_cve_confidence_is_fixed_low_confidence():

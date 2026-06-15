@@ -24,6 +24,7 @@ class CriticAgent:
         centrality = float(graph_summary.get("centrality_score", 0.0) or 0.0)
         correlation_count = int(evidence.get("related_urlhaus_count", 0) or 0) + int(evidence.get("related_dread_count", 0) or 0)
         rejected_or_manual_count = self._rejected_or_manual_count(evidence)
+        ignored_low_signal_count = self._ignored_low_signal_count(evidence)
         cross_source_edge_count = int(graph_summary.get("cross_source_edge_count", 0) or 0)
         dread_only = int(evidence.get("related_dread_count", 0) or 0) > 0 and int(evidence.get("related_urlhaus_count", 0) or 0) == 0
         llm_context_present = bool(
@@ -57,6 +58,8 @@ class CriticAgent:
             recommended_actions.append("Treat LLM output as assistive context only, not accepted evidence.")
         if (evidence.get("epss_available") is False or evidence.get("kev_status_known") is False) and confidence < 0.7:
             recommended_actions.append("Explain missing EPSS/KEV or weak external evidence as a confidence limitation, not risk-zeroing.")
+        if ignored_low_signal_count:
+            recommended_actions.append("Explain ignored URLhaus/Dread candidates as low-signal retrieval noise, not rejected evidence.")
         if semantic_signal >= 0.25 and correlation_count == 0:
             warnings.append("Semantic signal exists without explicit correlated record counts; retrieval thresholds may be strict.")
 
@@ -74,6 +77,13 @@ class CriticAgent:
             stats = evidence.get(key, {}) or {}
             total += int(stats.get("rejected_evidence_count", stats.get("rejected_match_count", 0)) or 0)
             total += int(stats.get("manual_review_evidence_count", stats.get("manual_review_match_count", 0)) or 0)
+        return total
+
+    def _ignored_low_signal_count(self, evidence: Dict[str, Any]) -> int:
+        total = 0
+        for key in ("urlhaus_match_stats", "dread_match_stats"):
+            stats = evidence.get(key, {}) or {}
+            total += int(stats.get("ignored_low_signal_count", 0) or 0)
         return total
 
     def _build_summary(self, score: float, confidence: float, correlation_count: int, semantic_signal: float, centrality: float) -> str:

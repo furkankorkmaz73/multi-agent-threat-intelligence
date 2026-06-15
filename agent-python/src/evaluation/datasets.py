@@ -143,6 +143,11 @@ def records_from_model_results(rows: Iterable[Mapping[str, Any]]) -> tuple[list[
         seen.add(cve_id)
         feature_breakdown = dict(row.get("feature_breakdown") or {})
         evidence = dict(row.get("evidence") or {})
+        if evidence:
+            feature_breakdown.setdefault("evidence", evidence)
+        confidence_breakdown = dict(row.get("confidence_breakdown") or {})
+        if confidence_breakdown:
+            feature_breakdown.setdefault("confidence_breakdown", confidence_breakdown)
         related_urlhaus_count = safe_float(row.get("related_urlhaus_count", evidence.get("related_urlhaus_count")))
         related_dread_count = safe_float(row.get("related_dread_count", evidence.get("related_dread_count")))
         flags = {

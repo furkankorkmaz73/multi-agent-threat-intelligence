@@ -1,4 +1,7 @@
+import re
+
 from analysis.risk_engine import RiskEngine
+from core.database import DatabaseManager
 
 
 class FakeDB:
@@ -176,6 +179,81 @@ class WeakCorrelationDB:
         return []
 
 
+class NoEvidenceDB:
+    def find_related_urlhaus(self, keywords, limit=10):
+        return []
+
+    def find_related_dread(self, keywords, limit=10):
+        return []
+
+
+class IgnoredUrlhausNoiseDB:
+    def find_related_urlhaus(self, keywords, limit=10):
+        return [
+            {
+                "url": "https://cdn.example.invalid/download/file.bin",
+                "threat": "malware_download",
+                "tags": ["ascii", "opendir"],
+                "url_status": "offline",
+                "date_added": "",
+            }
+        ]
+
+    def find_related_dread(self, keywords, limit=10):
+        return []
+
+
+class QueryCursor:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def limit(self, limit):
+        return self.rows[:limit]
+
+
+class QueryMatchingCollection:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def find(self, query):
+        clauses = query.get("$or", [])
+        matches = []
+        for row in self.rows:
+            if any(_matches_clause(row, clause) for clause in clauses):
+                matches.append(row)
+        return QueryCursor(matches)
+
+
+def _matches_clause(row, clause):
+    for field, condition in clause.items():
+        pattern = condition.get("$regex", "")
+        options = re.IGNORECASE if "i" in condition.get("$options", "") else 0
+        value = _nested_value(row, field)
+        values = value if isinstance(value, list) else [value]
+        if any(re.search(pattern, str(item or ""), options) for item in values):
+            return True
+    return False
+
+
+def _nested_value(row, field):
+    current = row
+    for part in field.split("."):
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current
+
+
+def _database_manager_with_urlhaus(rows):
+    manager = object.__new__(DatabaseManager)
+    manager.collections = {
+        "urlhaus": QueryMatchingCollection(rows),
+        "dread": QueryMatchingCollection([]),
+        "cve": QueryMatchingCollection([]),
+    }
+    return manager
+
+
 def test_rejected_urlhaus_candidates_do_not_drive_graph_or_confidence():
     engine = RiskEngine()
     data = {
@@ -206,3 +284,73 @@ def test_rejected_urlhaus_candidates_do_not_drive_graph_or_confidence():
     assert result["feature_breakdown"]["graph_bonus"] == 0
     assert all(edge.get("relation") != "correlated_urlhaus" for edge in result["graph_edges"])
     assert result["confidence"] <= 0.70
+
+
+def test_ignored_low_signal_urlhaus_candidate_does_not_change_risk_confidence_or_graph():
+    engine = RiskEngine()
+    data = {
+        "_id": "CVE-2026-20102",
+        "published": "2026-03-04T10:00:00+00:00",
+        "descriptions": [
+            {
+                "lang": "en",
+                "value": (
+                    "A remote code execution vulnerability in Example VPN Gateway could allow "
+                    "an unauthenticated attacker to execute arbitrary commands."
+                ),
+            }
+        ],
+        "metrics": {"cvss_metric_v31": [{"cvss_data": {"base_score": 9.0}}]},
+    }
+
+    baseline = engine.evaluate_cve(data=data, db=NoEvidenceDB())
+    with_noise = engine.evaluate_cve(data=data, db=IgnoredUrlhausNoiseDB())
+
+    stats = with_noise["evidence"]["urlhaus_match_stats"]
+    assert stats["raw_candidate_count"] == 1
+    assert stats["ignored_low_signal_count"] == 1
+    assert stats["rejected_match_count"] == 0
+    assert stats["accepted_match_count"] == 0
+    assert with_noise["feature_breakdown"]["urlhaus_correlation_bonus"] == 0
+    assert with_noise["feature_breakdown"]["correlation_signal"] == 0
+    assert with_noise["feature_breakdown"]["graph_bonus"] == baseline["feature_breakdown"]["graph_bonus"]
+    assert with_noise["risk_score"] == baseline["risk_score"]
+    assert with_noise["confidence"] == baseline["confidence"]
+    assert all(edge.get("relation") != "correlated_urlhaus" for edge in with_noise["graph_edges"])
+
+
+def test_cve_generic_terms_do_not_accumulate_raw_urlhaus_candidates_from_database_provider():
+    engine = RiskEngine()
+    data = {
+        "_id": "CVE-2026-20103",
+        "published": "2026-03-04T10:00:00+00:00",
+        "descriptions": [
+            {
+                "lang": "en",
+                "value": (
+                    "Remote code execution vulnerability allows attackers to cause denial "
+                    "of service in affected software."
+                ),
+            }
+        ],
+        "metrics": {"cvss_metric_v31": [{"cvss_data": {"base_score": 8.0}}]},
+    }
+    db = _database_manager_with_urlhaus(
+        [
+            {
+                "url": "https://noise.example/remote/code/execution/service",
+                "threat": "malware_download",
+                "tags": ["remote", "code", "execution", "service"],
+                "normalized_fields": {"search_text": "remote code execution service"},
+                "date_added": "2026-03-04T10:00:00+00:00",
+            }
+        ]
+    )
+
+    result = engine.evaluate_cve(data=data, db=db)
+
+    assert result["evidence"]["candidate_urlhaus_count"] == 0
+    assert result["evidence"]["urlhaus_match_stats"]["raw_candidate_count"] == 0
+    assert result["evidence"]["urlhaus_match_stats"]["ignored_low_signal_count"] == 0
+    assert result["feature_breakdown"]["urlhaus_correlation_bonus"] == 0
+    assert result["feature_breakdown"]["correlation_signal"] == 0

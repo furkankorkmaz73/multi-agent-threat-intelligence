@@ -39,6 +39,21 @@ SCORING_DISTRIBUTION_FIELDS = [
     "graph_weighted_contribution",
     "nlp_context_weighted_contribution",
     "weighted_signal_score",
+    "score_before_intrinsic_floor",
+    "intrinsic_criticality_floor_applied",
+    "intrinsic_criticality_floor_value",
+    "intrinsic_criticality_reason",
+    "urlhaus_raw_candidate_count",
+    "urlhaus_ignored_low_signal_count",
+    "urlhaus_evaluated_candidate_count",
+    "urlhaus_signal_candidate_count",
+    "urlhaus_accepted_match_count",
+    "urlhaus_manual_review_match_count",
+    "urlhaus_rejected_match_count",
+    "assessment_confidence",
+    "data_completeness",
+    "uncertainty_penalty",
+    "coverage_limitations",
     "fixture_rationale",
 ]
 
@@ -316,6 +331,9 @@ def _scoring_distribution_rows(records: Sequence[EvaluationRecord]) -> list[dict
         contributions = _feature_value(record, "risk_signal_contributions", {})
         if not isinstance(contributions, Mapping):
             contributions = {}
+        evidence = (record.feature_breakdown or {}).get("evidence") or {}
+        confidence_breakdown = (record.feature_breakdown or {}).get("confidence_breakdown") or {}
+        urlhaus_stats = evidence.get("urlhaus_match_stats") or {}
         rows.append(
             {
                 "cve_id": record.cve_id,
@@ -340,6 +358,21 @@ def _scoring_distribution_rows(records: Sequence[EvaluationRecord]) -> list[dict
                 "graph_weighted_contribution": contributions.get("graph_signal", ""),
                 "nlp_context_weighted_contribution": contributions.get("nlp_context_signal", ""),
                 "weighted_signal_score": _feature_value(record, "weighted_signal_score", ""),
+                "score_before_intrinsic_floor": _feature_value(record, "score_before_intrinsic_floor", ""),
+                "intrinsic_criticality_floor_applied": _feature_value(record, "intrinsic_criticality_floor_applied", ""),
+                "intrinsic_criticality_floor_value": _feature_value(record, "intrinsic_criticality_floor_value", ""),
+                "intrinsic_criticality_reason": _feature_value(record, "intrinsic_criticality_reason", ""),
+                "urlhaus_raw_candidate_count": urlhaus_stats.get("raw_candidate_count", ""),
+                "urlhaus_ignored_low_signal_count": urlhaus_stats.get("ignored_low_signal_count", ""),
+                "urlhaus_evaluated_candidate_count": urlhaus_stats.get("evaluated_candidate_count", ""),
+                "urlhaus_signal_candidate_count": urlhaus_stats.get("signal_candidate_count", ""),
+                "urlhaus_accepted_match_count": urlhaus_stats.get("accepted_match_count", ""),
+                "urlhaus_manual_review_match_count": urlhaus_stats.get("manual_review_match_count", ""),
+                "urlhaus_rejected_match_count": urlhaus_stats.get("rejected_match_count", ""),
+                "assessment_confidence": confidence_breakdown.get("assessment_confidence", ""),
+                "data_completeness": confidence_breakdown.get("data_completeness", ""),
+                "uncertainty_penalty": confidence_breakdown.get("uncertainty_penalty", ""),
+                "coverage_limitations": ";".join(confidence_breakdown.get("coverage_limitations") or []),
                 "fixture_rationale": _feature_value(record, "fixture_rationale", ""),
             }
         )

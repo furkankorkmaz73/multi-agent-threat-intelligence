@@ -190,6 +190,12 @@ class CveRiskScorer:
         if graph_bonus > 0:
             explanations.append(f"Graph connectivity increased the score by {round(graph_bonus, 2)}.")
         explanations.extend(build_counterfactual_explanations(counterfactuals))
+        ignored_urlhaus = int(urlhaus_stats.get("ignored_low_signal_count", 0) or 0)
+        ignored_dread = int(dread_stats.get("ignored_low_signal_count", 0) or 0)
+        if ignored_urlhaus:
+            explanations.append(f"Ignored {ignored_urlhaus} URLhaus candidate(s) as low-signal retrieval noise; ignored candidates did not affect risk or confidence.")
+        if ignored_dread:
+            explanations.append(f"Ignored {ignored_dread} Dread candidate(s) as low-signal retrieval noise; ignored candidates did not affect risk or confidence.")
         if not accepted_urlhaus_matches and not accepted_dread_matches:
             explanations.append("No accepted cross-source corroboration found; score relies mainly on CVE metadata and intrinsic context.")
 
@@ -225,8 +231,10 @@ class CveRiskScorer:
                 "details": {
                     "urlhaus_candidates": len(urlhaus_matches),
                     "urlhaus_accepted": len(accepted_urlhaus_matches),
+                    "urlhaus_ignored_low_signal": ignored_urlhaus,
                     "dread_candidates": len(dread_matches),
                     "dread_accepted": len(accepted_dread_matches),
+                    "dread_ignored_low_signal": ignored_dread,
                     "semantic_urlhaus": urlhaus_stats.get("avg_semantic_score", 0.0),
                     "semantic_dread": dread_stats.get("avg_semantic_score", 0.0),
                 },

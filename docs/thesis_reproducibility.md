@@ -41,6 +41,14 @@ For a demo-oriented flow that runs artifact generation and the quality gate toge
 make thesis-demo
 ```
 
+For read-only diagnostics after a live local re-analysis, use:
+
+```bash
+make thesis-runtime-diagnostics
+```
+
+This writes `agent-python/reports/runtime/` and summarizes risk, confidence, EPSS/KEV coverage, URLhaus candidate accounting, and high-risk moderate-confidence cases. It is an operational sanity check, not the deterministic thesis benchmark.
+
 ## Generated Artifact Inventory
 
 The deterministic bundle is written under `agent-python/reports/thesis/`:

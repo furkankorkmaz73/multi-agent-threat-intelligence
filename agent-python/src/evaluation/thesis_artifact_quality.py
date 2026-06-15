@@ -101,6 +101,27 @@ REQUIRED_SENSITIVITY_COLUMNS = {
     "notes",
 }
 
+REQUIRED_SCORING_DISTRIBUTION_COLUMNS = {
+    "cve_id",
+    "risk_score",
+    "confidence",
+    "score_before_intrinsic_floor",
+    "intrinsic_criticality_floor_applied",
+    "intrinsic_criticality_floor_value",
+    "intrinsic_criticality_reason",
+    "urlhaus_raw_candidate_count",
+    "urlhaus_ignored_low_signal_count",
+    "urlhaus_evaluated_candidate_count",
+    "urlhaus_signal_candidate_count",
+    "urlhaus_accepted_match_count",
+    "urlhaus_manual_review_match_count",
+    "urlhaus_rejected_match_count",
+    "assessment_confidence",
+    "data_completeness",
+    "uncertainty_penalty",
+    "coverage_limitations",
+}
+
 MARKDOWN_REGRESSIONS = (
     "Mean KEVRank",
     "boundedperturbation",
@@ -210,6 +231,7 @@ def validate_thesis_artifacts(artifact_dir: str | Path) -> dict[str, Any]:
     _validate_traces(root, errors)
     _validate_csv_columns(root / "correlation_decisions.csv", REQUIRED_CORRELATION_COLUMNS, errors)
     _validate_csv_columns(root / "scoring_sensitivity.csv", REQUIRED_SENSITIVITY_COLUMNS, errors)
+    _validate_csv_columns(root / "scoring_distribution.csv", REQUIRED_SCORING_DISTRIBUTION_COLUMNS, errors)
     _validate_required_markdown_sections(root / "limitations_and_validity.md", LIMITATIONS_AND_VALIDITY_HEADINGS, errors)
     _validate_required_markdown_sections(root / "thesis_defense_pack.md", THESIS_DEFENSE_PACK_HEADINGS, errors)
     _validate_required_markdown_sections(root / "demo_walkthrough.md", DEMO_WALKTHROUGH_HEADINGS, errors)

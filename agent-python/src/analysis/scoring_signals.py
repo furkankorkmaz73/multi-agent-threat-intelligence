@@ -101,6 +101,8 @@ RISK_SIGNAL_NAMES = (
     "nlp_context_signal",
 )
 
+INTRINSIC_CRITICALITY_FLOOR = 8.1
+
 DEFAULT_RISK_SIGNAL_WEIGHTS: Mapping[str, float] = {
     "severity_signal": 0.68,
     "epss_signal": 0.12,
@@ -144,15 +146,36 @@ def calculate_risk_score_from_normalized_signals(signals: Mapping[str, Any], *, 
     contributions = {name: round(normalized[name] * float(weights.get(name, 0.0)), 6) for name in RISK_SIGNAL_NAMES}
     risk_raw_01 = round(sum(contributions.values()), 6)
     risk_raw = round(risk_raw_01 * 10.0, 4)
-    risk_score = round(clamp_score(risk_raw), 2)
+    score_before_intrinsic_floor = round(clamp_score(risk_raw), 2)
+    floor_applies = _intrinsic_criticality_floor_applies(normalized)
+    risk_score = score_before_intrinsic_floor
+    intrinsic_criticality_reason = ""
+    if floor_applies and risk_score < INTRINSIC_CRITICALITY_FLOOR:
+        risk_score = INTRINSIC_CRITICALITY_FLOOR
+        intrinsic_criticality_reason = (
+            "severity_signal>=0.98, nlp_context_signal>=0.8, and recency_signal>=0.5"
+        )
+    risk_score = round(clamp_score(risk_score), 2)
     return {
         **normalized,
         "risk_signal_weights": {name: round(float(weights.get(name, 0.0)), 4) for name in RISK_SIGNAL_NAMES},
         "risk_signal_contributions": contributions,
         "weighted_signal_score": risk_raw_01,
         "risk_raw": risk_raw,
+        "score_before_intrinsic_floor": score_before_intrinsic_floor,
+        "intrinsic_criticality_floor_applied": bool(intrinsic_criticality_reason),
+        "intrinsic_criticality_floor_value": INTRINSIC_CRITICALITY_FLOOR if floor_applies else 0.0,
+        "intrinsic_criticality_reason": intrinsic_criticality_reason,
         "risk_score_from_signals": risk_score,
     }
+
+
+def _intrinsic_criticality_floor_applies(signals: Mapping[str, float]) -> bool:
+    return bool(
+        signals.get("severity_signal", 0.0) >= 0.98
+        and signals.get("nlp_context_signal", 0.0) >= 0.80
+        and signals.get("recency_signal", 0.0) >= 0.50
+    )
 
 
 def calculate_confidence_signal_components(
@@ -179,10 +202,6 @@ def calculate_confidence_signal_components(
 
     evidence_freshness = min(clamp01(evidence_freshness_signal) * 0.05, 0.05)
     penalties = 0.0
-    if not epss_available:
-        penalties -= 0.025
-    if not kev_status_known:
-        penalties -= 0.02
     if rejected_correlation_count:
         penalties -= min(rejected_correlation_count * 0.01, 0.05)
 

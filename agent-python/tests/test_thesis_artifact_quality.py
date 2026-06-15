@@ -242,3 +242,13 @@ def test_quality_gate_fails_when_required_sensitivity_column_is_missing(tmp_path
 
     assert any("scoring_sensitivity.csv missing required columns" in error for error in errors)
     assert any("guardrails_passed" in error for error in errors)
+
+
+def test_quality_gate_fails_when_required_scoring_distribution_column_is_missing(tmp_path):
+    output_dir = _generate_bundle(tmp_path)
+    _remove_csv_column(output_dir / "scoring_distribution.csv", "urlhaus_ignored_low_signal_count")
+
+    errors = _quality_errors(output_dir)
+
+    assert any("scoring_distribution.csv missing required columns" in error for error in errors)
+    assert any("urlhaus_ignored_low_signal_count" in error for error in errors)

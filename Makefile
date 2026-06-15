@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: help setup-python test-python thesis-scenario thesis-artifacts thesis-artifact-quality thesis-demo e2e-system real-cve-export real-benchmark balanced-benchmark run-api run-worker setup-frontend run-frontend build-frontend test-go docker-up docker-worker docker-down clean
+.PHONY: help setup-python test-python thesis-scenario thesis-artifacts thesis-artifact-quality thesis-demo thesis-runtime-diagnostics e2e-system real-cve-export real-benchmark balanced-benchmark run-api run-worker setup-frontend run-frontend build-frontend test-go docker-up docker-worker docker-down clean
 
 help:
 	@echo "Available targets:"
@@ -10,6 +10,7 @@ help:
 	@echo "  thesis-artifacts Generate deterministic thesis artifact bundle"
 	@echo "  thesis-artifact-quality Validate generated thesis artifact bundle"
 	@echo "  thesis-demo      Generate and validate deterministic thesis demo bundle"
+	@echo "  thesis-runtime-diagnostics Generate read-only live analysis diagnostics"
 	@echo "  e2e-system      Run Go -> MongoDB -> Python worker -> FastAPI E2E scenario"
 	@echo "  real-cve-export Generate curated CVE model results; set REAL_CVE_FLAGS"
 	@echo "  real-benchmark  Run curated KEV/EPSS benchmark; set MODEL_RESULTS and REAL_BENCHMARK_FLAGS"
@@ -29,7 +30,7 @@ setup-python:
 	cd agent-python && python -m pip install -r requirements.txt
 
 test-python:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src pytest -q -p no:ddtrace
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m pytest -q -p no:ddtrace
 
 thesis-scenario:
 	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m integration.thesis_scenario --output reports/thesis_scenario_report.json
@@ -50,6 +51,9 @@ thesis-demo:
 	@echo "Manifest: agent-python/reports/thesis/manifest.json"
 	@echo "Demo walkthrough: agent-python/reports/thesis/demo_walkthrough.md"
 	@echo "Quality gate: passed"
+
+thesis-runtime-diagnostics:
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.runtime_diagnostics --output-dir ../reports/runtime
 
 e2e-system:
 	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m integration.e2e_system --output-dir $(HOME)/thesis-artifacts/e2e-system --generated-at 2026-06-10T00:00:00+00:00

@@ -174,6 +174,8 @@ Open these files first:
 - `agent-python/reports/thesis/thesis_defense_pack.md`
 - `agent-python/reports/thesis/manifest.json`
 
+After a live local re-analysis, `make thesis-runtime-diagnostics` writes read-only operational diagnostics to `agent-python/reports/runtime/`, including confidence distribution, EPSS/KEV coverage, and URLhaus raw/ignored/rejected/accepted candidate accounting. This is an operational sanity check, not the deterministic thesis benchmark.
+
 ## Production-like E2E Scenario
 
 Prerequisites: Docker, Go, and the Python virtualenv under `agent-python/.venv`.

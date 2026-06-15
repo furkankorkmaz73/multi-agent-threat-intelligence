@@ -83,6 +83,43 @@ def test_normalized_signal_helper_uses_canonical_weights():
     assert breakdown["risk_score_from_signals"] == round(expected_weighted * 10.0, 2)
 
 
+def test_intrinsic_criticality_floor_is_bounded_and_explainable():
+    breakdown = calculate_risk_score_from_normalized_signals(
+        {
+            "severity_signal": 1.0,
+            "epss_signal": 0.0,
+            "kev_signal": 0.0,
+            "recency_signal": 0.8,
+            "correlation_signal": 0.0,
+            "graph_signal": 0.0,
+            "nlp_context_signal": 1.0,
+        }
+    )
+
+    assert breakdown["score_before_intrinsic_floor"] == 7.8
+    assert breakdown["intrinsic_criticality_floor_applied"] is True
+    assert breakdown["intrinsic_criticality_floor_value"] == 8.1
+    assert breakdown["risk_score_from_signals"] == 8.1
+    assert breakdown["risk_raw"] == 7.8
+
+
+def test_intrinsic_criticality_floor_does_not_affect_medium_severity():
+    breakdown = calculate_risk_score_from_normalized_signals(
+        {
+            "severity_signal": 0.65,
+            "epss_signal": 0.0,
+            "kev_signal": 0.0,
+            "recency_signal": 1.0,
+            "correlation_signal": 0.0,
+            "graph_signal": 0.0,
+            "nlp_context_signal": 1.0,
+        }
+    )
+
+    assert breakdown["intrinsic_criticality_floor_applied"] is False
+    assert breakdown["risk_score_from_signals"] == breakdown["score_before_intrinsic_floor"]
+
+
 def test_external_signal_extraction_preserves_unknown_kev():
     missing = extract_external_risk_signals({})
     present = extract_external_risk_signals({"epss_score": "0.42", "is_kev": "true"})

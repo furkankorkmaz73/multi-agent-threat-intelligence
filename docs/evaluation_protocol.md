@@ -8,6 +8,12 @@ The fixture includes bounded Dread cases for behavioral validation: Dread-only m
 
 The fixture also includes false-positive stress cases: keyword-only URLhaus evidence, stale external evidence, unrelated product/vendor overlap, and IOC mentions without vulnerability context. These validate that rejected or manual-review evidence remains diagnostic and is excluded from accepted-evidence counts, correlation signal, graph/risk boosting, and high-confidence treatment.
 
+URLhaus candidate accounting separates raw retrieval volume from evidence decisions. URLhaus retrieval first applies a conservative prefilter so generic vulnerability and protocol terms do not drive broad database queries. `ignored_low_signal_count` records any remaining candidates with no exact CVE match, no high-signal terms, no meaningful shared terms, and no usable lexical, semantic, temporal, or entity support. These ignored candidates are not rejected evidence and do not affect risk, confidence, graph support, or accepted-evidence counts. `rejected_match_count` is reserved for signal-bearing candidates that still fail the evidence gate.
+
+Confidence reporting separates assessment confidence from data completeness. Missing EPSS, KEV, or accepted external evidence is reported as a coverage limitation instead of implying that technical severity should be zeroed. Very high confidence still requires stronger corroboration, while metadata-rich CVEs can retain moderate confidence when external coverage is incomplete.
+
+Risk scoring can also surface intrinsic technical criticality without external corroboration. A narrow intrinsic-criticality floor allows recent CVSS 9.8/10 CVEs with strong intrinsic exploitation context to reach approximately `8.1` risk even when EPSS, KEV, URLhaus, and Dread evidence are unavailable. This floor is not evidence and does not increase confidence. It preserves the risk/confidence separation: high intrinsic risk can coexist with moderate confidence and explicit coverage limitations.
+
 ## Operational Risk Evaluation
 
 Generic CVE risk is evaluated separately from asset-aware operational risk. The deterministic thesis scenario applies vulnerable-product metadata to a small asset inventory so the same CVE can be compared across applicable, non-applicable, patched, exposed, and compensating-control contexts.
@@ -52,6 +58,16 @@ The analysis reports top-5 overlap with the canonical baseline and whether quali
 The thesis artifacts include deterministic risk explanation traces generated from the structured scenario report. These traces link CVSS, EPSS, KEV, normalized scoring signals, weighted contributions, evidence-gate decisions, confidence context, and asset-aware operational-risk examples.
 
 The traces support auditability and appendix/debugging use. They do not change scoring behavior and should not be interpreted as statistical validation.
+
+## Runtime Diagnostics
+
+After a live local re-analysis, run:
+
+```bash
+make thesis-runtime-diagnostics
+```
+
+The command is read-only and writes operational diagnostics under `reports/runtime/`. It reports processed counts, risk and confidence distributions, EPSS/KEV coverage, URLhaus raw/ignored/evaluated/accepted/manual/rejected candidate counts, and high-risk moderate-confidence examples. This is an operational sanity check for the local database, not the deterministic thesis benchmark.
 
 ## Thesis Artifacts
 

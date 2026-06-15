@@ -12,6 +12,7 @@ def test_thesis_reproducibility_doc_contains_required_commands_and_artifacts():
         "make thesis-artifacts",
         "make thesis-artifact-quality",
         "make thesis-demo",
+        "make thesis-runtime-diagnostics",
         "PYTHONDONTWRITEBYTECODE=1",
         "risk_explanation_traces.json",
         "scoring_sensitivity.csv",
@@ -128,5 +129,17 @@ def test_makefile_exposes_thesis_demo_target():
         "$(MAKE) thesis-artifacts",
         "$(MAKE) thesis-artifact-quality",
         "Demo walkthrough: agent-python/reports/thesis/demo_walkthrough.md",
+    ):
+        assert required in makefile
+
+
+def test_makefile_exposes_runtime_diagnostics_target():
+    repo_root = Path(__file__).resolve().parents[2]
+    makefile = (repo_root / "Makefile").read_text(encoding="utf-8")
+
+    for required in (
+        "thesis-runtime-diagnostics:",
+        "evaluation.runtime_diagnostics",
+        "--output-dir ../reports/runtime",
     ):
         assert required in makefile

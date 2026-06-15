@@ -37,6 +37,31 @@ def test_score_urlhaus_matches_returns_stats():
     assert stats["accepted_matches"][0]["url"] == "http://bad.example/download.exe"
 
 
+def test_score_urlhaus_exact_cve_match_remains_accepted():
+    matches = [
+        {
+            "url": "https://malware.example/dropper/CVE-2026-1234.exe",
+            "threat": "malware_download",
+            "tags": ["loader"],
+            "url_status": "offline",
+            "date_added": "2026-04-20T10:00:00+00:00",
+        }
+    ]
+
+    score, explanations, stats = score_urlhaus_matches(
+        matches,
+        base_keywords=["CVE-2026-1234", "example product"],
+        entity_time="2026-04-21T10:00:00+00:00",
+    )
+
+    assert score > 0
+    assert explanations
+    assert stats["accepted_match_count"] == 1
+    assert stats["accepted_evidence_count"] == 1
+    assert stats["exact_cve_hits"] == 1
+    assert stats["ignored_low_signal_count"] == 0
+
+
 def test_score_dread_matches_returns_categories_and_stats():
     matches = [
         {
@@ -89,14 +114,14 @@ def test_non_exact_dread_high_signal_is_diagnostic_not_accepted():
     assert stats["manual_review_evidence_count"] == 1
     assert stats["dread_only_evidence"] is True
 
-def test_weak_urlhaus_candidates_are_rejected():
+def test_zero_signal_urlhaus_candidates_are_ignored_not_rejected():
     matches = [
         {
             "url": "https://refundonex.com/cloud/form_96986.pdf.ps1",
             "threat": "malware_download",
             "tags": ["ascii", "opendir", "powershell", "ps1"],
             "url_status": "offline",
-            "date_added": "2026-05-04T10:00:00+00:00",
+            "date_added": "",
         }
     ]
 
@@ -115,9 +140,13 @@ def test_weak_urlhaus_candidates_are_rejected():
     assert score == 0.0
     assert explanations == []
     assert stats["accepted_match_count"] == 0
-    assert stats["rejected_match_count"] == 1
+    assert stats["raw_candidate_count"] == 1
+    assert stats["ignored_low_signal_count"] == 1
+    assert stats["evaluated_candidate_count"] == 0
+    assert stats["signal_candidate_count"] == 0
+    assert stats["rejected_match_count"] == 0
     assert stats["accepted_evidence_count"] == 0
-    assert stats["rejected_evidence_count"] == 1
+    assert stats["rejected_evidence_count"] == 0
     assert stats["accepted_matches"] == []
 
 
@@ -141,6 +170,8 @@ def test_urlhaus_entity_alignment_without_meaningful_terms_is_rejected():
     assert score == 0.0
     assert explanations == []
     assert stats["accepted_match_count"] == 0
+    assert stats["ignored_low_signal_count"] == 0
+    assert stats["signal_candidate_count"] == 1
     assert stats["rejected_match_count"] == 1
     assert stats["accepted_matches"] == []
     assert stats["shared_terms"] == []
@@ -166,7 +197,8 @@ def test_urlhaus_generic_platform_shared_term_is_rejected():
     assert score == 0.0
     assert explanations == []
     assert stats["accepted_match_count"] == 0
-    assert stats["rejected_match_count"] == 1
+    assert stats["ignored_low_signal_count"] == 1
+    assert stats["rejected_match_count"] == 0
     assert stats["shared_terms"] == []
 
 
@@ -190,4 +222,31 @@ def test_urlhaus_generic_cms_shared_term_is_rejected():
     assert score == 0.0
     assert explanations == []
     assert stats["accepted_match_count"] == 0
+    assert stats["ignored_low_signal_count"] == 1
+    assert stats["rejected_match_count"] == 0
     assert stats["shared_terms"] == []
+
+
+def test_signal_bearing_urlhaus_candidate_can_be_rejected():
+    matches = [
+        {
+            "url": "https://malware.example/payload.exe",
+            "threat": "malware_download",
+            "tags": ["payload"],
+            "url_status": "offline",
+            "date_added": "2026-05-04T10:00:00+00:00",
+        }
+    ]
+
+    score, explanations, stats = score_urlhaus_matches(
+        matches,
+        base_keywords=["cve-2026-20101", "example vpn", "rce"],
+        entity_time="2026-05-04T10:00:00+00:00",
+    )
+
+    assert score == 0.0
+    assert explanations == []
+    assert stats["ignored_low_signal_count"] == 0
+    assert stats["signal_candidate_count"] == 1
+    assert stats["rejected_match_count"] == 1
+    assert stats["rejected_evidence_count"] == 1

@@ -160,6 +160,9 @@ def _score_matches(
     high_signal_hits = 0
     online_hits = 0
     entity_hits = 0
+    raw_candidate_count = len(matches[:8])
+    ignored_low_signal_count = 0
+    signal_candidate_count = 0
     rejected_count = 0
     manual_review_count = 0
     strongest_match_score = 0.0
@@ -185,10 +188,16 @@ def _score_matches(
         decision = evaluated["decision"]
         reason = decision.primary_reason
 
+        if _is_ignored_low_signal_candidate(evaluated):
+            ignored_low_signal_count += 1
+            continue
+
+        signal_candidate_count += 1
         if decision.status is not CorrelationDecisionStatus.ACCEPTED:
-            rejected_count += 1
             if decision.status is CorrelationDecisionStatus.MANUAL_REVIEW:
                 manual_review_count += 1
+            else:
+                rejected_count += 1
             continue
         if source == "dread":
             accepted_dread_categories.extend(_dread_categories_for_match(match))
@@ -228,7 +237,10 @@ def _score_matches(
     cap = cfg.urlhaus_score_cap if source == "urlhaus" else cfg.dread_score_cap
     if not accepted_scores:
         return 0.0, [], _empty_match_stats(
-            rejected_count=len(matches[:8]),
+            raw_candidate_count=raw_candidate_count,
+            ignored_low_signal_count=ignored_low_signal_count,
+            signal_candidate_count=signal_candidate_count,
+            rejected_count=rejected_count,
             manual_review_count=manual_review_count,
             source=source,
             candidate_dread_categories=candidate_dread_categories,
@@ -266,6 +278,10 @@ def _score_matches(
         "avg_temporal_score": avg_temporal,
         "avg_entity_score": avg_entity,
         "accepted_match_count": len(accepted_scores),
+        "raw_candidate_count": raw_candidate_count,
+        "evaluated_candidate_count": raw_candidate_count - ignored_low_signal_count,
+        "signal_candidate_count": signal_candidate_count,
+        "ignored_low_signal_count": ignored_low_signal_count,
         "rejected_match_count": rejected_count,
         "manual_review_match_count": manual_review_count,
         "accepted_evidence_count": len(accepted_scores),
@@ -279,7 +295,7 @@ def _score_matches(
         "shared_terms": sorted(set(shared_terms))[:12],
         "acceptance_reasons": sorted(set(reasons))[:8],
         "accepted_matches": accepted_matches[:8],
-        "candidate_count": len(matches[:8]),
+        "candidate_count": raw_candidate_count,
         "hybrid_score_cap": cap,
         "evidence_source": source,
         "evidence_reliability": _source_reliability(source),
@@ -300,6 +316,19 @@ def _dread_categories_for_match(match: Dict[str, Any]) -> List[str]:
         if any(term in combined_text for term in terms):
             categories.append(category)
     return categories
+
+
+def _is_ignored_low_signal_candidate(evaluated: Dict[str, Any]) -> bool:
+    """Return True for raw retrieval noise with no usable evidence signal."""
+    return bool(
+        not evaluated.get("exact_cve")
+        and int(evaluated.get("high_signal_term_hits") or 0) == 0
+        and len(evaluated.get("meaningful_shared_terms") or []) == 0
+        and float(evaluated.get("lexical") or 0.0) == 0.0
+        and float(evaluated.get("semantic") or 0.0) < SETTINGS.semantic.similarity_floor
+        and float(evaluated.get("temporal") or 0.0) == 0.0
+        and float(evaluated.get("entity_score") or 0.0) == 0.0
+    )
 
 
 def _accept_match(
@@ -549,12 +578,18 @@ def _avg(values: List[float]) -> float:
 
 
 def _empty_match_stats(
+    raw_candidate_count: int = 0,
+    ignored_low_signal_count: int = 0,
+    signal_candidate_count: int = 0,
     rejected_count: int = 0,
     manual_review_count: int = 0,
     source: str = "unknown",
     candidate_dread_categories: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     candidate_dread_categories = candidate_dread_categories or []
+    raw_candidate_count = int(raw_candidate_count if raw_candidate_count else rejected_count + manual_review_count + ignored_low_signal_count)
+    ignored_low_signal_count = int(ignored_low_signal_count)
+    signal_candidate_count = int(signal_candidate_count if signal_candidate_count else rejected_count + manual_review_count)
     return {
         "avg_overlap_ratio": 0.0,
         "avg_lexical_score": 0.0,
@@ -562,6 +597,10 @@ def _empty_match_stats(
         "avg_temporal_score": 0.0,
         "avg_entity_score": 0.0,
         "accepted_match_count": 0,
+        "raw_candidate_count": raw_candidate_count,
+        "evaluated_candidate_count": max(raw_candidate_count - ignored_low_signal_count, 0),
+        "signal_candidate_count": signal_candidate_count,
+        "ignored_low_signal_count": ignored_low_signal_count,
         "rejected_match_count": rejected_count,
         "manual_review_match_count": manual_review_count,
         "accepted_evidence_count": 0,
@@ -575,11 +614,11 @@ def _empty_match_stats(
         "shared_terms": [],
         "acceptance_reasons": [],
         "accepted_matches": [],
-        "candidate_count": rejected_count,
+        "candidate_count": raw_candidate_count,
         "evidence_source": source,
         "evidence_reliability": _source_reliability(source),
-        "dread_evidence_present": source == "dread" and rejected_count > 0,
-        "dread_only_evidence": source == "dread" and rejected_count > 0,
+        "dread_evidence_present": source == "dread" and signal_candidate_count > 0,
+        "dread_only_evidence": source == "dread" and signal_candidate_count > 0,
         "corroborated_dread_evidence": False,
         "candidate_dread_categories": sorted(set(candidate_dread_categories))[:8],
         "observed_dread_categories": sorted(set(candidate_dread_categories))[:8],

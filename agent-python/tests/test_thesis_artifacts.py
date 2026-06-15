@@ -212,6 +212,10 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
     assert "## Experimental Setup" in (tmp_path / "first" / "thesis_results_section.md").read_text(encoding="utf-8")
     assert "## Claim Scope" in (tmp_path / "first" / "limitations_and_validity.md").read_text(encoding="utf-8")
     assert "## Suggested Defense Q&A" in (tmp_path / "first" / "thesis_defense_pack.md").read_text(encoding="utf-8")
+    scoring_distribution_header = (tmp_path / "first" / "scoring_distribution.csv").read_text(encoding="utf-8").splitlines()[0]
+    assert "urlhaus_ignored_low_signal_count" in scoring_distribution_header
+    assert "assessment_confidence" in scoring_distribution_header
+    assert "data_completeness" in scoring_distribution_header
     assert not (tmp_path / "first" / "thesis_results_section_tr.md").exists()
 
 

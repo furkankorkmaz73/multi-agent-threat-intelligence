@@ -170,6 +170,7 @@ def _model_record(doc: Mapping[str, Any], analysis: Mapping[str, Any], *, genera
         "risk_level": analysis.get("risk_level"),
         "cvss_score": evidence.get("cvss_score", 0.0),
         "evidence": evidence,
+        "confidence_breakdown": dict(analysis.get("confidence_breakdown") or {}),
         "evidence_summary": {
             "related_urlhaus_count": evidence.get("related_urlhaus_count", 0),
             "related_dread_count": evidence.get("related_dread_count", 0),

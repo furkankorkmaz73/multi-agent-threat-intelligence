@@ -58,7 +58,13 @@ The weights are heuristic engineering choices, not learned parameters and not st
 
 ## Contribution Breakdown
 
-Each scored CVE exposes `risk_signal_contributions`, where each entry is the normalized signal multiplied by its canonical weight before scaling to `[0, 10]`. The sum is exported as `weighted_signal_score`; `risk_raw` is the scaled value before the final `[0, 10]` clamp; `risk_score_from_signals` and `final_score` are the bounded final model score.
+Each scored CVE exposes `risk_signal_contributions`, where each entry is the normalized signal multiplied by its canonical weight before scaling to `[0, 10]`. The sum is exported as `weighted_signal_score`; `risk_raw` is the scaled value before the final `[0, 10]` clamp.
+
+A conservative intrinsic-criticality floor is applied only when the vulnerability has very high technical severity and strong intrinsic CVE context. The current gate requires `severity_signal >= 0.98`, `nlp_context_signal >= 0.8`, and `recency_signal >= 0.5`. When this gate lifts the score, the score is floored at `8.1`, not pushed into the `9+` range. This allows a recent CVSS 9.8/10 vulnerability with strong remote-exploitation context to remain operationally high risk even when EPSS, KEV, URLhaus, and Dread evidence are missing.
+
+The floor is not accepted evidence. It does not increase confidence, graph support, URLhaus/Dread counts, or correlation signal. Missing EPSS/KEV and absent accepted external evidence remain visible as confidence coverage limitations. Stronger external support is still required for very high confidence and for scores above the intrinsic floor.
+
+The bounded final model score is exported as `risk_score_from_signals` and `final_score`. `score_before_intrinsic_floor`, `intrinsic_criticality_floor_applied`, `intrinsic_criticality_floor_value`, and `intrinsic_criticality_reason` make this calibration auditable.
 
 The deterministic thesis fixture uses the same helper as the scorer to derive `risk_score_from_signals`, `final_score`, and `model_risk_score`. Fixture records define normalized signal inputs rather than independently assigning final model scores, so thesis artifacts cannot silently drift away from the implemented formula.
 

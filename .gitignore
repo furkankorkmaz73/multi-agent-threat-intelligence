@@ -77,3 +77,5 @@ tmp/
 temp/
 
 report_outputs/
+logs/
+backups/

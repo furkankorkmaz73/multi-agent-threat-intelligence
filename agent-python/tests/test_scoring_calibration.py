@@ -31,6 +31,19 @@ class ExactEvidenceDB(EmptyDB):
         ]
 
 
+class IgnoredUrlhausDB(EmptyDB):
+    def find_related_urlhaus(self, keywords, limit=25):
+        return [
+            {
+                "url": "https://cdn.example.invalid/download/file.bin",
+                "threat": "malware_download",
+                "tags": ["ascii", "opendir"],
+                "url_status": "offline",
+                "date_added": "",
+            }
+        ]
+
+
 def test_high_cvss_without_external_evidence_is_not_low():
     result = RiskEngine().evaluate_cve(
         _cve(9.8, "Unspecified vulnerability in Example Product."),
@@ -139,3 +152,68 @@ def test_missing_epss_and_kev_do_not_crash_or_zero_risk():
     assert result["feature_breakdown"]["epss_signal"] == 0.0
     assert result["feature_breakdown"]["kev_signal"] == 0.0
     assert 0.0 <= result["risk_score"] <= 10.0
+
+
+def test_intrinsic_criticality_floor_lifts_recent_cvss10_high_context_without_external_evidence():
+    result = RiskEngine().evaluate_cve(
+        _cve(
+            10.0,
+            (
+                "Remote code execution vulnerability in Example VPN Gateway allows "
+                "unauthenticated attackers to execute arbitrary commands and take over "
+                "exposed appliances. Exploit terminology is present in the CVE context."
+            ),
+            published="2026-06-10T00:00:00+00:00",
+        ),
+        db=EmptyDB(),
+        external_signals={},
+    )
+
+    assert result["risk_score"] >= 8.0
+    assert result["risk_score"] <= 8.2
+    assert result["feature_breakdown"]["score_before_intrinsic_floor"] < result["risk_score"]
+    assert result["feature_breakdown"]["intrinsic_criticality_floor_applied"] is True
+    assert result["feature_breakdown"]["intrinsic_criticality_floor_value"] == 8.1
+    assert result["feature_breakdown"]["correlation_signal"] == 0.0
+    assert result["evidence"]["related_urlhaus_count"] == 0
+    assert result["evidence"]["related_dread_count"] == 0
+    assert result["confidence"] < 0.8
+    assert "no_accepted_external_evidence" in result["confidence_breakdown"]["coverage_limitations"]
+
+
+def test_intrinsic_criticality_floor_does_not_apply_to_medium_cvss():
+    result = RiskEngine().evaluate_cve(
+        _cve(
+            6.5,
+            (
+                "Remote code execution vulnerability in Example VPN Gateway allows "
+                "attackers to execute arbitrary commands on exposed appliances."
+            ),
+            published="2026-06-10T00:00:00+00:00",
+        ),
+        db=EmptyDB(),
+    )
+
+    assert result["feature_breakdown"]["intrinsic_criticality_floor_applied"] is False
+    assert result["risk_score"] == result["feature_breakdown"]["score_before_intrinsic_floor"]
+
+
+def test_ignored_urlhaus_candidates_do_not_influence_intrinsic_floor():
+    payload = _cve(
+        10.0,
+        (
+            "Remote code execution vulnerability in Example VPN Gateway allows "
+            "unauthenticated attackers to execute arbitrary commands and take over "
+            "exposed appliances. Exploit terminology is present in the CVE context."
+        ),
+        published="2026-06-10T00:00:00+00:00",
+    )
+
+    baseline = RiskEngine().evaluate_cve(payload, db=EmptyDB())
+    with_ignored = RiskEngine().evaluate_cve(payload, db=IgnoredUrlhausDB())
+
+    assert with_ignored["risk_score"] == baseline["risk_score"]
+    assert with_ignored["confidence"] == baseline["confidence"]
+    assert with_ignored["feature_breakdown"]["intrinsic_criticality_floor_applied"] is True
+    assert with_ignored["feature_breakdown"]["correlation_signal"] == 0.0
+    assert with_ignored["evidence"]["urlhaus_match_stats"]["ignored_low_signal_count"] == 1

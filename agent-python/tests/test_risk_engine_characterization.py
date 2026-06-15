@@ -148,7 +148,7 @@ def test_cve_medium_severity_with_limited_evidence_is_locked(monkeypatch):
     )
 
     assert result["risk_score"] == 5.25
-    assert result["confidence"] == 0.485
+    assert result["confidence"] == 0.52
     assert result["risk_level"] == "MEDIUM"
     assert result["evidence"]["related_urlhaus_count"] == 0
     assert result["evidence"]["related_dread_count"] == 0
@@ -156,6 +156,8 @@ def test_cve_medium_severity_with_limited_evidence_is_locked(monkeypatch):
     assert result["confidence_breakdown"]["signals"]["accepted_external_evidence"] == 0
     assert result["confidence_breakdown"]["signals"]["dread_only_evidence"] is True
     assert result["confidence_breakdown"]["signals"]["confidence_cap_reason"] == "dread_only_evidence_cap"
+    assert "epss_unavailable" in result["confidence_breakdown"]["coverage_limitations"]
+    assert "kev_status_unknown" in result["confidence_breakdown"]["coverage_limitations"]
     assert result["feature_breakdown"]["base_cvss_component"] == 4.68
     assert result["feature_breakdown"]["dread_correlation_bonus"] == 0.0
     assert result["feature_breakdown"]["age_penalty"] == 0.15
@@ -178,7 +180,7 @@ def test_old_cve_age_penalty_behavior_is_locked(monkeypatch):
     )
 
     assert result["risk_score"] == 6.44
-    assert result["confidence"] == 0.407
+    assert result["confidence"] == 0.452
     assert result["risk_level"] == "MEDIUM"
     assert result["evidence"]["related_urlhaus_count"] == 0
     assert result["evidence"]["related_dread_count"] == 0
@@ -187,7 +189,8 @@ def test_old_cve_age_penalty_behavior_is_locked(monkeypatch):
     assert result["feature_breakdown"]["raw_age_penalty"] == 1.0
     assert result["feature_breakdown"]["temporal_score"] == -1.0
     assert result["feature_breakdown"]["nlp_context_bonus"] == 0.87
-    assert result["confidence_breakdown"]["penalties"] == -0.195
+    assert result["confidence_breakdown"]["penalties"] == -0.15
+    assert "no_accepted_external_evidence" in result["confidence_breakdown"]["coverage_limitations"]
 
 
 def test_cve_missing_optional_fields_behavior_is_locked(monkeypatch):
@@ -210,7 +213,8 @@ def test_cve_missing_optional_fields_behavior_is_locked(monkeypatch):
     assert result["feature_breakdown"]["age_penalty"] == 0.0
     assert result["feature_breakdown"]["nlp_context_bonus"] == 0.0
     assert result["confidence_breakdown"]["signals"]["has_cvss"] is False
-    assert result["confidence_breakdown"]["penalties"] == -0.365
+    assert result["confidence_breakdown"]["penalties"] == -0.32
+    assert "epss_unavailable" in result["confidence_breakdown"]["coverage_limitations"]
 
 
 def test_online_malware_ioc_with_payload_evidence_is_locked(monkeypatch):

@@ -47,6 +47,7 @@ def calculate_cve_confidence(
 
     accepted_external = urlhaus_match_count + dread_match_count
     rejected_correlations = int(urlhaus_stats.get("rejected_match_count", 0) or 0) + int(dread_stats.get("rejected_match_count", 0) or 0)
+    ignored_low_signal_candidates = int(urlhaus_stats.get("ignored_low_signal_count", 0) or 0) + int(dread_stats.get("ignored_low_signal_count", 0) or 0)
     urlhaus_exact_hits = int(urlhaus_stats.get("exact_cve_hits", 0) or 0)
     dread_exact_hits = int(dread_stats.get("exact_cve_hits", 0) or 0)
     exact_hits = urlhaus_exact_hits + dread_exact_hits
@@ -174,6 +175,54 @@ def calculate_cve_confidence(
         penalties -= 0.04
     penalties += external_signal_penalties
 
+    coverage_limitations: List[str] = []
+    missing_signal_warnings: List[str] = []
+    if not epss_available:
+        coverage_limitations.append("epss_unavailable")
+        missing_signal_warnings.append("EPSS was unavailable; exploit-likelihood coverage is incomplete.")
+    if not kev_status_known:
+        coverage_limitations.append("kev_status_unknown")
+        missing_signal_warnings.append("CISA KEV status was unavailable; active-exploitation coverage is incomplete.")
+    if accepted_external == 0:
+        coverage_limitations.append("no_accepted_external_evidence")
+    if ignored_low_signal_candidates:
+        coverage_limitations.append("ignored_low_signal_candidates_present")
+
+    data_completeness = 0.0
+    if has_cvss:
+        data_completeness += 0.22
+    if desc_len >= 80:
+        data_completeness += 0.16
+    elif desc_len >= 30:
+        data_completeness += 0.08
+    if age_days is not None:
+        data_completeness += 0.10
+    if products or vuln_types or impacts or threat_terms:
+        data_completeness += 0.12
+    if epss_available:
+        data_completeness += 0.14
+    if kev_status_known:
+        data_completeness += 0.12
+    if accepted_external:
+        data_completeness += min(accepted_external * 0.07, 0.14)
+    data_completeness = round(min(data_completeness, 1.0), 3)
+    uncertainty_penalty = round(external_signal_penalties, 3)
+    assessment_confidence = round(
+        max(
+            0.05,
+            min(
+                base_confidence
+                + metadata_confidence
+                + entity_confidence
+                + freshness_confidence
+                + source_reliability_confidence
+                + penalties,
+                0.95,
+            ),
+        ),
+        3,
+    )
+
     raw_confidence = (
         base_confidence
         + metadata_confidence
@@ -190,6 +239,9 @@ def calculate_cve_confidence(
         if keyword_count <= 3 and llm_fields_count == 0:
             raw_confidence = min(raw_confidence, 0.28)
     confidence_cap_reason = ""
+    if accepted_external == 0 and not (epss_available or kev_listed):
+        raw_confidence = min(raw_confidence, 0.68)
+        confidence_cap_reason = "coverage_limited_without_external_support"
     if dread_only_evidence:
         raw_confidence = min(raw_confidence, 0.58 if dread_exact_hits or high_signal_hits else 0.52)
         confidence_cap_reason = "dread_only_evidence_cap"
@@ -205,6 +257,11 @@ def calculate_cve_confidence(
         "correlation_confidence": round(correlation_confidence, 3),
         "freshness_confidence": round(freshness_confidence, 3),
         "source_reliability_confidence": round(source_reliability_confidence, 3),
+        "assessment_confidence": assessment_confidence,
+        "data_completeness": data_completeness,
+        "uncertainty_penalty": uncertainty_penalty,
+        "coverage_limitations": coverage_limitations,
+        "missing_signal_warnings": missing_signal_warnings,
         "penalties": round(penalties, 3),
         "raw_confidence": round(raw_confidence, 3),
         "final_confidence": confidence,
@@ -224,6 +281,7 @@ def calculate_cve_confidence(
             "kev_status_known": bool(kev_status_known),
             "kev_listed": bool(kev_listed),
             "rejected_correlation_count": rejected_correlations,
+            "ignored_low_signal_candidate_count": ignored_low_signal_candidates,
             "urlhaus_exact_hits": urlhaus_exact_hits,
             "dread_exact_hits": dread_exact_hits,
             "dread_evidence_present": dread_evidence_present,
@@ -251,6 +309,12 @@ def calculate_rejected_cve_confidence() -> ConfidenceResult:
             "external_evidence_confidence": 0.0,
             "correlation_confidence": 0.0,
             "freshness_confidence": 0.0,
+            "source_reliability_confidence": 0.0,
+            "assessment_confidence": 0.25,
+            "data_completeness": 0.0,
+            "uncertainty_penalty": -0.25,
+            "coverage_limitations": ["invalid_or_rejected_record"],
+            "missing_signal_warnings": [],
             "penalties": -0.25,
             "raw_confidence": 0.25,
             "final_confidence": 0.25,
