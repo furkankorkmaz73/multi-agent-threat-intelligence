@@ -102,7 +102,7 @@ def test_weak_dread_candidate_does_not_increase_score_or_confidence():
         entity_time="2026-05-01T00:00:00+00:00",
         source="dread",
     )
-    score, explanations, _, stats = score_dread_matches(
+    score, explanations, categories, stats = score_dread_matches(
         matches,
         base_keywords=["cve-2026-4242", "example vpn remote code execution"],
         entity_time="2026-05-01T00:00:00+00:00",
@@ -115,7 +115,9 @@ def test_weak_dread_candidate_does_not_increase_score_or_confidence():
     assert decisions[0].false_positive_control is True
     assert score == 0.0
     assert explanations == []
+    assert categories == []
     assert stats["accepted_match_count"] == 0
+    assert stats["accepted_dread_categories"] == []
     assert stats["dread_evidence_present"] is True
 
 

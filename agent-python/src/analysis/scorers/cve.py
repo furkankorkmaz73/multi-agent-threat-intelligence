@@ -77,6 +77,7 @@ class CveRiskScorer:
             keywords,
             data.get("published"),
         )
+        observed_dread_categories = list(dread_stats.get("observed_dread_categories") or [])
         accepted_urlhaus_matches = list(urlhaus_stats.get("accepted_matches") or [])
         accepted_dread_matches = list(dread_stats.get("accepted_matches") or [])
         llm_bonus, llm_explanations = score_llm_cve_info(llm_info, llm_bonus_cap=self.weights.llm_bonus_cap)
@@ -112,6 +113,7 @@ class CveRiskScorer:
                 "llm_vuln_type": llm_info.get("vuln_type"),
                 "llm_impact": llm_info.get("impact"),
                 "dread_categories": dread_categories,
+                "observed_dread_categories": observed_dread_categories,
                 "sample_urlhaus_hits": sample_urlhaus_hits(accepted_urlhaus_matches),
                 "sample_dread_hits": sample_dread_hits(accepted_dread_matches),
             },
@@ -273,6 +275,8 @@ class CveRiskScorer:
                 "candidate_urlhaus_count": len(urlhaus_matches),
                 "candidate_dread_count": len(dread_matches),
                 "dread_categories": dread_categories,
+                "accepted_dread_categories": dread_categories,
+                "observed_dread_categories": observed_dread_categories,
                 "sample_urlhaus_hits": sample_urlhaus_hits(accepted_urlhaus_matches),
                 "sample_dread_hits": sample_dread_hits(accepted_dread_matches),
                 "llm_products": llm_info.get("products", []),

@@ -80,13 +80,7 @@ def score_dread_matches(
     entity_time: Optional[str] = None,
 ) -> Tuple[float, List[str], List[str], Dict[str, Any]]:
     score, explanations, stats = _score_matches(matches, base_keywords, entity_time, source="dread")
-    categories: List[str] = []
-    for match in matches[:8]:
-        combined_text = f"{match.get('title', '')} {match.get('content', '')}".lower()
-        for category, terms in DREAD_CLASSIFIERS.items():
-            if any(term in combined_text for term in terms):
-                categories.append(category)
-    return score, explanations, sorted(set(categories)), stats
+    return score, explanations, list(stats.get("accepted_dread_categories") or []), stats
 
 
 def build_correlation_decisions(
@@ -159,6 +153,8 @@ def _score_matches(
     entity_scores: List[float] = []
     shared_terms: List[str] = []
     reasons: List[str] = []
+    candidate_dread_categories: List[str] = []
+    accepted_dread_categories: List[str] = []
 
     exact_cve_hits = 0
     high_signal_hits = 0
@@ -169,6 +165,8 @@ def _score_matches(
     strongest_match_score = 0.0
 
     for match in matches[:8]:
+        if source == "dread":
+            candidate_dread_categories.extend(_dread_categories_for_match(match))
         evaluated = _evaluate_match(
             match=match,
             source=source,
@@ -192,6 +190,8 @@ def _score_matches(
             if decision.status is CorrelationDecisionStatus.MANUAL_REVIEW:
                 manual_review_count += 1
             continue
+        if source == "dread":
+            accepted_dread_categories.extend(_dread_categories_for_match(match))
 
         score = (
             lexical * cfg.lexical_weight
@@ -231,6 +231,7 @@ def _score_matches(
             rejected_count=len(matches[:8]),
             manual_review_count=manual_review_count,
             source=source,
+            candidate_dread_categories=candidate_dread_categories,
         )
 
     # Diminishing returns: three weak similar posts should not outweigh one strong exact correlation.
@@ -285,8 +286,20 @@ def _score_matches(
         "dread_evidence_present": source == "dread" and bool(matches[:8]),
         "dread_only_evidence": source == "dread",
         "corroborated_dread_evidence": False,
+        "candidate_dread_categories": sorted(set(candidate_dread_categories))[:8],
+        "observed_dread_categories": sorted(set(candidate_dread_categories))[:8],
+        "accepted_dread_categories": sorted(set(accepted_dread_categories))[:8],
     }
     return min(round(total_score, 4), cap), explanations, stats
+
+
+def _dread_categories_for_match(match: Dict[str, Any]) -> List[str]:
+    categories: List[str] = []
+    combined_text = f"{match.get('title', '')} {match.get('content', '')}".lower()
+    for category, terms in DREAD_CLASSIFIERS.items():
+        if any(term in combined_text for term in terms):
+            categories.append(category)
+    return categories
 
 
 def _accept_match(
@@ -535,7 +548,13 @@ def _avg(values: List[float]) -> float:
     return round(sum(values) / len(values), 4) if values else 0.0
 
 
-def _empty_match_stats(rejected_count: int = 0, manual_review_count: int = 0, source: str = "unknown") -> Dict[str, Any]:
+def _empty_match_stats(
+    rejected_count: int = 0,
+    manual_review_count: int = 0,
+    source: str = "unknown",
+    candidate_dread_categories: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    candidate_dread_categories = candidate_dread_categories or []
     return {
         "avg_overlap_ratio": 0.0,
         "avg_lexical_score": 0.0,
@@ -562,6 +581,9 @@ def _empty_match_stats(rejected_count: int = 0, manual_review_count: int = 0, so
         "dread_evidence_present": source == "dread" and rejected_count > 0,
         "dread_only_evidence": source == "dread" and rejected_count > 0,
         "corroborated_dread_evidence": False,
+        "candidate_dread_categories": sorted(set(candidate_dread_categories))[:8],
+        "observed_dread_categories": sorted(set(candidate_dread_categories))[:8],
+        "accepted_dread_categories": [],
     }
 
 

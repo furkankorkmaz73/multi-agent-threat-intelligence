@@ -54,6 +54,8 @@ def test_score_dread_matches_returns_categories_and_stats():
 
     assert score > 0
     assert "exploit_sale" in categories
+    assert "exploit_sale" in stats["accepted_dread_categories"]
+    assert "exploit_sale" in stats["observed_dread_categories"]
     assert stats["exact_cve_hits"] >= 1
     assert stats["avg_overlap_ratio"] > 0
     assert stats["evidence_source"] == "dread"
@@ -78,7 +80,9 @@ def test_non_exact_dread_high_signal_is_diagnostic_not_accepted():
 
     assert score == 0.0
     assert explanations == []
-    assert "exploit_sale" in categories
+    assert categories == []
+    assert "exploit_sale" in stats["observed_dread_categories"]
+    assert stats["accepted_dread_categories"] == []
     assert stats["accepted_match_count"] == 0
     assert stats["manual_review_match_count"] == 1
     assert stats["accepted_evidence_count"] == 0
