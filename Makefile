@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: help setup-python test-python thesis-scenario thesis-artifacts thesis-artifact-quality thesis-demo thesis-runtime-diagnostics e2e-system real-cve-export real-benchmark balanced-benchmark run-api run-worker setup-frontend run-frontend build-frontend test-go docker-up docker-worker docker-down clean
+.PHONY: help setup-python test-python thesis-scenario thesis-artifacts thesis-artifact-quality thesis-demo thesis-runtime-diagnostics thesis-learned-calibration e2e-system real-cve-export real-benchmark balanced-benchmark run-api run-worker setup-frontend run-frontend build-frontend test-go docker-up docker-worker docker-down clean
 
 help:
 	@echo "Available targets:"
@@ -11,6 +11,7 @@ help:
 	@echo "  thesis-artifact-quality Validate generated thesis artifact bundle"
 	@echo "  thesis-demo      Generate and validate deterministic thesis demo bundle"
 	@echo "  thesis-runtime-diagnostics Generate read-only live analysis diagnostics"
+	@echo "  thesis-learned-calibration Export learned calibration feasibility artifacts"
 	@echo "  e2e-system      Run Go -> MongoDB -> Python worker -> FastAPI E2E scenario"
 	@echo "  real-cve-export Generate curated CVE model results; set REAL_CVE_FLAGS"
 	@echo "  real-benchmark  Run curated KEV/EPSS benchmark; set MODEL_RESULTS and REAL_BENCHMARK_FLAGS"
@@ -54,6 +55,9 @@ thesis-demo:
 
 thesis-runtime-diagnostics:
 	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.runtime_diagnostics --output-dir ../reports/runtime
+
+thesis-learned-calibration:
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.learned_calibration --output-dir ../reports/thesis
 
 e2e-system:
 	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m integration.e2e_system --output-dir $(HOME)/thesis-artifacts/e2e-system --generated-at 2026-06-10T00:00:00+00:00
