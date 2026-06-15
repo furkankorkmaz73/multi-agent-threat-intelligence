@@ -61,6 +61,8 @@ Generated files:
 - `reports/thesis/learned_calibration_coverage_strata.md`
 - `reports/thesis/learned_calibration_negative_controls.json`
 - `reports/thesis/learned_calibration_negative_controls.md`
+- `reports/thesis/learned_calibration_consistency_audit.json`
+- `reports/thesis/learned_calibration_consistency_audit.md`
 - `reports/thesis/learned_calibration_quality_report.json`
 - `reports/thesis/learned_calibration_quality_report.md`
 
@@ -103,6 +105,8 @@ The bootstrap-stability artifacts run a fixed-seed deterministic bootstrap over 
 The coverage-strata artifacts group exported CVE rows by EPSS availability, KEV status, KEV listing, accepted external evidence, intrinsic-floor application, confidence bucket, risk bucket, ignored URLhaus candidate bucket, and rejected URLhaus candidate bucket. Each row reports count, average risk, average confidence, proxy high counts, missing feature percentages, and an interpretation note. This helps explain where learned-calibration feasibility is limited by evidence coverage rather than by ranking mechanics.
 
 The negative-control artifacts compare the unchanged heuristic `risk_score` ranking with fixed-seed random ranking, reverse risk ranking, CVSS-only ranking, recency-only ranking, NLP-context-only ranking, and confidence-only ranking. They report precision@10/50/100, recall@50/100, and top-K overlap with the heuristic ranking. The interpretation explicitly notes when CVSS-only is close to the heuristic because Strategy A is partly intrinsic-severity driven.
+
+The consistency-audit artifacts check that dataset and label row counts align, CVE identifiers are unique and matched, prediction identifiers are within the dataset, JSON artifacts parse, CSV headers are not duplicated, Markdown summaries retain limitation language, model skip status is consistent with the local scikit-learn environment, and no learned-calibration artifact claims ground-truth exploitation prediction.
 
 The quality report artifacts are produced by `make thesis-learned-calibration-quality`. The gate checks required learned-calibration files, JSON parseability, CSV headers, limitation language, experimental framing, unchanged production risk score wording, unchanged evidence-gate wording, and absence of real-world exploitation-proof claims.
 

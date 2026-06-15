@@ -418,6 +418,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     coverage_strata_summary_path = output / "learned_calibration_coverage_strata.md"
     negative_controls_path = output / "learned_calibration_negative_controls.json"
     negative_controls_summary_path = output / "learned_calibration_negative_controls.md"
+    consistency_audit_path = output / "learned_calibration_consistency_audit.json"
+    consistency_audit_summary_path = output / "learned_calibration_consistency_audit.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
@@ -517,6 +519,9 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     coverage_strata_summary_path.write_text(render_coverage_strata_markdown(coverage_strata), encoding="utf-8")
     negative_controls_path.write_text(json.dumps(negative_controls, indent=2, sort_keys=True, default=str), encoding="utf-8")
     negative_controls_summary_path.write_text(render_negative_controls_markdown(negative_controls), encoding="utf-8")
+    consistency_audit = build_consistency_audit(output)
+    consistency_audit_path.write_text(json.dumps(consistency_audit, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    consistency_audit_summary_path.write_text(render_consistency_audit_markdown(consistency_audit), encoding="utf-8")
     artifact_manifest = build_learned_calibration_manifest(output)
     manifest_path.write_text(json.dumps(artifact_manifest, indent=2, sort_keys=True, default=str), encoding="utf-8")
     manifest_summary_path.write_text(render_learned_calibration_manifest_markdown(artifact_manifest), encoding="utf-8")
@@ -557,6 +562,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "coverage_strata_summary": str(coverage_strata_summary_path),
         "negative_controls": str(negative_controls_path),
         "negative_controls_summary": str(negative_controls_summary_path),
+        "consistency_audit": str(consistency_audit_path),
+        "consistency_audit_summary": str(consistency_audit_summary_path),
         "manifest": str(manifest_path),
         "manifest_summary": str(manifest_summary_path),
     }
@@ -2058,6 +2065,167 @@ def _ordered_top_overlap(
     return round(len(ranked_top & heuristic_top) / len(heuristic_top), 4)
 
 
+def build_consistency_audit(artifact_dir: str | Path) -> dict[str, Any]:
+    root = Path(artifact_dir)
+    checks: list[dict[str, Any]] = []
+    dataset_rows = _read_csv_rows(root / "learned_calibration_dataset.csv")
+    label_rows = _read_csv_rows(root / "learned_calibration_labels.csv")
+    dataset_ids = [row.get("cve_id", "") for row in dataset_rows]
+    label_ids = [row.get("cve_id", "") for row in label_rows]
+    checks.append(_audit_check("dataset_label_row_count_match", len(dataset_rows) == len(label_rows), f"dataset={len(dataset_rows)} labels={len(label_rows)}"))
+    checks.append(_audit_check("dataset_cve_ids_unique", len(dataset_ids) == len(set(dataset_ids)), f"unique={len(set(dataset_ids))} total={len(dataset_ids)}"))
+    checks.append(_audit_check("label_ids_match_dataset_ids", set(label_ids) == set(dataset_ids), f"dataset_only={len(set(dataset_ids) - set(label_ids))} labels_only={len(set(label_ids) - set(dataset_ids))}"))
+    prediction_rows = _read_csv_rows(root / "learned_calibration_predictions.csv")
+    prediction_ids = {row.get("cve_id", "") for row in prediction_rows if row.get("cve_id")}
+    checks.append(_audit_check("prediction_ids_subset_dataset_ids", prediction_ids.issubset(set(dataset_ids)), f"prediction_ids={len(prediction_ids)}"))
+    for filename in _learned_calibration_json_filenames_for_audit():
+        checks.append(_audit_check(f"json_parseable:{filename}", _json_file_parseable(root / filename), filename))
+    for filename in _learned_calibration_csv_filenames_for_audit():
+        checks.append(_audit_check(f"csv_no_duplicate_headers:{filename}", not _csv_has_duplicate_headers(root / filename), filename))
+    for filename in _learned_calibration_markdown_filenames_for_audit():
+        checks.append(_audit_check(f"markdown_limitation_language:{filename}", _markdown_has_limitation_language(root / filename), filename))
+    checks.append(_audit_check("sklearn_unavailable_model_report_skipped", _sklearn_skip_consistent(root / "learned_calibration_model_report.json"), "model report status matches sklearn availability"))
+    checks.append(_audit_check("no_ground_truth_exploitation_prediction_claim", not _contains_unsafe_exploitation_prediction_claim(root), "artifact text avoids ground-truth exploitation prediction claims"))
+    status = "passed" if all(check["status"] == "passed" for check in checks) else "failed"
+    return {
+        "status": status,
+        "artifact_dir": str(root),
+        "dataset_row_count": len(dataset_rows),
+        "label_row_count": len(label_rows),
+        "check_count": len(checks),
+        "checks": checks,
+        "notes": [
+            "Consistency audit validates learned-calibration artifact structure and limitation language.",
+            "It does not validate proxy labels as ground truth and does not change production scoring.",
+        ],
+    }
+
+
+def render_consistency_audit_markdown(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration Artifact Consistency Audit",
+        "",
+        "This artifact checks structural consistency across learned-calibration outputs.",
+        "It does not validate proxy labels as ground truth and does not change production scoring.",
+        "",
+        f"- Status: `{payload.get('status', '')}`",
+        f"- Dataset rows: `{payload.get('dataset_row_count', 0)}`",
+        f"- Label rows: `{payload.get('label_row_count', 0)}`",
+        f"- Checks: `{payload.get('check_count', 0)}`",
+        "",
+        "| Check | Status | Details |",
+        "| --- | --- | --- |",
+    ]
+    for check in payload.get("checks") or []:
+        lines.append(f"| {check.get('check', '')} | {check.get('status', '')} | {check.get('details', '')} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _audit_check(name: str, passed: bool, details: str) -> dict[str, str]:
+    return {"check": name, "status": "passed" if passed else "failed", "details": details}
+
+
+def _learned_calibration_json_filenames_for_audit() -> list[str]:
+    filenames = [
+        spec["filename"]
+        for spec in _learned_calibration_artifact_specs()
+        if spec["filename"].endswith(".json") and "consistency_audit" not in spec["filename"] and "manifest" not in spec["filename"]
+    ]
+    return ["learned_calibration_report.json", *filenames]
+
+
+def _learned_calibration_csv_filenames_for_audit() -> list[str]:
+    return [
+        spec["filename"]
+        for spec in _learned_calibration_artifact_specs()
+        if spec["filename"].endswith(".csv")
+    ]
+
+
+def _learned_calibration_markdown_filenames_for_audit() -> list[str]:
+    filenames = [
+        spec["filename"]
+        for spec in _learned_calibration_artifact_specs()
+        if spec["filename"].endswith(".md") and "consistency_audit" not in spec["filename"] and "manifest" not in spec["filename"]
+    ]
+    return ["learned_calibration_summary.md", *filenames]
+
+
+def _read_csv_rows(path: Path) -> list[dict[str, str]]:
+    try:
+        with path.open(encoding="utf-8", newline="") as handle:
+            return list(csv.DictReader(handle))
+    except FileNotFoundError:
+        return []
+
+
+def _json_file_parseable(path: Path) -> bool:
+    try:
+        json.loads(path.read_text(encoding="utf-8"))
+        return True
+    except Exception:
+        return False
+
+
+def _csv_has_duplicate_headers(path: Path) -> bool:
+    try:
+        with path.open(encoding="utf-8", newline="") as handle:
+            header = handle.readline().strip("\n\r").split(",")
+            return len(header) != len(set(header))
+    except FileNotFoundError:
+        return True
+
+
+def _markdown_has_limitation_language(path: Path) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8").lower()
+    except FileNotFoundError:
+        return False
+    markers = [
+        "not ground truth",
+        "does not",
+        "unchanged",
+        "skipped",
+        "limitation",
+        "limitations",
+        "experimental",
+        "proxy",
+    ]
+    return any(marker in text for marker in markers)
+
+
+def _sklearn_skip_consistent(model_report_path: Path) -> bool:
+    try:
+        report = json.loads(model_report_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if _load_sklearn() is not None:
+        return True
+    return report.get("status") == "skipped" and "scikit-learn" in str(report.get("skip_reason", ""))
+
+
+def _contains_unsafe_exploitation_prediction_claim(root: Path) -> bool:
+    unsafe = [
+        "ground truth exploitation prediction",
+        "proves real-world exploitation",
+        "real-world exploitation prediction",
+    ]
+    filenames = {
+        "learned_calibration_report.json",
+        "learned_calibration_summary.md",
+        *[spec["filename"] for spec in _learned_calibration_artifact_specs()],
+    }
+    for filename in filenames:
+        path = root / filename
+        if path.is_file() and path.suffix in {".json", ".md", ".csv"}:
+            text = path.read_text(encoding="utf-8", errors="ignore").lower()
+            for phrase in unsafe:
+                if phrase in text:
+                    return True
+    return False
+
+
 def _threshold_label(row: Mapping[str, Any], thresholds: Mapping[str, float]) -> str:
     if _truthy(row.get("kev_listed")) or _safe_float(row.get("epss_signal")) >= thresholds["epss_high_threshold"]:
         return "high"
@@ -2156,6 +2324,8 @@ def _learned_calibration_artifact_specs() -> list[dict[str, str]]:
         {"group": "coverage strata", "filename": "learned_calibration_coverage_strata.md", "description": "Readable coverage-limitation strata summary", "usage": "Thesis discussion of data coverage effects."},
         {"group": "negative controls", "filename": "learned_calibration_negative_controls.json", "description": "Negative-control ranking comparisons", "usage": "Compares heuristic ranking with random, reverse, and single-feature controls."},
         {"group": "negative controls", "filename": "learned_calibration_negative_controls.md", "description": "Readable negative-control summary", "usage": "Thesis sanity check for proxy-label ranking metrics."},
+        {"group": "consistency audit", "filename": "learned_calibration_consistency_audit.json", "description": "Cross-artifact consistency checks", "usage": "Machine-readable artifact integrity audit."},
+        {"group": "consistency audit", "filename": "learned_calibration_consistency_audit.md", "description": "Readable cross-artifact consistency checks", "usage": "Appendix-quality artifact integrity summary."},
     ]
 
 

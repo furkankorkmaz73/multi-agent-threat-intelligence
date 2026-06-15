@@ -27,6 +27,7 @@ from evaluation.learned_calibration import (
     build_publication_tables,
     build_feasibility_report,
     bootstrap_sample_indices,
+    build_consistency_audit,
     compute_baseline_metrics,
     compute_bootstrap_stability,
     compute_coverage_strata,
@@ -42,6 +43,7 @@ from evaluation.learned_calibration import (
     proxy_threshold_grid,
     read_analyzed_cves_from_mongo,
     render_coverage_strata_markdown,
+    render_consistency_audit_markdown,
     render_negative_controls_markdown,
     select_case_studies,
     strict_validation_errors,
@@ -267,6 +269,8 @@ def test_export_writes_three_output_files(tmp_path):
     coverage_strata_summary = tmp_path / "learned_calibration_coverage_strata.md"
     negative_controls = tmp_path / "learned_calibration_negative_controls.json"
     negative_controls_summary = tmp_path / "learned_calibration_negative_controls.md"
+    consistency_audit = tmp_path / "learned_calibration_consistency_audit.json"
+    consistency_audit_summary = tmp_path / "learned_calibration_consistency_audit.md"
     manifest = tmp_path / "learned_calibration_manifest.json"
     manifest_summary = tmp_path / "learned_calibration_manifest.md"
     assert result["paths"] == {
@@ -306,6 +310,8 @@ def test_export_writes_three_output_files(tmp_path):
         "coverage_strata_summary": str(coverage_strata_summary),
         "negative_controls": str(negative_controls),
         "negative_controls_summary": str(negative_controls_summary),
+        "consistency_audit": str(consistency_audit),
+        "consistency_audit_summary": str(consistency_audit_summary),
         "manifest": str(manifest),
         "manifest_summary": str(manifest_summary),
     }
@@ -345,6 +351,8 @@ def test_export_writes_three_output_files(tmp_path):
     assert coverage_strata_summary.exists()
     assert negative_controls.exists()
     assert negative_controls_summary.exists()
+    assert consistency_audit.exists()
+    assert consistency_audit_summary.exists()
     assert manifest.exists()
     assert manifest_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
@@ -399,6 +407,8 @@ def test_export_writes_three_output_files(tmp_path):
     negative_payload = json.loads(negative_controls.read_text(encoding="utf-8"))
     assert negative_payload["status"] == "evaluated"
     assert "random_seed_42" in {row["control"] for row in negative_payload["controls"]}
+    audit_payload = json.loads(consistency_audit.read_text(encoding="utf-8"))
+    assert audit_payload["status"] == "passed"
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert manifest_payload["status"] == "complete"
     assert any(item["group"] == "dataset" for item in manifest_payload["artifacts"])
@@ -1000,6 +1010,8 @@ def test_learned_calibration_manifest_reports_files(tmp_path):
         "learned_calibration_coverage_strata.md",
         "learned_calibration_negative_controls.json",
         "learned_calibration_negative_controls.md",
+        "learned_calibration_consistency_audit.json",
+        "learned_calibration_consistency_audit.md",
     ):
         (tmp_path / name).write_text("x", encoding="utf-8")
 
@@ -1255,3 +1267,50 @@ def test_negative_control_metric_comparison_table():
     )
     assert "| Control | Precision@10 | Precision@50 | Precision@100 | Recall@50 | Recall@100 | Top50 Overlap | Top100 Overlap |" in markdown
     assert "CVSS-only is close to the heuristic" in markdown
+
+
+def test_consistency_audit_passes_for_generated_bundle(tmp_path):
+    export_from_documents([_synthetic_doc()], tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+
+    audit = build_consistency_audit(tmp_path)
+    markdown = render_consistency_audit_markdown(audit)
+
+    assert audit["status"] == "passed"
+    assert any(check["check"] == "dataset_label_row_count_match" for check in audit["checks"])
+    assert "# Learned Calibration Artifact Consistency Audit" in markdown
+
+
+def test_consistency_audit_detects_mismatched_cve_ids(tmp_path):
+    export_from_documents([_synthetic_doc()], tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+    (tmp_path / "learned_calibration_labels.csv").write_text(
+        "cve_id,proxy_label_strategy_a,proxy_binary_high_strategy_a\nCVE-OTHER,high,1\n",
+        encoding="utf-8",
+    )
+
+    audit = build_consistency_audit(tmp_path)
+    check = next(item for item in audit["checks"] if item["check"] == "label_ids_match_dataset_ids")
+
+    assert audit["status"] == "failed"
+    assert check["status"] == "failed"
+
+
+def test_consistency_audit_detects_malformed_json(tmp_path):
+    export_from_documents([_synthetic_doc()], tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+    (tmp_path / "learned_calibration_baseline_metrics.json").write_text("{", encoding="utf-8")
+
+    audit = build_consistency_audit(tmp_path)
+    check = next(item for item in audit["checks"] if item["check"] == "json_parseable:learned_calibration_baseline_metrics.json")
+
+    assert audit["status"] == "failed"
+    assert check["status"] == "failed"
+
+
+def test_consistency_audit_detects_missing_limitation_language(tmp_path):
+    export_from_documents([_synthetic_doc()], tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+    (tmp_path / "learned_calibration_summary.md").write_text("Plain summary without required framing.", encoding="utf-8")
+
+    audit = build_consistency_audit(tmp_path)
+    check = next(item for item in audit["checks"] if item["check"] == "markdown_limitation_language:learned_calibration_summary.md")
+
+    assert audit["status"] == "failed"
+    assert check["status"] == "failed"
