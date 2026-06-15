@@ -360,6 +360,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     case_studies_summary_path = output / "learned_calibration_case_studies.md"
     tables_path = output / "learned_calibration_tables.json"
     tables_summary_path = output / "learned_calibration_tables.md"
+    manifest_path = output / "learned_calibration_manifest.json"
+    manifest_summary_path = output / "learned_calibration_manifest.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
@@ -432,6 +434,9 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     case_studies_summary_path.write_text(render_case_studies_markdown(case_studies), encoding="utf-8")
     tables_path.write_text(json.dumps(publication_tables, indent=2, sort_keys=True, default=str), encoding="utf-8")
     tables_summary_path.write_text(render_publication_tables_markdown(publication_tables), encoding="utf-8")
+    artifact_manifest = build_learned_calibration_manifest(output)
+    manifest_path.write_text(json.dumps(artifact_manifest, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    manifest_summary_path.write_text(render_learned_calibration_manifest_markdown(artifact_manifest), encoding="utf-8")
     return {
         "dataset": str(dataset_path),
         "labels": str(labels_path),
@@ -458,6 +463,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "case_studies_summary": str(case_studies_summary_path),
         "tables": str(tables_path),
         "tables_summary": str(tables_summary_path),
+        "manifest": str(manifest_path),
+        "manifest_summary": str(manifest_summary_path),
     }
 
 
@@ -1316,6 +1323,81 @@ def render_publication_tables_markdown(tables: Mapping[str, Any]) -> str:
     lines.extend(_markdown_table("Leakage and Robustness Checks", ["check", "status", "details"], tables.get("leakage_robustness_checks") or []))
     lines.extend(_markdown_table("Artifact Inventory", ["artifact", "usage"], tables.get("artifact_inventory") or []))
     return "\n".join(lines)
+
+
+def build_learned_calibration_manifest(output_dir: str | Path) -> dict[str, Any]:
+    output = Path(output_dir)
+    artifacts = []
+    for spec in _learned_calibration_artifact_specs():
+        path = output / spec["filename"]
+        artifacts.append(
+            {
+                "group": spec["group"],
+                "path": str(path),
+                "exists": path.exists(),
+                "size_bytes": path.stat().st_size if path.exists() else 0,
+                "description": spec["description"],
+                "producer": "evaluation.learned_calibration",
+                "thesis_usage_note": spec["usage"],
+            }
+        )
+    return {
+        "artifact_count": len(artifacts),
+        "artifacts": artifacts,
+        "status": "complete" if all(item["exists"] for item in artifacts) else "incomplete",
+    }
+
+
+def render_learned_calibration_manifest_markdown(manifest: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration Artifact Manifest",
+        "",
+        f"- Status: `{manifest.get('status', '')}`",
+        f"- Artifact count: `{manifest.get('artifact_count', 0)}`",
+        "",
+        "| Group | Path | Exists | Size Bytes | Thesis Usage |",
+        "| --- | --- | --- | ---: | --- |",
+    ]
+    for item in manifest.get("artifacts") or []:
+        lines.append(
+            "| {group} | {path} | {exists} | {size} | {usage} |".format(
+                group=item.get("group", ""),
+                path=item.get("path", ""),
+                exists=item.get("exists", ""),
+                size=item.get("size_bytes", 0),
+                usage=item.get("thesis_usage_note", ""),
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _learned_calibration_artifact_specs() -> list[dict[str, str]]:
+    return [
+        {"group": "dataset", "filename": "learned_calibration_dataset.csv", "description": "Flat feature export", "usage": "Feature matrix for learned-calibration feasibility discussion."},
+        {"group": "labels", "filename": "learned_calibration_labels.csv", "description": "Proxy-label export", "usage": "Documents deterministic proxy labels and limitations."},
+        {"group": "baseline metrics", "filename": "learned_calibration_baseline_metrics.json", "description": "Heuristic baseline metrics", "usage": "Compares risk_score ranking with proxy labels."},
+        {"group": "baseline metrics", "filename": "learned_calibration_baseline_metrics.md", "description": "Readable heuristic baseline metrics", "usage": "Thesis table source for baseline behavior."},
+        {"group": "model report", "filename": "learned_calibration_model_report.json", "description": "Optional model report", "usage": "Records trained/skipped model status and metrics."},
+        {"group": "model report", "filename": "learned_calibration_model_summary.md", "description": "Readable model summary", "usage": "Concise thesis summary of model availability."},
+        {"group": "predictions", "filename": "learned_calibration_predictions.csv", "description": "Optional learned predictions", "usage": "Input to ranking comparisons when a model is trained."},
+        {"group": "comparison report", "filename": "learned_vs_heuristic_comparison.json", "description": "Learned vs heuristic comparison", "usage": "Compares learned and heuristic ranking when predictions exist."},
+        {"group": "comparison report", "filename": "learned_vs_heuristic_comparison.md", "description": "Readable learned-vs-heuristic comparison", "usage": "Thesis narrative support for ranking agreement/disagreement."},
+        {"group": "disagreements", "filename": "learned_calibration_disagreements.csv", "description": "Disagreement cases", "usage": "Case examples when learned predictions exist."},
+        {"group": "disagreements", "filename": "learned_calibration_disagreements.md", "description": "Readable disagreement summary", "usage": "Thesis discussion of disagreement categories."},
+        {"group": "feature importance", "filename": "learned_calibration_feature_importance.csv", "description": "Coefficient/importance export", "usage": "Interpretability support when coefficients exist."},
+        {"group": "feature importance", "filename": "learned_calibration_feature_importance.md", "description": "Readable feature importance", "usage": "Thesis discussion of feature dominance."},
+        {"group": "ablation", "filename": "learned_calibration_ablation.csv", "description": "Ablation rows", "usage": "Feature-removal experiment plan/results."},
+        {"group": "ablation", "filename": "learned_calibration_ablation.md", "description": "Readable ablation summary", "usage": "Thesis-ready ablation table."},
+        {"group": "leakage checks", "filename": "learned_calibration_leakage_checks.json", "description": "Leakage and robustness checks", "usage": "Evidence that learned artifacts do not change production behavior."},
+        {"group": "leakage checks", "filename": "learned_calibration_leakage_checks.md", "description": "Readable leakage checks", "usage": "Appendix-quality leakage/robustness summary."},
+        {"group": "thesis narrative", "filename": "learned_calibration_thesis_section.md", "description": "Thesis section draft", "usage": "Academic prose for learned-calibration discussion."},
+        {"group": "thesis narrative", "filename": "learned_calibration_limitations.md", "description": "Limitations summary", "usage": "Conservative claims and limitations wording."},
+        {"group": "tables", "filename": "learned_calibration_tables.json", "description": "Publication table payloads", "usage": "Machine-readable table source."},
+        {"group": "tables", "filename": "learned_calibration_tables.md", "description": "Publication table markdown", "usage": "Thesis-ready compact tables."},
+        {"group": "case studies", "filename": "learned_calibration_case_studies.csv", "description": "Case-study rows", "usage": "Selected examples for thesis discussion."},
+        {"group": "case studies", "filename": "learned_calibration_case_studies.md", "description": "Case-study summary", "usage": "Readable summary of selected case groups."},
+    ]
 
 
 def _table_proxy_label_distribution(report: Mapping[str, Any]) -> list[dict[str, Any]]:

@@ -20,6 +20,7 @@ from evaluation.learned_calibration import (
     build_proxy_label_row,
     build_proxy_label_rows,
     build_leakage_checks,
+    build_learned_calibration_manifest,
     build_publication_tables,
     build_feasibility_report,
     compute_baseline_metrics,
@@ -243,6 +244,8 @@ def test_export_writes_three_output_files(tmp_path):
     case_studies_summary = tmp_path / "learned_calibration_case_studies.md"
     tables = tmp_path / "learned_calibration_tables.json"
     tables_summary = tmp_path / "learned_calibration_tables.md"
+    manifest = tmp_path / "learned_calibration_manifest.json"
+    manifest_summary = tmp_path / "learned_calibration_manifest.md"
     assert result["paths"] == {
         "dataset": str(dataset),
         "labels": str(labels),
@@ -269,6 +272,8 @@ def test_export_writes_three_output_files(tmp_path):
         "case_studies_summary": str(case_studies_summary),
         "tables": str(tables),
         "tables_summary": str(tables_summary),
+        "manifest": str(manifest),
+        "manifest_summary": str(manifest_summary),
     }
     assert dataset.exists()
     assert labels.exists()
@@ -295,6 +300,8 @@ def test_export_writes_three_output_files(tmp_path):
     assert case_studies_summary.exists()
     assert tables.exists()
     assert tables_summary.exists()
+    assert manifest.exists()
+    assert manifest_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
     assert rows[0]["cve_id"] == "CVE-2026-1234"
     label_rows = list(csv.DictReader(labels.open(encoding="utf-8")))
@@ -333,6 +340,9 @@ def test_export_writes_three_output_files(tmp_path):
     table_payload = json.loads(tables.read_text(encoding="utf-8"))
     assert "dataset_coverage_summary" in table_payload
     assert "artifact_inventory" in table_payload
+    manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert manifest_payload["status"] == "complete"
+    assert any(item["group"] == "dataset" for item in manifest_payload["artifacts"])
     text = summary.read_text(encoding="utf-8")
     assert "Proxy labels are not ground truth" in text
     assert "production `risk_score` behavior is unchanged" in text
@@ -893,3 +903,41 @@ def test_publication_tables_generated_from_artifact_payloads():
     assert tables["learned_model_metrics"][0]["status"] == "skipped"
     assert tables["ablation_summary"][0]["ablation"] == "all_features"
     assert tables["leakage_robustness_checks"][0]["status"] == "passed"
+
+
+def test_learned_calibration_manifest_reports_files(tmp_path):
+    (tmp_path / "learned_calibration_dataset.csv").write_text("cve_id\nCVE-1\n", encoding="utf-8")
+    (tmp_path / "learned_calibration_labels.csv").write_text("cve_id\nCVE-1\n", encoding="utf-8")
+    for name in (
+        "learned_calibration_baseline_metrics.json",
+        "learned_calibration_baseline_metrics.md",
+        "learned_calibration_model_report.json",
+        "learned_calibration_model_summary.md",
+        "learned_calibration_predictions.csv",
+        "learned_vs_heuristic_comparison.json",
+        "learned_vs_heuristic_comparison.md",
+        "learned_calibration_disagreements.csv",
+        "learned_calibration_disagreements.md",
+        "learned_calibration_feature_importance.csv",
+        "learned_calibration_feature_importance.md",
+        "learned_calibration_ablation.csv",
+        "learned_calibration_ablation.md",
+        "learned_calibration_leakage_checks.json",
+        "learned_calibration_leakage_checks.md",
+        "learned_calibration_thesis_section.md",
+        "learned_calibration_limitations.md",
+        "learned_calibration_tables.json",
+        "learned_calibration_tables.md",
+        "learned_calibration_case_studies.csv",
+        "learned_calibration_case_studies.md",
+    ):
+        (tmp_path / name).write_text("x", encoding="utf-8")
+
+    manifest = build_learned_calibration_manifest(tmp_path)
+
+    assert manifest["status"] == "complete"
+    assert manifest["artifact_count"] >= 20
+    dataset = next(item for item in manifest["artifacts"] if item["group"] == "dataset")
+    assert dataset["exists"] is True
+    assert dataset["size_bytes"] > 0
+    assert dataset["producer"] == "evaluation.learned_calibration"
