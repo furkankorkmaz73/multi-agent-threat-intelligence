@@ -420,6 +420,7 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     negative_controls_summary_path = output / "learned_calibration_negative_controls.md"
     consistency_audit_path = output / "learned_calibration_consistency_audit.json"
     consistency_audit_summary_path = output / "learned_calibration_consistency_audit.md"
+    appendix_path = output / "learned_calibration_appendix.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
@@ -519,9 +520,39 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     coverage_strata_summary_path.write_text(render_coverage_strata_markdown(coverage_strata), encoding="utf-8")
     negative_controls_path.write_text(json.dumps(negative_controls, indent=2, sort_keys=True, default=str), encoding="utf-8")
     negative_controls_summary_path.write_text(render_negative_controls_markdown(negative_controls), encoding="utf-8")
+    appendix_path.write_text(
+        render_learned_calibration_appendix(
+            feasibility_report=report,
+            baseline_metrics=baseline_metrics,
+            model_report=model_result["report"],
+            proxy_sensitivity=proxy_sensitivity,
+            bootstrap_stability=bootstrap_stability,
+            coverage_strata=coverage_strata,
+            negative_controls=negative_controls,
+            case_studies=case_studies,
+            leakage_checks=leakage_checks,
+            consistency_audit={"status": "pending"},
+        ),
+        encoding="utf-8",
+    )
     consistency_audit = build_consistency_audit(output)
     consistency_audit_path.write_text(json.dumps(consistency_audit, indent=2, sort_keys=True, default=str), encoding="utf-8")
     consistency_audit_summary_path.write_text(render_consistency_audit_markdown(consistency_audit), encoding="utf-8")
+    appendix_path.write_text(
+        render_learned_calibration_appendix(
+            feasibility_report=report,
+            baseline_metrics=baseline_metrics,
+            model_report=model_result["report"],
+            proxy_sensitivity=proxy_sensitivity,
+            bootstrap_stability=bootstrap_stability,
+            coverage_strata=coverage_strata,
+            negative_controls=negative_controls,
+            case_studies=case_studies,
+            leakage_checks=leakage_checks,
+            consistency_audit=consistency_audit,
+        ),
+        encoding="utf-8",
+    )
     artifact_manifest = build_learned_calibration_manifest(output)
     manifest_path.write_text(json.dumps(artifact_manifest, indent=2, sort_keys=True, default=str), encoding="utf-8")
     manifest_summary_path.write_text(render_learned_calibration_manifest_markdown(artifact_manifest), encoding="utf-8")
@@ -564,6 +595,7 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "negative_controls_summary": str(negative_controls_summary_path),
         "consistency_audit": str(consistency_audit_path),
         "consistency_audit_summary": str(consistency_audit_summary_path),
+        "appendix": str(appendix_path),
         "manifest": str(manifest_path),
         "manifest_summary": str(manifest_summary_path),
     }
@@ -2122,6 +2154,97 @@ def render_consistency_audit_markdown(payload: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_learned_calibration_appendix(
+    *,
+    feasibility_report: Mapping[str, Any],
+    baseline_metrics: Mapping[str, Any],
+    model_report: Mapping[str, Any],
+    proxy_sensitivity: Mapping[str, Any],
+    bootstrap_stability: Mapping[str, Any],
+    coverage_strata: Mapping[str, Any],
+    negative_controls: Mapping[str, Any],
+    case_studies: Sequence[Mapping[str, Any]],
+    leakage_checks: Mapping[str, Any],
+    consistency_audit: Mapping[str, Any],
+) -> str:
+    strategy_a = (baseline_metrics.get("strategies") or {}).get("strategy_a") or {}
+    model_status = str(model_report.get("status", "unavailable"))
+    bootstrap_summary = bootstrap_stability.get("summary") or {}
+    bootstrap_p10 = (bootstrap_summary.get("precision_at_10") or {}).get("mean")
+    negative_interpretation = (negative_controls.get("interpretation") or {}).get("summary", "Unavailable.")
+    lines = [
+        "# Learned Calibration Appendix Draft",
+        "",
+        "This appendix draft summarizes the learned-calibration feasibility artifacts in conservative academic language. Proxy labels are not ground truth exploitation outcomes, and this appendix does not change production scoring.",
+        "",
+        "## 1. Purpose of the Learned Calibration Experiment",
+        "",
+        "The learned-calibration experiment evaluates whether the existing deterministic signal export could support a future supervised calibration layer. It is diagnostic thesis material only: it does not replace the heuristic risk engine, does not write learned outputs back to MongoDB, and does not weaken URLhaus or Dread evidence gates.",
+        "",
+        "## 2. Dataset Construction",
+        "",
+        f"The export contains `{feasibility_report.get('analyzed_records_exported', 0)}` analyzed CVE rows from the existing analysis collection. `{feasibility_report.get('records_with_cvss', 0)}` rows include CVSS values, `{feasibility_report.get('epss_availability_count', 0)}` rows report EPSS availability, and `{feasibility_report.get('kev_known_count', 0)}` rows have known KEV status. Accepted external-evidence count is `{feasibility_report.get('accepted_external_evidence_count', 0)}`.",
+        "",
+        "## 3. Feature Schema",
+        "",
+        "The feature schema exports CVSS/severity, EPSS, KEV, recency, correlation, graph, NLP context, accepted evidence counts, confidence/data-completeness fields, age, and intrinsic criticality indicators. Production `risk_score` is excluded from learned-model feature columns to avoid leakage.",
+        "",
+        "## 4. Proxy-Label Design",
+        "",
+        "Strategy A combines intrinsic severity patterns with known evidence, Strategy B emphasizes KEV/EPSS/accepted external evidence, and Strategy C is a conservative high-vs-rest proxy. These labels are deterministic proxies for feasibility analysis, not real-world exploitation labels.",
+        "",
+        "## 5. Coverage Limitations",
+        "",
+        f"Coverage remains limited: EPSS availability is `{feasibility_report.get('epss_availability_count', 0)}` and KEV-known count is `{feasibility_report.get('kev_known_count', 0)}` in the exported dataset. Missing EPSS, KEV, or accepted external evidence should be interpreted as coverage limitations rather than proof that a CVE is unimportant.",
+        "",
+        "## 6. Baseline Ranking Metrics",
+        "",
+        f"For Strategy A, heuristic precision@10 is `{_format_metric((strategy_a.get('precision_at_k') or {}).get('10'))}`, recall@50 is `{_format_metric((strategy_a.get('recall_at_k') or {}).get('50'))}`, and nDCG@50 is `{_format_metric((strategy_a.get('ndcg_at_k') or {}).get('50'))}`. These metrics compare the unchanged heuristic ranking with proxy labels only.",
+        "",
+        "## 7. Model Training Status and Dependency Limitations",
+        "",
+        f"Model training status is `{model_status}`. If scikit-learn is unavailable or proxy labels lack class diversity, model artifacts are explicitly skipped instead of fabricating learned results.",
+        "",
+        "## 8. Sensitivity Analysis",
+        "",
+        f"The proxy-threshold sensitivity grid contains `{proxy_sensitivity.get('grid_size', 0)}` deterministic configurations. This probes threshold robustness for proxy-label definitions and does not alter default labels or production scoring.",
+        "",
+        "## 9. Bootstrap Stability",
+        "",
+        f"Bootstrap stability status is `{bootstrap_stability.get('status', 'unavailable')}` with `{bootstrap_stability.get('iteration_count', 0)}` fixed-seed iterations. Mean precision@10 is `{_format_metric(bootstrap_p10)}` when available. This is a deterministic robustness check, not statistical calibration.",
+        "",
+        "## 10. Coverage-Stratified Analysis",
+        "",
+        f"The coverage-strata artifact reports `{coverage_strata.get('strata_count', 0)}` strata rows across EPSS, KEV, evidence, intrinsic-floor, confidence, risk, and URLhaus candidate-accounting groups. It helps separate ranking behavior from evidence-coverage limitations.",
+        "",
+        "## 11. Negative Controls",
+        "",
+        str(negative_interpretation),
+        "",
+        "## 12. Disagreement/Case-Study Interpretation",
+        "",
+        f"The case-study export contains `{len(case_studies)}` selected rows when examples are available. These cases are intended for qualitative discussion of proxy behavior, sparse evidence, intrinsic criticality, ignored URLhaus volume, and low-confidence high-risk records.",
+        "",
+        "## 13. Leakage and Robustness Checks",
+        "",
+        f"Leakage-check status is `{leakage_checks.get('status', 'unavailable')}`. The checks document that production `risk_score` is excluded from learned features, proxy-label fields are not model inputs, evidence gates are unchanged, and Dread live crawling is not used.",
+        "",
+        "## 14. Why Production Risk Scoring Remains Heuristic",
+        "",
+        "The current thesis implementation keeps production risk scoring heuristic and explainable because proxy labels are not ground truth, external evidence coverage is sparse, and learned models may be unavailable or untrainable in the local environment. Learned calibration remains a future extension candidate.",
+        "",
+        "## 15. Threats to Validity",
+        "",
+        "The main threats are proxy-label circularity, sparse EPSS/KEV and accepted external evidence, limited positive labels, dependency availability, and lack of external ground-truth outcomes. The artifacts support feasibility and robustness discussion, not claims of real-world predictive performance.",
+        "",
+        "## 16. Recommended Future Work",
+        "",
+        f"Future work should add defensible external labels, improve EPSS/KEV and asset-context coverage, evaluate train/test separation on curated datasets, and repeat consistency checks. Current consistency-audit status is `{consistency_audit.get('status', 'unavailable')}`.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def _audit_check(name: str, passed: bool, details: str) -> dict[str, str]:
     return {"check": name, "status": "passed" if passed else "failed", "details": details}
 
@@ -2326,6 +2449,7 @@ def _learned_calibration_artifact_specs() -> list[dict[str, str]]:
         {"group": "negative controls", "filename": "learned_calibration_negative_controls.md", "description": "Readable negative-control summary", "usage": "Thesis sanity check for proxy-label ranking metrics."},
         {"group": "consistency audit", "filename": "learned_calibration_consistency_audit.json", "description": "Cross-artifact consistency checks", "usage": "Machine-readable artifact integrity audit."},
         {"group": "consistency audit", "filename": "learned_calibration_consistency_audit.md", "description": "Readable cross-artifact consistency checks", "usage": "Appendix-quality artifact integrity summary."},
+        {"group": "appendix", "filename": "learned_calibration_appendix.md", "description": "Long-form learned-calibration appendix draft", "usage": "Thesis appendix draft assembled from generated artifact values."},
     ]
 
 

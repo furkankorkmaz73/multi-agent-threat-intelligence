@@ -271,6 +271,7 @@ def test_export_writes_three_output_files(tmp_path):
     negative_controls_summary = tmp_path / "learned_calibration_negative_controls.md"
     consistency_audit = tmp_path / "learned_calibration_consistency_audit.json"
     consistency_audit_summary = tmp_path / "learned_calibration_consistency_audit.md"
+    appendix = tmp_path / "learned_calibration_appendix.md"
     manifest = tmp_path / "learned_calibration_manifest.json"
     manifest_summary = tmp_path / "learned_calibration_manifest.md"
     assert result["paths"] == {
@@ -312,6 +313,7 @@ def test_export_writes_three_output_files(tmp_path):
         "negative_controls_summary": str(negative_controls_summary),
         "consistency_audit": str(consistency_audit),
         "consistency_audit_summary": str(consistency_audit_summary),
+        "appendix": str(appendix),
         "manifest": str(manifest),
         "manifest_summary": str(manifest_summary),
     }
@@ -353,6 +355,7 @@ def test_export_writes_three_output_files(tmp_path):
     assert negative_controls_summary.exists()
     assert consistency_audit.exists()
     assert consistency_audit_summary.exists()
+    assert appendix.exists()
     assert manifest.exists()
     assert manifest_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
@@ -409,6 +412,10 @@ def test_export_writes_three_output_files(tmp_path):
     assert "random_seed_42" in {row["control"] for row in negative_payload["controls"]}
     audit_payload = json.loads(consistency_audit.read_text(encoding="utf-8"))
     assert audit_payload["status"] == "passed"
+    appendix_text = appendix.read_text(encoding="utf-8")
+    assert "## 1. Purpose of the Learned Calibration Experiment" in appendix_text
+    assert "## 16. Recommended Future Work" in appendix_text
+    assert "Proxy labels are not ground truth" in appendix_text
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert manifest_payload["status"] == "complete"
     assert any(item["group"] == "dataset" for item in manifest_payload["artifacts"])
@@ -1012,6 +1019,7 @@ def test_learned_calibration_manifest_reports_files(tmp_path):
         "learned_calibration_negative_controls.md",
         "learned_calibration_consistency_audit.json",
         "learned_calibration_consistency_audit.md",
+        "learned_calibration_appendix.md",
     ):
         (tmp_path / name).write_text("x", encoding="utf-8")
 
