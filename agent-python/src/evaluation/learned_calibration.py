@@ -285,9 +285,12 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     predictions_path = output / "learned_calibration_predictions.csv"
     model_report_path = output / "learned_calibration_model_report.json"
     model_summary_path = output / "learned_calibration_model_summary.md"
+    comparison_path = output / "learned_vs_heuristic_comparison.json"
+    comparison_summary_path = output / "learned_vs_heuristic_comparison.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
+    comparison = compute_learned_vs_heuristic_comparison(rows, label_rows, model_result["predictions"])
     with dataset_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=DATASET_COLUMNS)
         writer.writeheader()
@@ -309,6 +312,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
             writer.writerow({column: row.get(column, "") for column in PREDICTION_COLUMNS})
     model_report_path.write_text(json.dumps(model_result["report"], indent=2, sort_keys=True, default=str), encoding="utf-8")
     model_summary_path.write_text(render_model_summary_markdown(model_result["report"]), encoding="utf-8")
+    comparison_path.write_text(json.dumps(comparison, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    comparison_summary_path.write_text(render_learned_vs_heuristic_markdown(comparison), encoding="utf-8")
     return {
         "dataset": str(dataset_path),
         "labels": str(labels_path),
@@ -319,6 +324,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "predictions": str(predictions_path),
         "model_report": str(model_report_path),
         "model_summary": str(model_summary_path),
+        "learned_vs_heuristic_comparison": str(comparison_path),
+        "learned_vs_heuristic_summary": str(comparison_summary_path),
     }
 
 
@@ -608,6 +615,218 @@ def render_model_summary_markdown(report: Mapping[str, Any]) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def compute_learned_vs_heuristic_comparison(
+    rows: Sequence[Mapping[str, Any]],
+    label_rows: Sequence[Mapping[str, Any]],
+    prediction_rows: Sequence[Mapping[str, Any]],
+    *,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    generated = generated_at or datetime.now(timezone.utc).isoformat()
+    rows_by_cve = {str(row.get("cve_id", "")): row for row in rows}
+    label_by_cve = {str(row.get("cve_id", "")): row for row in label_rows}
+    predictions_by_strategy: dict[str, list[Mapping[str, Any]]] = {strategy: [] for strategy in ("strategy_a", "strategy_b", "strategy_c")}
+    for prediction in prediction_rows:
+        strategy = str(prediction.get("strategy", ""))
+        if strategy in predictions_by_strategy:
+            predictions_by_strategy[strategy].append(prediction)
+    strategies = {
+        strategy: _comparison_for_strategy(rows_by_cve, label_by_cve, predictions, strategy)
+        for strategy, predictions in predictions_by_strategy.items()
+    }
+    return {
+        "generated_at": generated,
+        "status": "completed" if any(payload["status"] != "skipped" for payload in strategies.values()) else "skipped",
+        "notes": [
+            "Comparison uses experimental learned probabilities when available.",
+            "The heuristic ranking is the existing production risk_score ordering; it is not changed by this artifact.",
+            "Proxy labels are deterministic thesis-analysis labels, not ground truth.",
+        ],
+        "strategies": strategies,
+    }
+
+
+def render_learned_vs_heuristic_markdown(comparison: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned vs Heuristic Ranking Comparison",
+        "",
+        "This artifact compares experimental learned probability rankings with the existing heuristic `risk_score` ranking.",
+        "It is skipped when no learned predictions are available.",
+        "",
+        "| Strategy | Status | Top-10 Overlap | Learned Precision@10 | Heuristic Precision@10 | Rank Correlation | Interpretation |",
+        "| --- | --- | ---: | ---: | ---: | ---: | --- |",
+    ]
+    for strategy, payload in (comparison.get("strategies") or {}).items():
+        overlap = (payload.get("top_k_overlap") or {}).get("10", {})
+        learned_precision = ((payload.get("learned_metrics") or {}).get("precision_at_k") or {}).get("10")
+        heuristic_precision = ((payload.get("heuristic_metrics") or {}).get("precision_at_k") or {}).get("10")
+        lines.append(
+            "| {strategy} | {status} | {overlap} | {lp} | {hp} | {corr} | {interpretation} |".format(
+                strategy=strategy,
+                status=payload.get("status", ""),
+                overlap=_format_metric(overlap.get("count")),
+                lp=_format_metric(learned_precision),
+                hp=_format_metric(heuristic_precision),
+                corr=_format_metric(payload.get("spearman_like_rank_correlation")),
+                interpretation=payload.get("interpretation", ""),
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _comparison_for_strategy(
+    rows_by_cve: Mapping[str, Mapping[str, Any]],
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+    predictions: Sequence[Mapping[str, Any]],
+    strategy: str,
+) -> dict[str, Any]:
+    usable_predictions = [prediction for prediction in predictions if str(prediction.get("cve_id", "")) in rows_by_cve]
+    if not usable_predictions:
+        return {
+            "status": "skipped",
+            "skip_reason": "no learned predictions available for this strategy",
+        }
+    learned_ranked_ids = [
+        str(prediction.get("cve_id", ""))
+        for prediction in sorted(
+            usable_predictions,
+            key=lambda row: (-_safe_float(row.get("learned_probability")), str(row.get("cve_id", ""))),
+        )
+    ]
+    heuristic_ranked_ids = [
+        cve_id
+        for cve_id, row in sorted(
+            rows_by_cve.items(),
+            key=lambda item: (-_safe_float(item[1].get("risk_score")), item[0]),
+        )
+        if cve_id in set(learned_ranked_ids)
+    ]
+    labels_learned = [_strategy_binary_label(cve_id, label_by_cve, strategy) for cve_id in learned_ranked_ids]
+    labels_heuristic = [_strategy_binary_label(cve_id, label_by_cve, strategy) for cve_id in heuristic_ranked_ids]
+    return {
+        "status": "evaluated",
+        "record_count": len(learned_ranked_ids),
+        "top_k_overlap": _top_k_overlap(learned_ranked_ids, heuristic_ranked_ids, (10, 25, 50, 100)),
+        "learned_metrics": {
+            "precision_at_k": {str(k): _precision_at_k(labels_learned, k) for k in (10, 25, 50, 100)},
+            "recall_at_k": {str(k): _recall_at_k(labels_learned, k) for k in (10, 25, 50, 100)},
+        },
+        "heuristic_metrics": {
+            "precision_at_k": {str(k): _precision_at_k(labels_heuristic, k) for k in (10, 25, 50, 100)},
+            "recall_at_k": {str(k): _recall_at_k(labels_heuristic, k) for k in (10, 25, 50, 100)},
+        },
+        "spearman_like_rank_correlation": _rank_correlation(learned_ranked_ids, heuristic_ranked_ids),
+        "severity_rank_correlation": _severity_rank_correlation(learned_ranked_ids, rows_by_cve),
+        "learned_ranks_much_higher": _rank_difference_cases(
+            learned_ranked_ids,
+            heuristic_ranked_ids,
+            rows_by_cve,
+            label_by_cve,
+            strategy,
+            direction="learned_higher",
+        ),
+        "heuristic_ranks_much_higher": _rank_difference_cases(
+            learned_ranked_ids,
+            heuristic_ranked_ids,
+            rows_by_cve,
+            label_by_cve,
+            strategy,
+            direction="heuristic_higher",
+        ),
+        "interpretation": _ranking_interpretation(learned_ranked_ids, heuristic_ranked_ids, rows_by_cve),
+    }
+
+
+def _top_k_overlap(left_ids: Sequence[str], right_ids: Sequence[str], ks: Sequence[int]) -> dict[str, dict[str, float]]:
+    result: dict[str, dict[str, float]] = {}
+    for k in ks:
+        left = set(left_ids[:k])
+        right = set(right_ids[:k])
+        count = len(left & right)
+        result[str(k)] = {"count": count, "fraction": round(count / max(min(k, len(left_ids), len(right_ids)), 1), 4)}
+    return result
+
+
+def _strategy_binary_label(
+    cve_id: str,
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+    strategy: str,
+) -> int:
+    return _safe_int((label_by_cve.get(cve_id) or {}).get(f"proxy_binary_high_{strategy}"))
+
+
+def _rank_correlation(left_ids: Sequence[str], right_ids: Sequence[str]) -> float | None:
+    common = [cve_id for cve_id in left_ids if cve_id in set(right_ids)]
+    n = len(common)
+    if n < 2:
+        return None
+    left_ranks = {cve_id: index + 1 for index, cve_id in enumerate(left_ids)}
+    right_ranks = {cve_id: index + 1 for index, cve_id in enumerate(right_ids)}
+    squared_diff = sum((left_ranks[cve_id] - right_ranks[cve_id]) ** 2 for cve_id in common)
+    return round(1 - (6 * squared_diff) / (n * (n**2 - 1)), 4)
+
+
+def _severity_rank_correlation(
+    learned_ranked_ids: Sequence[str],
+    rows_by_cve: Mapping[str, Mapping[str, Any]],
+) -> float | None:
+    severity_ids = sorted(
+        learned_ranked_ids,
+        key=lambda cve_id: (-_safe_float(rows_by_cve[cve_id].get("severity_signal")), cve_id),
+    )
+    return _rank_correlation(learned_ranked_ids, severity_ids)
+
+
+def _rank_difference_cases(
+    learned_ranked_ids: Sequence[str],
+    heuristic_ranked_ids: Sequence[str],
+    rows_by_cve: Mapping[str, Mapping[str, Any]],
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+    strategy: str,
+    *,
+    direction: str,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    learned_rank = {cve_id: index + 1 for index, cve_id in enumerate(learned_ranked_ids)}
+    heuristic_rank = {cve_id: index + 1 for index, cve_id in enumerate(heuristic_ranked_ids)}
+    rows: list[dict[str, Any]] = []
+    for cve_id in learned_rank.keys() & heuristic_rank.keys():
+        delta = heuristic_rank[cve_id] - learned_rank[cve_id]
+        if direction == "learned_higher" and delta <= 0:
+            continue
+        if direction == "heuristic_higher" and delta >= 0:
+            continue
+        row = rows_by_cve[cve_id]
+        rows.append(
+            {
+                "cve_id": cve_id,
+                "learned_rank": learned_rank[cve_id],
+                "heuristic_rank": heuristic_rank[cve_id],
+                "rank_delta": delta,
+                "risk_score": row.get("risk_score", ""),
+                "cvss_score": row.get("cvss_score", ""),
+                "proxy_label": (label_by_cve.get(cve_id) or {}).get(f"proxy_label_{strategy}", ""),
+            }
+        )
+    rows = sorted(rows, key=lambda row: -abs(_safe_int(row["rank_delta"])))
+    return rows[:limit]
+
+
+def _ranking_interpretation(
+    learned_ranked_ids: Sequence[str],
+    heuristic_ranked_ids: Sequence[str],
+    rows_by_cve: Mapping[str, Mapping[str, Any]],
+) -> str:
+    heuristic_corr = _rank_correlation(learned_ranked_ids, heuristic_ranked_ids)
+    severity_corr = _severity_rank_correlation(learned_ranked_ids, rows_by_cve)
+    if heuristic_corr is not None and heuristic_corr >= 0.8:
+        return "learned ranking closely tracks heuristic risk_score"
+    if severity_corr is not None and severity_corr >= 0.8:
+        return "learned ranking mostly reproduces severity ordering"
+    return "learned ranking diverges from heuristic/severity ordering"
 
 
 def _skipped_model_report(*, generated_at: str, reason: str) -> dict[str, Any]:

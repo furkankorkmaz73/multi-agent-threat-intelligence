@@ -16,6 +16,7 @@ from evaluation.learned_calibration import (
     build_proxy_label_rows,
     build_feasibility_report,
     compute_baseline_metrics,
+    compute_learned_vs_heuristic_comparison,
     export_from_documents,
     extract_calibration_row,
     read_analyzed_cves_from_mongo,
@@ -214,6 +215,8 @@ def test_export_writes_three_output_files(tmp_path):
     predictions = tmp_path / "learned_calibration_predictions.csv"
     model_report = tmp_path / "learned_calibration_model_report.json"
     model_summary = tmp_path / "learned_calibration_model_summary.md"
+    comparison = tmp_path / "learned_vs_heuristic_comparison.json"
+    comparison_summary = tmp_path / "learned_vs_heuristic_comparison.md"
     assert result["paths"] == {
         "dataset": str(dataset),
         "labels": str(labels),
@@ -224,6 +227,8 @@ def test_export_writes_three_output_files(tmp_path):
         "predictions": str(predictions),
         "model_report": str(model_report),
         "model_summary": str(model_summary),
+        "learned_vs_heuristic_comparison": str(comparison),
+        "learned_vs_heuristic_summary": str(comparison_summary),
     }
     assert dataset.exists()
     assert labels.exists()
@@ -234,6 +239,8 @@ def test_export_writes_three_output_files(tmp_path):
     assert predictions.exists()
     assert model_report.exists()
     assert model_summary.exists()
+    assert comparison.exists()
+    assert comparison_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
     assert rows[0]["cve_id"] == "CVE-2026-1234"
     label_rows = list(csv.DictReader(labels.open(encoding="utf-8")))
@@ -248,6 +255,8 @@ def test_export_writes_three_output_files(tmp_path):
     model_payload = json.loads(model_report.read_text(encoding="utf-8"))
     assert model_payload["model_type"] == "LogisticRegression"
     assert model_payload["leakage_guard"]["risk_score_used_as_feature"] is False
+    comparison_payload = json.loads(comparison.read_text(encoding="utf-8"))
+    assert comparison_payload["status"] in {"completed", "skipped"}
     text = summary.read_text(encoding="utf-8")
     assert "Proxy labels are not ground truth" in text
     assert "production `risk_score` behavior is unchanged" in text
@@ -470,3 +479,69 @@ def test_model_training_is_deterministic_if_sklearn_available():
 
     assert first["predictions"] == second["predictions"]
     assert first["report"]["strategies"]["strategy_a"]["status"] in {"limited", "meaningful"}
+
+
+def test_learned_vs_heuristic_comparison_top_k_overlap_and_metrics():
+    rows = [
+        _row(cve_id="CVE-1", risk_score=0.9, severity_signal=0.9),
+        _row(cve_id="CVE-2", risk_score=0.8, severity_signal=0.8),
+        _row(cve_id="CVE-3", risk_score=0.7, severity_signal=0.7),
+    ]
+    labels = [
+        {**build_proxy_label_row(rows[0]), "proxy_binary_high_strategy_a": 1, "proxy_label_strategy_a": "high"},
+        {**build_proxy_label_row(rows[1]), "proxy_binary_high_strategy_a": 0, "proxy_label_strategy_a": "low"},
+        {**build_proxy_label_row(rows[2]), "proxy_binary_high_strategy_a": 1, "proxy_label_strategy_a": "high"},
+    ]
+    predictions = [
+        {"cve_id": "CVE-3", "strategy": "strategy_a", "learned_probability": 0.95},
+        {"cve_id": "CVE-1", "strategy": "strategy_a", "learned_probability": 0.9},
+        {"cve_id": "CVE-2", "strategy": "strategy_a", "learned_probability": 0.1},
+    ]
+
+    comparison = compute_learned_vs_heuristic_comparison(
+        rows, labels, predictions, generated_at="2026-06-16T00:00:00+03:00"
+    )
+    strategy = comparison["strategies"]["strategy_a"]
+
+    assert strategy["status"] == "evaluated"
+    assert strategy["top_k_overlap"]["10"]["count"] == 3
+    assert strategy["learned_metrics"]["precision_at_k"]["10"] == 0.6667
+    assert strategy["heuristic_metrics"]["precision_at_k"]["10"] == 0.6667
+    assert strategy["spearman_like_rank_correlation"] is not None
+
+
+def test_learned_vs_heuristic_comparison_extracts_rank_difference_cases():
+    rows = [
+        _row(cve_id="CVE-LOW", risk_score=1.0, cvss_score=4.0),
+        _row(cve_id="CVE-HIGH", risk_score=9.0, cvss_score=9.8),
+        _row(cve_id="CVE-MID", risk_score=5.0, cvss_score=6.0),
+    ]
+    labels = build_proxy_label_rows(rows)
+    predictions = [
+        {"cve_id": "CVE-LOW", "strategy": "strategy_a", "learned_probability": 0.99},
+        {"cve_id": "CVE-MID", "strategy": "strategy_a", "learned_probability": 0.5},
+        {"cve_id": "CVE-HIGH", "strategy": "strategy_a", "learned_probability": 0.01},
+    ]
+
+    comparison = compute_learned_vs_heuristic_comparison(
+        rows, labels, predictions, generated_at="2026-06-16T00:00:00+03:00"
+    )
+    strategy = comparison["strategies"]["strategy_a"]
+
+    assert strategy["learned_ranks_much_higher"][0]["cve_id"] == "CVE-LOW"
+    assert strategy["heuristic_ranks_much_higher"][0]["cve_id"] == "CVE-HIGH"
+    assert strategy["learned_ranks_much_higher"][0]["rank_delta"] > 0
+    assert strategy["heuristic_ranks_much_higher"][0]["rank_delta"] < 0
+
+
+def test_learned_vs_heuristic_comparison_skips_without_predictions():
+    rows = [_row(cve_id="CVE-1", risk_score=0.9)]
+    labels = build_proxy_label_rows(rows)
+
+    comparison = compute_learned_vs_heuristic_comparison(
+        rows, labels, [], generated_at="2026-06-16T00:00:00+03:00"
+    )
+
+    assert comparison["status"] == "skipped"
+    assert comparison["strategies"]["strategy_a"]["status"] == "skipped"
+    assert comparison["strategies"]["strategy_a"]["skip_reason"] == "no learned predictions available for this strategy"
