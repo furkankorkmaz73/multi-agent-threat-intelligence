@@ -156,6 +156,8 @@ make thesis-scenario
 
 The command writes `agent-python/reports/thesis_scenario_report.json`.
 
+For reproducible thesis artifact generation and validation, see [`docs/thesis_reproducibility.md`](docs/thesis_reproducibility.md).
+
 ## Production-like E2E Scenario
 
 Prerequisites: Docker, Go, and the Python virtualenv under `agent-python/.venv`.
