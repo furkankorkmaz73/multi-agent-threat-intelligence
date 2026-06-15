@@ -12,7 +12,7 @@ from agents.recommender import RecommenderAgent
 import analysis.risk_engine as risk_engine_module
 from analysis.applicability import VulnerableProduct
 from analysis.assets import Asset
-from analysis.correlation_decisions import build_correlation_candidate, decide_correlation_candidate
+from analysis.correlation_decisions import build_correlation_candidate, correlation_decision_row, decide_correlation_candidate
 from analysis.operational_risk import OperationalRiskService
 from api.mappers import to_finding_detail, to_finding_summary
 from api.schemas import AnalyzeResponse, FindingDetail, FindingSummary
@@ -22,6 +22,7 @@ from integration.thesis_fixtures import (
     fixture_cves,
     fixture_dread,
     fixture_epss_csv,
+    fixture_evaluation_model_results,
     fixture_kev_json,
     fixture_urlhaus,
     fixture_vulnerable_products,
@@ -142,12 +143,12 @@ def run_thesis_scenario(report_path: str | Path | None = None) -> Dict[str, Any]
                 executor.process_document(source, record, repository, thinker, recommender)
 
         duplicate_outcome = executor.process_document("cve", cves[0], repository, thinker, recommender)
-    model_results = repository.get_cve_model_results()
+    model_results = fixture_evaluation_model_results()
     evaluation = build_evaluation_report(
         model_results=model_results,
         kev_loader=fixture_kev_json,
         epss_loader=fixture_epss_csv,
-        k_values=(1, 3),
+        k_values=(1, 3, 5, 10),
         generated_at=GENERATED_AT,
     )
     operational_risk = _build_operational_risk(repository, assets, vulnerable_products)
@@ -159,8 +160,9 @@ def run_thesis_scenario(report_path: str | Path | None = None) -> Dict[str, Any]
             "urlhaus_count": len(urlhaus),
             "dread_count": len(dread),
             "asset_count": len(assets),
-            "kev_count": 1,
-            "epss_count": 3,
+            "kev_count": evaluation["dataset"]["kev_count"],
+            "epss_count": evaluation["dataset"]["epss_available_count"],
+            "evaluation_record_count": evaluation["dataset"]["record_count"],
         },
         "source_results": _source_results(repository),
         "api_compatible_results": _api_results(repository),
@@ -299,6 +301,48 @@ def _build_correlation_decisions() -> List[Dict[str, Any]]:
             raw_reference="https://cdn.example/vpn-admin-check",
         ),
         build_correlation_candidate(
+            source="urlhaus",
+            source_identifier="CVE-2026-9005",
+            target_identifier="UH-9005",
+            relation_type="cve_ioc",
+            lexical=0.18,
+            semantic=0.24,
+            temporal=0.7,
+            entity_score=0.42,
+            shared_term_count=2,
+            exact_cve=False,
+            high_signal_term_hits=2,
+            raw_reference="https://payloads.example/vpn-gateway-rce-loader.exe",
+        ),
+        build_correlation_candidate(
+            source="urlhaus",
+            source_identifier="CVE-2026-9016",
+            target_identifier="UH-9016",
+            relation_type="cve_ioc",
+            lexical=0.04,
+            semantic=0.02,
+            temporal=0.0,
+            entity_score=0.0,
+            shared_term_count=1,
+            exact_cve=False,
+            high_signal_term_hits=0,
+            raw_reference="https://generic.example/windows/update",
+        ),
+        build_correlation_candidate(
+            source="dread",
+            source_identifier="CVE-2026-9017",
+            target_identifier="DR-9017",
+            relation_type="cve_forum",
+            lexical=0.04,
+            semantic=0.13,
+            temporal=0.2,
+            entity_score=0.20,
+            shared_term_count=1,
+            exact_cve=False,
+            high_signal_term_hits=1,
+            raw_reference="dread://DR-9017",
+        ),
+        build_correlation_candidate(
             source="dread",
             source_identifier="CVE-2015-0001",
             target_identifier="DR-9002",
@@ -313,10 +357,10 @@ def _build_correlation_decisions() -> List[Dict[str, Any]]:
             raw_reference="dread://DR-9002",
         ),
     ]
-    decisions = [
-        decide_correlation_candidate(candidate, min_shared_terms=2, min_lexical_overlap=0.08, min_semantic_support=0.22).to_dict()
-        for candidate in candidates
-    ]
+    decisions = []
+    for candidate in candidates:
+        decision = decide_correlation_candidate(candidate, min_shared_terms=2, min_lexical_overlap=0.08, min_semantic_support=0.22)
+        decisions.append({**decision.to_dict(), **correlation_decision_row(candidate, decision)})
     return sorted(decisions, key=lambda item: (item["status"], item["target_identifier"]))
 
 
@@ -331,6 +375,27 @@ def _notable_cases(repository: InMemoryScenarioRepository, operational_risk: Lis
             "entity_id": "CVE-2026-9001",
             "risk_score": high["analysis"]["risk_score"],
             "accepted_decisions": sum(1 for item in decisions if item["status"] == "accepted"),
+        },
+        {
+            "case": "medium_cvss_high_epss_kev",
+            "entity_id": "CVE-2026-9002",
+            "description": "Medium CVSS item that should rank above some high-CVSS controls because EPSS and KEV are strong.",
+        },
+        {
+            "case": "high_cvss_low_external_evidence",
+            "entity_id": "CVE-2026-9007",
+            "description": "High CVSS item with low EPSS and no accepted external evidence.",
+        },
+        {
+            "case": "dread_only_manual_review",
+            "entity_id": "CVE-2026-9017",
+            "manual_review_decisions": sum(1 for item in decisions if item["source_identifier"] == "CVE-2026-9017" and item["status"] == "manual_review"),
+        },
+        {
+            "case": "asset_applicability_difference",
+            "entity_id": "CVE-2026-9001",
+            "applicable_asset_score": applicable["final_operational_risk_score"],
+            "non_applicable_asset_score": non_applicable["final_operational_risk_score"],
         },
         {
             "case": "non_applicable_asset",

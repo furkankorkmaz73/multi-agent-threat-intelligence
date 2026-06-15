@@ -47,6 +47,13 @@ def kev_hit_rate_at_k(ranked: Sequence[EvaluationRecord], k: int) -> float:
     return precision_at_k(ranked, k, label_fn=lambda record: record.is_kev)
 
 
+def mean_kev_rank(ranked: Sequence[EvaluationRecord]) -> float:
+    ranks = [index for index, record in enumerate(ranked, start=1) if record.is_kev]
+    if not ranks:
+        return 0.0
+    return round(sum(ranks) / len(ranks), 6)
+
+
 def spearman_rank_correlation(
     records: Sequence[EvaluationRecord],
     score_a: Callable[[EvaluationRecord], float],
@@ -85,7 +92,7 @@ def evaluate_ranking(
     } | {
         f"kev_hit_rate_at_{k}": kev_hit_rate_at_k(ranked, k)
         for k in k_values
-    } | {"mrr": mean_reciprocal_rank(ranked)}
+    } | {"mrr": mean_reciprocal_rank(ranked), "mean_kev_rank": mean_kev_rank(ranked)}
 
 
 def _top_k(ranked: Sequence[EvaluationRecord], k: int) -> List[EvaluationRecord]:

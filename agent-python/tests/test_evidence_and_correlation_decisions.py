@@ -1,5 +1,5 @@
 from analysis.correlation_decisions import CorrelationDecisionStatus
-from analysis.correlator import build_correlation_decisions, score_urlhaus_matches
+from analysis.correlator import build_correlation_decision_rows, build_correlation_decisions, score_urlhaus_matches
 from analysis.evidence_models import Evidence, EvidenceSource, EvidenceType, Provenance
 
 
@@ -69,6 +69,24 @@ def test_generic_keyword_only_urlhaus_candidate_is_rejected():
 
     assert decisions[0].status is CorrelationDecisionStatus.REJECTED
     assert decisions[0].primary_reason == "weak_support"
+
+
+def test_generic_keyword_only_dread_candidate_is_not_accepted():
+    decisions = build_correlation_decisions(
+        [
+            {
+                "title": "Windows server thread",
+                "content": "Discussion mentions windows server administration and access but no CVE or exploit details.",
+                "category": "forum",
+                "created_at": "2026-05-02T00:00:00+00:00",
+            }
+        ],
+        base_keywords=["cve-2026-4242", "microsoft windows server", "remote code execution"],
+        entity_time="2026-05-01T00:00:00+00:00",
+        source="dread",
+    )
+
+    assert decisions[0].status in {CorrelationDecisionStatus.REJECTED, CorrelationDecisionStatus.MANUAL_REVIEW}
 
 
 def test_weak_entity_alignment_routes_to_manual_review_without_accepted_counts():
@@ -163,3 +181,25 @@ def test_decision_order_is_deterministic():
         "https://b.example/CVE-2026-2222/payload.exe",
         "https://a.example/CVE-2026-1111/payload.exe",
     ]
+
+
+def test_correlation_decision_rows_include_component_scores():
+    rows = build_correlation_decision_rows(
+        [
+            {
+                "url": "https://malware.example/CVE-2026-4242/payload.exe",
+                "threat": "malware_download",
+                "tags": ["ransomware"],
+                "url_status": "online",
+                "date_added": "2026-05-02T00:00:00+00:00",
+            }
+        ],
+        base_keywords=["cve-2026-4242", "remote code execution"],
+        entity_time="2026-05-01T00:00:00+00:00",
+        source="urlhaus",
+    )
+
+    row = rows[0]
+    assert row["decision"] == "accepted"
+    assert row["primary_reason"] == "exact_cve"
+    assert {"source_identifier", "target_identifier", "lexical_score", "semantic_score", "final_confidence"} <= set(row)

@@ -9,6 +9,7 @@ from analysis.correlation_decisions import (
     CorrelationDecision,
     CorrelationDecisionStatus,
     build_correlation_candidate,
+    correlation_decision_row,
     decide_correlation_candidate,
 )
 from analysis.nlp_features import (
@@ -110,6 +111,30 @@ def build_correlation_decisions(
         )
         decisions.append(evaluated["decision"])
     return decisions
+
+
+def build_correlation_decision_rows(
+    matches: List[Dict[str, Any]],
+    base_keywords: Optional[List[str]] = None,
+    entity_time: Optional[str] = None,
+    *,
+    source: str,
+) -> List[Dict[str, Any]]:
+    base_terms = _normalize_terms(base_keywords or [])
+    base_text = " ".join(base_terms)
+    base_features = extract_nlp_features(base_text)
+    rows: List[Dict[str, Any]] = []
+    for match in matches[:8]:
+        evaluated = _evaluate_match(
+            match=match,
+            source=source,
+            base_terms=base_terms,
+            base_text=base_text,
+            base_features=base_features,
+            entity_time=entity_time,
+        )
+        rows.append(correlation_decision_row(evaluated["candidate"], evaluated["decision"]))
+    return rows
 
 
 def _score_matches(
@@ -339,6 +364,7 @@ def _evaluate_match(
         "meaningful_shared_terms": meaningful_shared_terms,
         "exact_cve": exact_cve,
         "high_signal_term_hits": high_signal_term_hits,
+        "candidate": candidate,
         "decision": decision,
     }
 

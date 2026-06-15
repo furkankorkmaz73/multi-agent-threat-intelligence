@@ -137,8 +137,10 @@ def test_default_baselines_are_deterministic_and_include_expected_strategies():
         "cvss_only",
         "epss_only",
         "cvss_epss",
+        "kev_first",
         "model_risk",
         "model_confidence_weighted",
+        "signal_based_model",
         "model_confidence_filtered",
     ]
     assert [record.cve_id for record in strategies[0].rank(rows)] == [

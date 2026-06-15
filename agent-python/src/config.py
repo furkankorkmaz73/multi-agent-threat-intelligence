@@ -164,6 +164,13 @@ class SecurityConfig:
 
 
 @dataclass(frozen=True)
+class DreadConfig:
+    enabled: bool = field(default_factory=lambda: _bool_env("DREAD_ENABLED", False))
+    onion_url: str | None = field(default_factory=lambda: _optional_env("DREAD_ONION_URL"))
+    request_timeout_seconds: int = field(default_factory=lambda: _int_env("DREAD_REQUEST_TIMEOUT_SECONDS", 90))
+
+
+@dataclass(frozen=True)
 class AppSettings:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     api: APIConfig = field(default_factory=APIConfig)
@@ -173,6 +180,7 @@ class AppSettings:
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
     semantic: SemanticConfig = field(default_factory=SemanticConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
+    dread: DreadConfig = field(default_factory=DreadConfig)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -206,6 +214,9 @@ DEFAULT_IDLE_SLEEP = SETTINGS.runtime.default_idle_sleep
 DEFAULT_ACTIVE_SLEEP = SETTINGS.runtime.default_active_sleep
 DEFAULT_REPORT_LIMIT = SETTINGS.runtime.default_report_limit
 APP_VERSION = os.getenv("APP_VERSION", "0.4.0")
+DREAD_ENABLED = SETTINGS.dread.enabled
+DREAD_ONION_URL = SETTINGS.dread.onion_url
+DREAD_REQUEST_TIMEOUT_SECONDS = SETTINGS.dread.request_timeout_seconds
 
 
 def get_settings() -> AppSettings:

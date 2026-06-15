@@ -202,16 +202,34 @@ def ablation_variants() -> dict[str, dict[str, Any]]:
             "required": ("raw_score_before_clamp", "recentness_bonus", "age_penalty"),
             "score_fn": lambda record: _without_temporal(record),
         },
+        "without_recency": {
+            "status": "exact",
+            "reason": "Removes the exported normalized recency signal contribution from the signal-based score.",
+            "required": ("risk_raw", "recency_signal", "risk_signal_weights"),
+            "score_fn": lambda record: _without_signal(record, "recency_signal"),
+        },
+        "without_epss": {
+            "status": "exact",
+            "reason": "Removes the exported normalized EPSS signal contribution from the signal-based score.",
+            "required": ("risk_raw", "epss_signal", "risk_signal_weights"),
+            "score_fn": lambda record: _without_signal(record, "epss_signal"),
+        },
+        "without_kev": {
+            "status": "exact",
+            "reason": "Removes the exported normalized KEV signal contribution from the signal-based score.",
+            "required": ("risk_raw", "kev_signal", "risk_signal_weights"),
+            "score_fn": lambda record: _without_signal(record, "kev_signal"),
+        },
         "without_correlation": {
             "status": "exact",
-            "reason": "Removes exported URLhaus and Dread correlation bonus components.",
-            "required": ("raw_score_before_clamp", "urlhaus_correlation_bonus", "dread_correlation_bonus"),
+            "reason": "Removes exported normalized correlation signal contribution from the signal-based score.",
+            "required": ("risk_raw", "correlation_signal", "risk_signal_weights"),
             "score_fn": lambda record: _without_correlation(record),
         },
         "without_graph": {
             "status": "exact",
-            "reason": "Removes exported graph_bonus from raw_score_before_clamp.",
-            "required": ("raw_score_before_clamp", "graph_bonus"),
+            "reason": "Removes exported normalized graph signal contribution from the signal-based score.",
+            "required": ("risk_raw", "graph_signal", "risk_signal_weights"),
             "score_fn": lambda record: _without_graph(record),
         },
         "confidence_weighted_full_model": {
@@ -220,9 +238,15 @@ def ablation_variants() -> dict[str, dict[str, Any]]:
             "required": (),
             "score_fn": lambda record: round(record.model_risk_score * record.model_confidence, 6),
         },
+        "without_confidence_weighting": {
+            "status": "exact",
+            "reason": "Ranks by exported model risk without confidence multiplication.",
+            "required": (),
+            "score_fn": lambda record: record.model_risk_score,
+        },
         "without_external_evidence": {
             "status": "unsupported",
-            "reason": "External evidence changes accepted matches, temporal penalty caps, graph context, and confidence; exact removal requires recomputation.",
+            "reason": "Removing external evidence from retrieval changes accepted matches, temporal penalty caps, graph context, and confidence; exact removal requires recomputation.",
         },
     }
 
@@ -460,17 +484,19 @@ def _without_temporal(record: EvaluationRecord) -> float:
 
 
 def _without_correlation(record: EvaluationRecord) -> float:
-    breakdown = record.feature_breakdown
-    return _bound_score(
-        safe_float(breakdown.get("raw_score_before_clamp"), record.model_risk_score)
-        - safe_float(breakdown.get("urlhaus_correlation_bonus"))
-        - safe_float(breakdown.get("dread_correlation_bonus"))
-    )
+    return _without_signal(record, "correlation_signal")
 
 
 def _without_graph(record: EvaluationRecord) -> float:
+    return _without_signal(record, "graph_signal")
+
+
+def _without_signal(record: EvaluationRecord, signal_name: str) -> float:
     breakdown = record.feature_breakdown
-    return _bound_score(safe_float(breakdown.get("raw_score_before_clamp"), record.model_risk_score) - safe_float(breakdown.get("graph_bonus")))
+    weights = dict(breakdown.get("risk_signal_weights") or {})
+    raw = safe_float(breakdown.get("risk_raw"), record.model_risk_score)
+    contribution = safe_float(breakdown.get(signal_name)) * safe_float(weights.get(signal_name)) * 10.0
+    return _bound_score(raw - contribution)
 
 
 def _extract_cvss(record: Mapping[str, Any]) -> float:

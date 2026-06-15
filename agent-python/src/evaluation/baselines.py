@@ -37,12 +37,20 @@ def cvss_epss_score(record: EvaluationRecord) -> float:
     return round((record.cvss_score * 0.6) + (epss_score(record) * 0.4), 6)
 
 
+def kev_first_score(record: EvaluationRecord) -> float:
+    return round((10.0 if record.is_kev else 0.0) + (epss_score(record) * 0.1) + (record.cvss_score * 0.01), 6)
+
+
 def model_risk_score(record: EvaluationRecord) -> float:
     return record.model_risk_score
 
 
 def model_confidence_weighted_score(record: EvaluationRecord) -> float:
     return round(record.model_risk_score * record.model_confidence, 6)
+
+
+def signal_based_model_score(record: EvaluationRecord) -> float:
+    return float(record.feature_breakdown.get("risk_score_from_signals", record.model_risk_score) or 0.0)
 
 
 def model_confidence_filtered_score(record: EvaluationRecord, *, threshold: float = 0.6) -> float:
@@ -54,8 +62,10 @@ def default_ranking_strategies(*, confidence_threshold: float = 0.6) -> List[Ran
         RankingStrategy("cvss_only", cvss_score),
         RankingStrategy("epss_only", epss_score),
         RankingStrategy("cvss_epss", cvss_epss_score),
+        RankingStrategy("kev_first", kev_first_score),
         RankingStrategy("model_risk", model_risk_score),
         RankingStrategy("model_confidence_weighted", model_confidence_weighted_score),
+        RankingStrategy("signal_based_model", signal_based_model_score),
         RankingStrategy(
             "model_confidence_filtered",
             lambda record: model_confidence_filtered_score(record, threshold=confidence_threshold),

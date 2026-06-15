@@ -114,3 +114,26 @@ def test_generic_urlhaus_entity_alignment_does_not_raise_confidence():
     assert result["confidence_breakdown"]["external_evidence_confidence"] == 0
     assert result["confidence_breakdown"]["signals"]["accepted_external_evidence"] == 0
     assert result["confidence"] < 0.7
+
+
+class WeakDreadOnlyDB(EmptyDB):
+    def find_related_dread(self, keywords, limit=25):
+        return [
+            {
+                "title": "VPN admin chatter",
+                "content": "Generic VPN admin portal discussion without exact CVE or exploit proof.",
+                "category": "forum",
+                "created_at": "2026-01-02T00:00:00+00:00",
+            }
+        ]
+
+
+def test_dread_only_weak_evidence_does_not_produce_high_confidence():
+    result = RiskEngine().evaluate_cve(
+        _cve(7.5, "Authentication bypass in Example VPN Gateway may allow initial access."),
+        db=WeakDreadOnlyDB(),
+    )
+
+    assert result["evidence"]["related_urlhaus_count"] == 0
+    assert result["confidence"] < 0.7
+    assert result["confidence_breakdown"]["signals"]["dread_only"] in {False, True}

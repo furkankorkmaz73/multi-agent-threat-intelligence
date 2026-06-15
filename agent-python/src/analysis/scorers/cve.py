@@ -9,6 +9,11 @@ from analysis.features.cve_temporal import evaluate_cve_temporal_features
 from analysis.graph_builder import GraphBuilder
 from analysis.nlp_features import extract_nlp_features
 from analysis.scoring import calculate_age_days, extract_cvss_score, level_from_score
+from analysis.scoring_signals import (
+    RiskSignalInputs,
+    calculate_risk_signal_breakdown,
+    extract_external_risk_signals,
+)
 from analysis.scorers.common import (
     build_counterfactual_explanations,
     build_counterfactuals,
@@ -45,6 +50,7 @@ class CveRiskScorer:
         data: Dict[str, Any],
         evidence_provider: RelatedEvidenceProvider,
         llm_info: Optional[Dict[str, Any]] = None,
+        external_signals: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         cve_id = data.get("_id", "unknown-cve")
         description = get_primary_description(data)
@@ -54,6 +60,7 @@ class CveRiskScorer:
             return build_invalid_cve_analysis(cve_id, description)
 
         cvss_score, cvss_version = extract_cvss_score(data.get("metrics", {}))
+        cisa_signals = extract_external_risk_signals(data, external_signals)
         nlp_features = extract_nlp_features(description, cve_id)
         keywords = nlp_features.all_terms[:18]
 
@@ -118,7 +125,19 @@ class CveRiskScorer:
         )
 
         raw_score = pre_graph_score + graph_bonus
-        final_score = max(0.0, min(round(raw_score, 2), 10.0))
+        signal_breakdown = calculate_risk_signal_breakdown(
+            RiskSignalInputs(
+                cvss_score=cvss_score,
+                epss_probability=cisa_signals.epss_probability,
+                kev_listed=cisa_signals.kev_listed,
+                age_days=age_days,
+                urlhaus_score=urlhaus_score,
+                dread_score=dread_score,
+                graph_centrality=graph_bonus / self.weights.graph_bonus_cap if self.weights.graph_bonus_cap > 0 else 0.0,
+                nlp_context_score=nlp_bonus,
+            )
+        )
+        final_score = max(signal_breakdown["risk_score_from_signals"], round(base_score, 2) if cvss_score <= 0 else 0.0)
         risk_level = level_from_score(final_score)
 
         counterfactuals = build_counterfactuals(final_score, graph_bonus, urlhaus_score, dread_score, llm_bonus + nlp_bonus)
@@ -146,6 +165,9 @@ class CveRiskScorer:
             nlp_entities=nlp_features.to_dict(),
             urlhaus_stats=urlhaus_stats,
             dread_stats=dread_stats,
+            epss_available=cisa_signals.epss_available,
+            kev_status_known=cisa_signals.kev_status_known,
+            kev_listed=cisa_signals.kev_listed is True,
         )
         confidence = confidence_details["confidence"]
 
@@ -241,6 +263,10 @@ class CveRiskScorer:
                 "nlp_entities": nlp_features.to_dict(),
                 "cvss_score": cvss_score,
                 "cvss_version": cvss_version,
+                "epss_probability": cisa_signals.epss_probability,
+                "epss_available": cisa_signals.epss_available,
+                "kev_listed": cisa_signals.kev_listed,
+                "kev_status_known": cisa_signals.kev_status_known,
                 "age_days": age_days,
                 "related_urlhaus_count": len(accepted_urlhaus_matches),
                 "related_dread_count": len(accepted_dread_matches),
@@ -280,6 +306,7 @@ class CveRiskScorer:
                 "raw_score_before_clamp": round(raw_score, 2),
                 "ml_refinement_delta": 0.0,
                 "final_score": final_score,
+                **signal_breakdown,
             },
             "graph_summary": graph_summary,
             "graph_edges": graph_edges,
@@ -332,6 +359,15 @@ def build_invalid_cve_analysis(cve_id: str, description: str) -> Dict[str, Any]:
             "raw_score_before_clamp": 0.0,
             "ml_refinement_delta": 0.0,
             "final_score": 0.0,
+            "severity_signal": 0.0,
+            "epss_signal": 0.0,
+            "kev_signal": 0.0,
+            "recency_signal": 0.0,
+            "correlation_signal": 0.0,
+            "graph_signal": 0.0,
+            "nlp_context_signal": 0.0,
+            "risk_raw": 0.0,
+            "risk_score_from_signals": 0.0,
             "urlhaus_avg_overlap_ratio": 0.0,
             "dread_avg_overlap_ratio": 0.0,
             "urlhaus_avg_semantic_score": 0.0,
@@ -459,6 +495,9 @@ def calculate_cve_confidence_details(
     nlp_entities: Optional[Dict[str, Any]] = None,
     urlhaus_stats: Optional[Dict[str, Any]] = None,
     dread_stats: Optional[Dict[str, Any]] = None,
+    epss_available: bool = False,
+    kev_status_known: bool = False,
+    kev_listed: bool = False,
 ) -> Dict[str, Any]:
     return calculate_cve_confidence(
         has_cvss=has_cvss,
@@ -474,4 +513,7 @@ def calculate_cve_confidence_details(
         nlp_entities=nlp_entities,
         urlhaus_stats=urlhaus_stats,
         dread_stats=dread_stats,
+        epss_available=epss_available,
+        kev_status_known=kev_status_known,
+        kev_listed=kev_listed,
     ).to_dict()

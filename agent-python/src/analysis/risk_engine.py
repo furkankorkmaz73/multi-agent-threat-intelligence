@@ -59,17 +59,21 @@ class RiskEngine:
         data: Dict[str, Any],
         db: Optional[Any] = None,
         llm_info: Optional[Dict[str, Any]] = None,
+        external_signals: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         scorer = CveRiskScorer(
             graph_builder=self.graph_builder,
             explanation_generator=generate_explanation,
             age_calculator=calculate_age_days,
         )
-        return scorer.evaluate(
-            data=data,
-            evidence_provider=coerce_related_evidence_provider(db),
-            llm_info=llm_info,
-        )
+        kwargs = {
+            "data": data,
+            "evidence_provider": coerce_related_evidence_provider(db),
+            "llm_info": llm_info,
+        }
+        if external_signals is not None:
+            kwargs["external_signals"] = external_signals
+        return scorer.evaluate(**kwargs)
 
     def evaluate_urlhaus(self, data: Dict[str, Any], db: Optional[Any] = None) -> Dict[str, Any]:
         scorer = UrlhausRiskScorer(graph_builder=self.graph_builder, age_calculator=calculate_age_days)
@@ -219,6 +223,9 @@ class RiskEngine:
         nlp_entities: Optional[Dict[str, Any]] = None,
         urlhaus_stats: Optional[Dict[str, Any]] = None,
         dread_stats: Optional[Dict[str, Any]] = None,
+        epss_available: bool = False,
+        kev_status_known: bool = False,
+        kev_listed: bool = False,
     ) -> Dict[str, Any]:
         return calculate_cve_confidence_details(
             has_cvss=has_cvss,
@@ -234,6 +241,9 @@ class RiskEngine:
             nlp_entities=nlp_entities,
             urlhaus_stats=urlhaus_stats,
             dread_stats=dread_stats,
+            epss_available=epss_available,
+            kev_status_known=kev_status_known,
+            kev_listed=kev_listed,
         )
 
     def _calculate_confidence(

@@ -15,8 +15,9 @@ def test_full_fixture_pipeline_execution_generates_report(tmp_path):
         "asset_count": 2,
         "cve_count": 3,
         "dread_count": 2,
-        "epss_count": 3,
-        "kev_count": 1,
+        "epss_count": 24,
+        "evaluation_record_count": 24,
+        "kev_count": 7,
         "urlhaus_count": 3,
     }
     assert len(report["source_results"]) == 8
@@ -76,12 +77,12 @@ def test_evaluation_report_contains_model_and_baseline_metrics():
     report = run_thesis_scenario()
     evaluation = report["evaluation"]
 
-    assert evaluation["dataset"]["record_count"] == 3
-    assert evaluation["dataset"]["kev_count"] == 1
-    assert evaluation["dataset"]["epss_available_count"] == 3
-    assert {"model_risk", "cvss_only", "epss_only", "cvss_epss", "model_confidence_weighted"} <= set(evaluation["baselines"])
+    assert evaluation["dataset"]["record_count"] == 24
+    assert evaluation["dataset"]["kev_count"] == 7
+    assert evaluation["dataset"]["epss_available_count"] == 24
+    assert {"model_risk", "cvss_only", "epss_only", "cvss_epss", "kev_first", "model_confidence_weighted", "signal_based_model"} <= set(evaluation["baselines"])
     assert "precision_at_1" in evaluation["baselines"]["model_risk"]["metrics"]
-    assert evaluation["metric_config"]["k_values"] == [1, 3]
+    assert evaluation["metric_config"]["k_values"] == [1, 3, 5, 10]
 
 
 def test_report_output_is_deterministic_for_fixed_fixtures(tmp_path):

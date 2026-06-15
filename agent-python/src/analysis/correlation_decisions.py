@@ -101,6 +101,26 @@ def decide_correlation_candidate(candidate: CorrelationCandidate, *, min_shared_
     return _decision(candidate, CorrelationDecisionStatus.REJECTED, "weak_support")
 
 
+def correlation_decision_row(candidate: CorrelationCandidate, decision: CorrelationDecision) -> Dict[str, Any]:
+    return {
+        "source_identifier": candidate.source_identifier,
+        "target_identifier": candidate.target_identifier,
+        "source": candidate.source,
+        "lexical_score": round(float(candidate.lexical_score), 4),
+        "semantic_score": round(float(candidate.semantic_score), 4),
+        "temporal_score": round(float(candidate.temporal_score), 4),
+        "entity_score": round(float(candidate.entity_score), 4),
+        "shared_term_count": int(candidate.shared_term_count),
+        "exact_cve": bool(candidate.exact_cve),
+        "high_signal_term_hits": int(candidate.high_signal_term_hits),
+        "decision": decision.status.value,
+        "primary_reason": decision.primary_reason,
+        "final_confidence": round(float(decision.final_confidence), 4),
+        "evidence_types": ",".join(decision.provenance_summary.get("evidence_types", [])),
+        "provenance_sources": ",".join(decision.provenance_summary.get("sources", [])),
+    }
+
+
 def build_correlation_candidate(
     *,
     source: str,
@@ -223,8 +243,20 @@ def _accepted_reason(
         has_meaningful_support = shared_term_count >= 1 or high_signal_term_hits >= 1 or strong_entity_group
         if entity_score >= 0.35 and has_meaningful_support and (semantic >= 0.18 or lexical >= 0.08):
             return "entity_alignment"
+    elif source == "dread":
+        if entity_score >= 0.45 and high_signal_term_hits >= 1 and shared_term_count >= 1 and (semantic >= 0.22 or lexical >= 0.12):
+            return "entity_alignment"
     elif entity_score >= 0.30 and (semantic >= 0.10 or lexical >= 0.04):
         return "entity_alignment"
+
+    if source == "dread":
+        if high_signal_term_hits >= 2 and (shared_term_count >= 1 or temporal >= 0.2) and (lexical >= 0.06 or semantic >= 0.18):
+            return "high_signal_terms"
+        if shared_term_count >= max(min_shared_terms + 1, 3) and high_signal_term_hits >= 1 and lexical >= max(min_lexical_overlap * 1.5, 0.14):
+            return "lexical_overlap"
+        if semantic >= max(min_semantic_support, 0.34) and temporal >= 0.3 and shared_term_count >= 1 and high_signal_term_hits >= 1:
+            return "semantic_temporal_support"
+        return ""
 
     if high_signal_term_hits >= 2 and (lexical >= 0.06 or semantic >= 0.18):
         return "high_signal_terms"
@@ -239,6 +271,10 @@ def _requires_manual_review(candidate: CorrelationCandidate) -> bool:
     if candidate.exact_cve:
         return False
     if candidate.source == "urlhaus" and candidate.entity_score >= 0.30 and candidate.semantic_score >= 0.12:
+        return True
+    if candidate.source == "dread" and candidate.high_signal_term_hits >= 1 and max(candidate.lexical_score, candidate.semantic_score) >= 0.12:
+        return True
+    if candidate.source == "dread" and candidate.entity_score >= 0.35 and candidate.shared_term_count >= 1:
         return True
     if candidate.high_signal_term_hits == 1 and max(candidate.lexical_score, candidate.semantic_score) >= 0.12:
         return True

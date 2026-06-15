@@ -41,6 +41,9 @@ def test_high_cvss_without_external_evidence_is_not_low():
     assert result["risk_score"] >= 6.5
     assert result["confidence"] < 0.75
     assert result["feature_breakdown"]["active_threat_score"] == 0
+    assert result["feature_breakdown"]["severity_signal"] > 0.9
+    assert result["feature_breakdown"]["epss_available"] is False
+    assert result["feature_breakdown"]["kev_status_known"] is False
 
 
 def test_old_high_cvss_without_external_evidence_is_still_prioritized():
@@ -107,3 +110,32 @@ def test_zero_cvss_without_external_evidence_has_low_confidence():
     assert result["evidence"]["cvss_score"] == 0.0
     assert result["evidence"]["related_urlhaus_count"] == 0
     assert result["confidence"] <= 0.42
+
+
+def test_medium_cvss_with_kev_and_high_epss_can_rank_above_high_cvss_without_external_signals():
+    high_no_external = RiskEngine().evaluate_cve(
+        _cve(9.8, "Unspecified vulnerability in Example Product."),
+        db=EmptyDB(),
+    )
+    medium_with_external = RiskEngine().evaluate_cve(
+        _cve(6.5, "Authentication bypass in Example VPN Gateway allows initial access."),
+        db=EmptyDB(),
+        external_signals={"epss_probability": 0.94, "kev_listed": True},
+    )
+
+    assert medium_with_external["risk_score"] > high_no_external["risk_score"]
+    assert medium_with_external["feature_breakdown"]["epss_signal"] == 0.94
+    assert medium_with_external["feature_breakdown"]["kev_signal"] == 1.0
+
+
+def test_missing_epss_and_kev_do_not_crash_or_zero_risk():
+    result = RiskEngine().evaluate_cve(
+        _cve(9.0, "Remote code execution vulnerability in Example Product."),
+        db=EmptyDB(),
+        external_signals={},
+    )
+
+    assert result["risk_score"] > 0
+    assert result["feature_breakdown"]["epss_signal"] == 0.0
+    assert result["feature_breakdown"]["kev_signal"] == 0.0
+    assert 0.0 <= result["risk_score"] <= 10.0

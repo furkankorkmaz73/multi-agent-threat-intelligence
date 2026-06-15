@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from analysis.features.cve_temporal import calculate_age_days
+from analysis.scoring_signals import calculate_confidence_signal_components, normalize_recency
 from config import get_settings
 
 
@@ -35,6 +36,9 @@ def calculate_cve_confidence(
     nlp_entities: Optional[Dict[str, Any]] = None,
     urlhaus_stats: Optional[Dict[str, Any]] = None,
     dread_stats: Optional[Dict[str, Any]] = None,
+    epss_available: bool = False,
+    kev_status_known: bool = False,
+    kev_listed: bool = False,
 ) -> ConfidenceResult:
     """Return component-based confidence for CVE risk assessment."""
     urlhaus_stats = urlhaus_stats or {}
@@ -42,6 +46,7 @@ def calculate_cve_confidence(
     nlp_entities = nlp_entities or {}
 
     accepted_external = urlhaus_match_count + dread_match_count
+    rejected_correlations = int(urlhaus_stats.get("rejected_match_count", 0) or 0) + int(dread_stats.get("rejected_match_count", 0) or 0)
     exact_hits = int(urlhaus_stats.get("exact_cve_hits", 0) or 0) + int(dread_stats.get("exact_cve_hits", 0) or 0)
     high_signal_hits = int(urlhaus_stats.get("high_signal_hits", 0) or 0) + int(dread_stats.get("high_signal_hits", 0) or 0)
     entity_hits = int(urlhaus_stats.get("entity_overlap_hits", 0) or 0) + int(dread_stats.get("entity_overlap_hits", 0) or 0)
@@ -133,6 +138,18 @@ def calculate_cve_confidence(
         elif age_days <= 365:
             freshness_confidence += 0.02
 
+    external_signal_components = calculate_confidence_signal_components(
+        epss_available=epss_available,
+        kev_status_known=kev_status_known,
+        kev_listed=kev_listed,
+        accepted_external_evidence_count=accepted_external,
+        evidence_freshness_signal=normalize_recency(age_days),
+        rejected_correlation_count=rejected_correlations,
+        dread_only=dread_match_count > 0 and urlhaus_match_count == 0 and not exact_hits,
+    )
+    source_reliability_confidence = external_signal_components["source_reliability_confidence"]
+    external_signal_penalties = external_signal_components["external_signal_penalties"]
+
     penalties = 0.0
     if accepted_external == 0:
         penalties -= 0.08
@@ -148,6 +165,7 @@ def calculate_cve_confidence(
         penalties -= 0.03
     if age_days is not None and age_days > 3650 and accepted_external == 0:
         penalties -= 0.04
+    penalties += external_signal_penalties
 
     raw_confidence = (
         base_confidence
@@ -156,6 +174,7 @@ def calculate_cve_confidence(
         + external_evidence_confidence
         + correlation_confidence
         + freshness_confidence
+        + source_reliability_confidence
         + penalties
     )
 
@@ -163,6 +182,8 @@ def calculate_cve_confidence(
         raw_confidence = min(raw_confidence, 0.35)
         if keyword_count <= 3 and llm_fields_count == 0:
             raw_confidence = min(raw_confidence, 0.28)
+    if dread_match_count > 0 and urlhaus_match_count == 0 and not exact_hits and not kev_listed:
+        raw_confidence = min(raw_confidence, 0.68 if high_signal_hits else 0.55)
 
     confidence = round(max(0.05, min(raw_confidence, 0.95)), 3)
     breakdown = {
@@ -172,6 +193,7 @@ def calculate_cve_confidence(
         "external_evidence_confidence": round(external_evidence_confidence, 3),
         "correlation_confidence": round(correlation_confidence, 3),
         "freshness_confidence": round(freshness_confidence, 3),
+        "source_reliability_confidence": round(source_reliability_confidence, 3),
         "penalties": round(penalties, 3),
         "raw_confidence": round(raw_confidence, 3),
         "final_confidence": confidence,
@@ -187,6 +209,11 @@ def calculate_cve_confidence(
             "acceptance_reasons": sorted(acceptance_reasons),
             "entity_alignment_only": entity_alignment_only,
             "semantic_signal": round(semantic_signal, 4),
+            "epss_available": bool(epss_available),
+            "kev_status_known": bool(kev_status_known),
+            "kev_listed": bool(kev_listed),
+            "rejected_correlation_count": rejected_correlations,
+            "dread_only": dread_match_count > 0 and urlhaus_match_count == 0 and not exact_hits,
         },
     }
     return ConfidenceResult(confidence=confidence, breakdown=breakdown)

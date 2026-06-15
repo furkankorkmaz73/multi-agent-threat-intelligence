@@ -3,6 +3,8 @@ package fetch
 import (
 	"fmt"
 	"math/rand"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +17,17 @@ import (
 )
 
 func FetchDread(appInstance *app.App) error {
+	if !envBool("DREAD_ENABLED", false) {
+		appInstance.LogJSON("INFO", "dread", "Dread crawling disabled; set DREAD_ENABLED=true and DREAD_ONION_URL to enable experimental collection")
+		return nil
+	}
+
+	dreadBaseURL := strings.TrimRight(os.Getenv("DREAD_ONION_URL"), "/")
+	if dreadBaseURL == "" {
+		return fmt.Errorf("DREAD_ONION_URL is required when DREAD_ENABLED=true")
+	}
+	requestTimeout := time.Duration(envInt("DREAD_REQUEST_TIMEOUT_SECONDS", 90)) * time.Second
+
 	u := launcher.New().
 		Proxy("socks5://127.0.0.1:9050").
 		Set("ignore-certificate-errors").
@@ -24,14 +37,12 @@ func FetchDread(appInstance *app.App) error {
 	browser := rod.New().ControlURL(u).MustConnect()
 	defer browser.MustClose()
 
-	dreadBaseURL := "http://dreadytofatroptsdj6io7l3xptbet6onoyno2yv7jicoxknyazubrad.onion"
-
 	for p := 1; p <= 2; p++ {
 		pageURL := fmt.Sprintf("%s/?p=%d", dreadBaseURL, p)
 		appInstance.LogJSON("INFO", "dread", fmt.Sprintf("Scanning Dread Page %d", p))
 
 		page := stealth.MustPage(browser)
-		_ = rod.Try(func() { page.Timeout(2 * time.Minute).MustNavigate(pageURL) })
+		_ = rod.Try(func() { page.Timeout(requestTimeout).MustNavigate(pageURL) })
 
 		if err := handleQueue(appInstance, page); err != nil {
 			appInstance.LogJSON("ERROR", "dread", fmt.Sprintf("Main queue failed: %v", err))
@@ -45,7 +56,7 @@ func FetchDread(appInstance *app.App) error {
 
 		for _, path := range links {
 			fullURL := dreadBaseURL + path
-			scrapeDetail(appInstance, browser, fullURL)
+			scrapeDetail(appInstance, browser, fullURL, requestTimeout)
 			time.Sleep(time.Duration(rand.Intn(4)+4) * time.Second)
 		}
 	}
@@ -89,12 +100,12 @@ func collectLinks(p *rod.Page) []string {
 	return links
 }
 
-func scrapeDetail(appInstance *app.App, b *rod.Browser, url string) {
+func scrapeDetail(appInstance *app.App, b *rod.Browser, url string, requestTimeout time.Duration) {
 	appInstance.LogJSON("INFO", "dread", fmt.Sprintf("Opening: %s", url))
 	page := stealth.MustPage(b)
 	defer page.MustClose()
 
-	_ = rod.Try(func() { page.Timeout(90 * time.Second).MustNavigate(url) })
+	_ = rod.Try(func() { page.Timeout(requestTimeout).MustNavigate(url) })
 	_ = handleQueue(appInstance, page)
 
 	var titleEl, contentEl *rod.Element
@@ -132,4 +143,24 @@ func scrapeDetail(appInstance *app.App, b *rod.Browser, url string) {
 	} else {
 		appInstance.LogJSON("INFO", "dread", fmt.Sprintf("Success Scraped: %s", post.Title))
 	}
+}
+
+func envBool(name string, defaultValue bool) bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(name)))
+	if value == "" {
+		return defaultValue
+	}
+	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+func envInt(name string, defaultValue int) int {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return defaultValue
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return defaultValue
+	}
+	return parsed
 }

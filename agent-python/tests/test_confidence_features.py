@@ -62,9 +62,11 @@ def test_cve_weak_metadata_without_external_evidence_has_low_confidence():
         nlp_entities={},
     )
 
-    assert result.confidence == 0.203
+    assert result.confidence == 0.158
     assert result.breakdown["metadata_confidence"] == 0.28
-    assert result.breakdown["penalties"] == -0.2
+    assert result.breakdown["penalties"] == -0.245
+    assert result.breakdown["signals"]["epss_available"] is False
+    assert result.breakdown["signals"]["kev_status_known"] is False
 
 
 def test_cve_missing_evidence_uses_minimum_confidence_floor():
@@ -107,7 +109,7 @@ def test_cve_conflicting_entity_alignment_evidence_is_penalized():
 
     assert result.breakdown["signals"]["entity_alignment_only"] is True
     assert result.breakdown["external_evidence_confidence"] == 0.04
-    assert result.breakdown["penalties"] == -0.03
+    assert result.breakdown["penalties"] == -0.075
 
 
 def test_rejected_cve_confidence_is_fixed_low_confidence():

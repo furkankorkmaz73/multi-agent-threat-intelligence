@@ -82,6 +82,19 @@ def _model_rows(cve_ids):
                 "evidence": {"related_urlhaus_count": 1 if index < 6 else 0, "related_dread_count": 0},
                 "feature_breakdown": {
                     "raw_score_before_clamp": 8.0,
+                    "risk_raw": 8.0,
+                    "risk_signal_weights": {
+                        "epss_signal": 0.12,
+                        "kev_signal": 0.12,
+                        "recency_signal": 0.05,
+                        "correlation_signal": 0.07,
+                        "graph_signal": 0.03,
+                    },
+                    "epss_signal": 0.9,
+                    "kev_signal": 1.0 if index < 25 else 0.0,
+                    "recency_signal": 0.8,
+                    "correlation_signal": 0.4 if index < 6 else 0.0,
+                    "graph_signal": 0.3,
                     "recentness_bonus": 1.0,
                     "age_penalty": 0.25,
                     "urlhaus_correlation_bonus": 0.8 if index < 6 else 0.0,
@@ -132,6 +145,19 @@ def test_ablation_calculation_and_unsupported_reporting():
         is_kev=True,
         feature_breakdown={
             "raw_score_before_clamp": 8.0,
+            "risk_raw": 8.0,
+            "risk_signal_weights": {
+                "epss_signal": 0.12,
+                "kev_signal": 0.12,
+                "recency_signal": 0.05,
+                "correlation_signal": 0.07,
+                "graph_signal": 0.03,
+            },
+            "epss_signal": 0.8,
+            "kev_signal": 1.0,
+            "recency_signal": 0.6,
+            "correlation_signal": 0.5,
+            "graph_signal": 0.4,
             "recentness_bonus": 1.0,
             "age_penalty": 0.25,
             "urlhaus_correlation_bonus": 0.8,
@@ -142,6 +168,9 @@ def test_ablation_calculation_and_unsupported_reporting():
     report = build_ablation_report([record], k_values=[1])
 
     assert report["supported"]["without_temporal"]["ranking"] == ["CVE-2024-10000"]
+    assert report["supported"]["without_epss"]["ranking"] == ["CVE-2024-10000"]
+    assert report["supported"]["without_kev"]["ranking"] == ["CVE-2024-10000"]
+    assert report["supported"]["without_correlation"]["ranking"] == ["CVE-2024-10000"]
     assert report["supported"]["confidence_weighted_full_model"]["metrics"]["precision_at_1"] == 1.0
     assert report["unsupported"]["without_external_evidence"]["status"] == "unsupported"
     assert "requires recomputation" in report["unsupported"]["without_external_evidence"]["reason"]
