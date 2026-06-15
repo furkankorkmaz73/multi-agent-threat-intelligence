@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import subprocess
 from math import ceil, floor, log2
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -421,6 +422,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     consistency_audit_path = output / "learned_calibration_consistency_audit.json"
     consistency_audit_summary_path = output / "learned_calibration_consistency_audit.md"
     appendix_path = output / "learned_calibration_appendix.md"
+    runtime_snapshot_path = output / "learned_calibration_runtime_snapshot.json"
+    runtime_snapshot_summary_path = output / "learned_calibration_runtime_snapshot.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
@@ -520,6 +523,9 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     coverage_strata_summary_path.write_text(render_coverage_strata_markdown(coverage_strata), encoding="utf-8")
     negative_controls_path.write_text(json.dumps(negative_controls, indent=2, sort_keys=True, default=str), encoding="utf-8")
     negative_controls_summary_path.write_text(render_negative_controls_markdown(negative_controls), encoding="utf-8")
+    runtime_snapshot = build_runtime_snapshot(output)
+    runtime_snapshot_path.write_text(json.dumps(runtime_snapshot, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    runtime_snapshot_summary_path.write_text(render_runtime_snapshot_markdown(runtime_snapshot), encoding="utf-8")
     appendix_path.write_text(
         render_learned_calibration_appendix(
             feasibility_report=report,
@@ -556,6 +562,9 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     artifact_manifest = build_learned_calibration_manifest(output)
     manifest_path.write_text(json.dumps(artifact_manifest, indent=2, sort_keys=True, default=str), encoding="utf-8")
     manifest_summary_path.write_text(render_learned_calibration_manifest_markdown(artifact_manifest), encoding="utf-8")
+    runtime_snapshot = build_runtime_snapshot(output)
+    runtime_snapshot_path.write_text(json.dumps(runtime_snapshot, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    runtime_snapshot_summary_path.write_text(render_runtime_snapshot_markdown(runtime_snapshot), encoding="utf-8")
     return {
         "dataset": str(dataset_path),
         "labels": str(labels_path),
@@ -596,6 +605,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "consistency_audit": str(consistency_audit_path),
         "consistency_audit_summary": str(consistency_audit_summary_path),
         "appendix": str(appendix_path),
+        "runtime_snapshot": str(runtime_snapshot_path),
+        "runtime_snapshot_summary": str(runtime_snapshot_summary_path),
         "manifest": str(manifest_path),
         "manifest_summary": str(manifest_summary_path),
     }
@@ -2245,6 +2256,174 @@ def render_learned_calibration_appendix(
     return "\n".join(lines)
 
 
+def build_runtime_snapshot(
+    artifact_dir: str | Path,
+    *,
+    generated_at: str | None = None,
+    git_metadata: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    root = Path(artifact_dir)
+    generated = generated_at or datetime.now(timezone.utc).isoformat()
+    git_info = dict(git_metadata or _current_git_metadata())
+    core_files = [
+        "learned_calibration_dataset.csv",
+        "learned_calibration_labels.csv",
+        "learned_calibration_report.json",
+        "learned_calibration_model_report.json",
+        "learned_calibration_manifest.json",
+        "learned_calibration_consistency_audit.json",
+        "learned_calibration_appendix.md",
+    ]
+    row_count_files = [
+        "learned_calibration_dataset.csv",
+        "learned_calibration_labels.csv",
+        "learned_calibration_predictions.csv",
+        "learned_calibration_case_studies.csv",
+        "learned_calibration_proxy_sensitivity.csv",
+        "learned_calibration_bootstrap_stability.csv",
+        "learned_calibration_coverage_strata.csv",
+    ]
+    status_files = [
+        "learned_calibration_report.json",
+        "learned_calibration_model_report.json",
+        "learned_calibration_leakage_checks.json",
+        "learned_calibration_bootstrap_stability.json",
+        "learned_calibration_coverage_strata.json",
+        "learned_calibration_negative_controls.json",
+        "learned_calibration_consistency_audit.json",
+        "learned_calibration_manifest.json",
+    ]
+    core_existence = {filename: (root / filename).exists() for filename in core_files}
+    row_counts = {filename: _csv_row_count(root / filename) for filename in row_count_files}
+    status_values = {filename: _json_status(root / filename) for filename in status_files}
+    model_report = _read_json_mapping(root / "learned_calibration_model_report.json")
+    warnings = _runtime_snapshot_warnings(root, row_counts)
+    return {
+        "status": "available" if all(core_existence.values()) else "incomplete",
+        "generated_at": generated,
+        "git": {
+            "branch": git_info.get("branch", "unknown"),
+            "head_commit": git_info.get("head_commit", "unknown"),
+        },
+        "artifact_dir": str(root),
+        "core_artifact_existence": core_existence,
+        "row_counts": row_counts,
+        "json_status_values": status_values,
+        "model_training_status": model_report.get("status", "unavailable"),
+        "model_skip_reason": model_report.get("skip_reason", ""),
+        "sklearn_available": _load_sklearn() is not None,
+        "final_test_commands": [
+            "make test-python",
+            "make thesis-artifacts",
+            "make thesis-artifact-quality",
+            "make thesis-learned-calibration",
+            "make thesis-learned-calibration-quality",
+        ],
+        "warnings": warnings,
+        "notes": [
+            "Runtime snapshot uses local files and git metadata only.",
+            "It does not run full analysis, mutate MongoDB, train a model, or push commits.",
+        ],
+    }
+
+
+def render_runtime_snapshot_markdown(snapshot: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration Runtime Snapshot",
+        "",
+        "This snapshot summarizes local learned-calibration artifact health from files and git metadata only.",
+        "It does not run full analysis, mutate MongoDB, train a model, or push commits.",
+        "",
+        f"- Status: `{snapshot.get('status', '')}`",
+        f"- Generated at: `{snapshot.get('generated_at', '')}`",
+        f"- Branch: `{(snapshot.get('git') or {}).get('branch', '')}`",
+        f"- HEAD: `{(snapshot.get('git') or {}).get('head_commit', '')}`",
+        f"- Model status: `{snapshot.get('model_training_status', '')}`",
+        f"- scikit-learn available: `{snapshot.get('sklearn_available', False)}`",
+        "",
+        "## Core Artifacts",
+        "",
+        "| Artifact | Exists |",
+        "| --- | --- |",
+    ]
+    for filename, exists in (snapshot.get("core_artifact_existence") or {}).items():
+        lines.append(f"| {filename} | {exists} |")
+    lines.extend(["", "## Row Counts", "", "| CSV | Rows |", "| --- | ---: |"])
+    for filename, count in (snapshot.get("row_counts") or {}).items():
+        lines.append(f"| {filename} | {count} |")
+    lines.extend(["", "## JSON Status Values", "", "| JSON | Status |", "| --- | --- |"])
+    for filename, status in (snapshot.get("json_status_values") or {}).items():
+        lines.append(f"| {filename} | {status} |")
+    lines.extend(["", "## Known Validation Commands", ""])
+    lines.extend(f"- `{command}`" for command in snapshot.get("final_test_commands") or [])
+    lines.extend(["", "## Warnings", ""])
+    warnings = list(snapshot.get("warnings") or [])
+    lines.extend(f"- {warning}" for warning in warnings) if warnings else lines.append("- None.")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _current_git_metadata() -> dict[str, str]:
+    return {
+        "branch": _git_command(["rev-parse", "--abbrev-ref", "HEAD"]),
+        "head_commit": _git_command(["rev-parse", "--short", "HEAD"]),
+    }
+
+
+def _git_command(args: Sequence[str]) -> str:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=Path(__file__).resolve().parents[3],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _csv_row_count(path: Path) -> int | None:
+    try:
+        with path.open(encoding="utf-8", newline="") as handle:
+            return sum(1 for _row in csv.DictReader(handle))
+    except FileNotFoundError:
+        return None
+
+
+def _json_status(path: Path) -> str:
+    payload = _read_json_mapping(path)
+    if not payload:
+        return "missing_or_malformed"
+    return str(payload.get("status") or payload.get("proxy_supervised_learning_feasibility") or "available")
+
+
+def _read_json_mapping(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _runtime_snapshot_warnings(root: Path, row_counts: Mapping[str, int | None]) -> list[str]:
+    warnings: list[str] = []
+    optional_files = [
+        "learned_calibration_predictions.csv",
+        "learned_calibration_feature_importance.csv",
+        "learned_calibration_disagreements.csv",
+    ]
+    for filename in optional_files:
+        path = root / filename
+        if not path.exists():
+            warnings.append(f"Optional artifact missing: {filename}")
+        elif row_counts.get(filename) == 0:
+            warnings.append(f"Optional artifact has no data rows: {filename}")
+    return warnings
+
+
 def _audit_check(name: str, passed: bool, details: str) -> dict[str, str]:
     return {"check": name, "status": "passed" if passed else "failed", "details": details}
 
@@ -2450,6 +2629,8 @@ def _learned_calibration_artifact_specs() -> list[dict[str, str]]:
         {"group": "consistency audit", "filename": "learned_calibration_consistency_audit.json", "description": "Cross-artifact consistency checks", "usage": "Machine-readable artifact integrity audit."},
         {"group": "consistency audit", "filename": "learned_calibration_consistency_audit.md", "description": "Readable cross-artifact consistency checks", "usage": "Appendix-quality artifact integrity summary."},
         {"group": "appendix", "filename": "learned_calibration_appendix.md", "description": "Long-form learned-calibration appendix draft", "usage": "Thesis appendix draft assembled from generated artifact values."},
+        {"group": "runtime snapshot", "filename": "learned_calibration_runtime_snapshot.json", "description": "Local learned-calibration artifact health snapshot", "usage": "Records git metadata, artifact presence, row counts, statuses, and warnings."},
+        {"group": "runtime snapshot", "filename": "learned_calibration_runtime_snapshot.md", "description": "Readable runtime artifact health snapshot", "usage": "Quick review of generated artifact health before thesis use."},
     ]
 
 

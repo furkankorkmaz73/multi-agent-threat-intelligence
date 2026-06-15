@@ -64,6 +64,8 @@ Generated files:
 - `reports/thesis/learned_calibration_consistency_audit.json`
 - `reports/thesis/learned_calibration_consistency_audit.md`
 - `reports/thesis/learned_calibration_appendix.md`
+- `reports/thesis/learned_calibration_runtime_snapshot.json`
+- `reports/thesis/learned_calibration_runtime_snapshot.md`
 - `reports/thesis/learned_calibration_quality_report.json`
 - `reports/thesis/learned_calibration_quality_report.md`
 
@@ -110,6 +112,8 @@ The negative-control artifacts compare the unchanged heuristic `risk_score` rank
 The consistency-audit artifacts check that dataset and label row counts align, CVE identifiers are unique and matched, prediction identifiers are within the dataset, JSON artifacts parse, CSV headers are not duplicated, Markdown summaries retain limitation language, model skip status is consistent with the local scikit-learn environment, and no learned-calibration artifact claims ground-truth exploitation prediction.
 
 The appendix artifact is a long-form English draft assembled from generated artifact values. It covers purpose, dataset construction, feature schema, proxy-label design, coverage limits, baseline metrics, model status, sensitivity, bootstrap stability, coverage strata, negative controls, case studies, leakage checks, heuristic-score rationale, threats to validity, and future work.
+
+The runtime-snapshot artifacts summarize local learned-calibration artifact health from files and git metadata. They record the current branch and HEAD, core artifact presence, key CSV row counts, JSON status values, model-training status, scikit-learn availability, known validation commands, and warnings for missing or empty optional artifacts.
 
 The quality report artifacts are produced by `make thesis-learned-calibration-quality`. The gate checks required learned-calibration files, JSON parseability, CSV headers, limitation language, experimental framing, unchanged production risk score wording, unchanged evidence-gate wording, and absence of real-world exploitation-proof claims.
 

@@ -25,6 +25,7 @@ from evaluation.learned_calibration import (
     build_learned_calibration_manifest,
     build_negative_control_rankings,
     build_publication_tables,
+    build_runtime_snapshot,
     build_feasibility_report,
     bootstrap_sample_indices,
     build_consistency_audit,
@@ -45,6 +46,7 @@ from evaluation.learned_calibration import (
     render_coverage_strata_markdown,
     render_consistency_audit_markdown,
     render_negative_controls_markdown,
+    render_runtime_snapshot_markdown,
     select_case_studies,
     strict_validation_errors,
     summarize_bootstrap_metrics,
@@ -272,6 +274,8 @@ def test_export_writes_three_output_files(tmp_path):
     consistency_audit = tmp_path / "learned_calibration_consistency_audit.json"
     consistency_audit_summary = tmp_path / "learned_calibration_consistency_audit.md"
     appendix = tmp_path / "learned_calibration_appendix.md"
+    runtime_snapshot = tmp_path / "learned_calibration_runtime_snapshot.json"
+    runtime_snapshot_summary = tmp_path / "learned_calibration_runtime_snapshot.md"
     manifest = tmp_path / "learned_calibration_manifest.json"
     manifest_summary = tmp_path / "learned_calibration_manifest.md"
     assert result["paths"] == {
@@ -314,6 +318,8 @@ def test_export_writes_three_output_files(tmp_path):
         "consistency_audit": str(consistency_audit),
         "consistency_audit_summary": str(consistency_audit_summary),
         "appendix": str(appendix),
+        "runtime_snapshot": str(runtime_snapshot),
+        "runtime_snapshot_summary": str(runtime_snapshot_summary),
         "manifest": str(manifest),
         "manifest_summary": str(manifest_summary),
     }
@@ -356,6 +362,8 @@ def test_export_writes_three_output_files(tmp_path):
     assert consistency_audit.exists()
     assert consistency_audit_summary.exists()
     assert appendix.exists()
+    assert runtime_snapshot.exists()
+    assert runtime_snapshot_summary.exists()
     assert manifest.exists()
     assert manifest_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
@@ -416,6 +424,9 @@ def test_export_writes_three_output_files(tmp_path):
     assert "## 1. Purpose of the Learned Calibration Experiment" in appendix_text
     assert "## 16. Recommended Future Work" in appendix_text
     assert "Proxy labels are not ground truth" in appendix_text
+    snapshot_payload = json.loads(runtime_snapshot.read_text(encoding="utf-8"))
+    assert snapshot_payload["status"] == "available"
+    assert snapshot_payload["row_counts"]["learned_calibration_dataset.csv"] == 1
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert manifest_payload["status"] == "complete"
     assert any(item["group"] == "dataset" for item in manifest_payload["artifacts"])
@@ -1020,6 +1031,8 @@ def test_learned_calibration_manifest_reports_files(tmp_path):
         "learned_calibration_consistency_audit.json",
         "learned_calibration_consistency_audit.md",
         "learned_calibration_appendix.md",
+        "learned_calibration_runtime_snapshot.json",
+        "learned_calibration_runtime_snapshot.md",
     ):
         (tmp_path / name).write_text("x", encoding="utf-8")
 
@@ -1322,3 +1335,44 @@ def test_consistency_audit_detects_missing_limitation_language(tmp_path):
 
     assert audit["status"] == "failed"
     assert check["status"] == "failed"
+
+
+def test_runtime_snapshot_generation_from_temp_artifact_dir(tmp_path):
+    export_from_documents([_synthetic_doc()], tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+
+    snapshot = build_runtime_snapshot(
+        tmp_path,
+        generated_at="2026-06-16T00:00:00+03:00",
+        git_metadata={"branch": "test-branch", "head_commit": "abc1234"},
+    )
+    markdown = render_runtime_snapshot_markdown(snapshot)
+
+    assert snapshot["status"] == "available"
+    assert snapshot["git"]["branch"] == "test-branch"
+    assert snapshot["git"]["head_commit"] == "abc1234"
+    assert snapshot["row_counts"]["learned_calibration_dataset.csv"] == 1
+    assert snapshot["json_status_values"]["learned_calibration_model_report.json"] == "skipped"
+    assert "# Learned Calibration Runtime Snapshot" in markdown
+
+
+def test_runtime_snapshot_missing_artifact_handling(tmp_path):
+    (tmp_path / "learned_calibration_dataset.csv").write_text("cve_id\nCVE-1\n", encoding="utf-8")
+
+    snapshot = build_runtime_snapshot(
+        tmp_path,
+        generated_at="2026-06-16T00:00:00+03:00",
+        git_metadata={"branch": "test", "head_commit": "abc"},
+    )
+
+    assert snapshot["status"] == "incomplete"
+    assert snapshot["core_artifact_existence"]["learned_calibration_labels.csv"] is False
+    assert snapshot["row_counts"]["learned_calibration_labels.csv"] is None
+    assert any("Optional artifact missing" in warning for warning in snapshot["warnings"])
+
+
+def test_runtime_snapshot_git_metadata_fallback(monkeypatch, tmp_path):
+    monkeypatch.setattr(learned_calibration, "_current_git_metadata", lambda: {"branch": "unknown", "head_commit": "unknown"})
+
+    snapshot = build_runtime_snapshot(tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+
+    assert snapshot["git"] == {"branch": "unknown", "head_commit": "unknown"}
