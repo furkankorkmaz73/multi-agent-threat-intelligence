@@ -87,3 +87,20 @@ agent-python/reports/thesis/
 The artifact bundle is intended for thesis tables and appendix material. It is not a claim of statistical significance, field prevalence, or production asset-inventory accuracy. Real-world operational evaluation requires high-quality asset inventory, product/version metadata, patch-state data, exposure classification, and validated compensating-control evidence.
 
 False-positive stress cases are deterministic guardrails, not a complete adversarial evaluation of all possible noisy intelligence records.
+
+## Artifact Quality Gate
+
+Run the quality gate after regenerating thesis artifacts:
+
+```bash
+make thesis-artifact-quality
+```
+
+Equivalent direct command:
+
+```bash
+cd agent-python
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.thesis_artifact_quality --artifact-dir reports/thesis
+```
+
+The gate validates artifact structure and formatting only. It checks manifest entries, listed file existence, required case studies, required explanation traces and fields, required CSV columns, known Markdown/CSV formatting regressions, and Markdown table shape. It does not recompute statistical correctness, prove real-world validity, or change model behavior.
