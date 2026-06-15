@@ -25,6 +25,7 @@ from evaluation.learned_calibration import (
     build_learned_calibration_manifest,
     build_negative_control_rankings,
     build_publication_tables,
+    build_reviewer_checklist,
     build_runtime_snapshot,
     build_feasibility_report,
     bootstrap_sample_indices,
@@ -46,6 +47,7 @@ from evaluation.learned_calibration import (
     render_coverage_strata_markdown,
     render_consistency_audit_markdown,
     render_negative_controls_markdown,
+    render_reviewer_checklist_markdown,
     render_runtime_snapshot_markdown,
     select_case_studies,
     strict_validation_errors,
@@ -276,6 +278,8 @@ def test_export_writes_three_output_files(tmp_path):
     appendix = tmp_path / "learned_calibration_appendix.md"
     runtime_snapshot = tmp_path / "learned_calibration_runtime_snapshot.json"
     runtime_snapshot_summary = tmp_path / "learned_calibration_runtime_snapshot.md"
+    reviewer_checklist = tmp_path / "learned_calibration_reviewer_checklist.json"
+    reviewer_checklist_summary = tmp_path / "learned_calibration_reviewer_checklist.md"
     manifest = tmp_path / "learned_calibration_manifest.json"
     manifest_summary = tmp_path / "learned_calibration_manifest.md"
     assert result["paths"] == {
@@ -320,6 +324,8 @@ def test_export_writes_three_output_files(tmp_path):
         "appendix": str(appendix),
         "runtime_snapshot": str(runtime_snapshot),
         "runtime_snapshot_summary": str(runtime_snapshot_summary),
+        "reviewer_checklist": str(reviewer_checklist),
+        "reviewer_checklist_summary": str(reviewer_checklist_summary),
         "manifest": str(manifest),
         "manifest_summary": str(manifest_summary),
     }
@@ -364,6 +370,8 @@ def test_export_writes_three_output_files(tmp_path):
     assert appendix.exists()
     assert runtime_snapshot.exists()
     assert runtime_snapshot_summary.exists()
+    assert reviewer_checklist.exists()
+    assert reviewer_checklist_summary.exists()
     assert manifest.exists()
     assert manifest_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
@@ -427,6 +435,9 @@ def test_export_writes_three_output_files(tmp_path):
     snapshot_payload = json.loads(runtime_snapshot.read_text(encoding="utf-8"))
     assert snapshot_payload["status"] == "available"
     assert snapshot_payload["row_counts"]["learned_calibration_dataset.csv"] == 1
+    checklist_payload = json.loads(reviewer_checklist.read_text(encoding="utf-8"))
+    assert checklist_payload["item_count"] >= 10
+    assert any(section["section"] == "manual review items for the thesis author" for section in checklist_payload["sections"])
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert manifest_payload["status"] == "complete"
     assert any(item["group"] == "dataset" for item in manifest_payload["artifacts"])
@@ -1033,6 +1044,8 @@ def test_learned_calibration_manifest_reports_files(tmp_path):
         "learned_calibration_appendix.md",
         "learned_calibration_runtime_snapshot.json",
         "learned_calibration_runtime_snapshot.md",
+        "learned_calibration_reviewer_checklist.json",
+        "learned_calibration_reviewer_checklist.md",
     ):
         (tmp_path / name).write_text("x", encoding="utf-8")
 
@@ -1376,3 +1389,37 @@ def test_runtime_snapshot_git_metadata_fallback(monkeypatch, tmp_path):
     snapshot = build_runtime_snapshot(tmp_path, generated_at="2026-06-16T00:00:00+03:00")
 
     assert snapshot["git"] == {"branch": "unknown", "head_commit": "unknown"}
+
+
+def test_reviewer_checklist_item_creation(tmp_path):
+    export_from_documents([_synthetic_doc()], tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+
+    checklist = build_reviewer_checklist(tmp_path)
+
+    assert checklist["status"] == "ready_with_manual_review"
+    assert checklist["status_counts"]["manual"] >= 1
+    sections = {section["section"] for section in checklist["sections"]}
+    assert "reproducibility checks" in sections
+    assert "proxy-label validity checks" in sections
+    assert "manual review items for the thesis author" in sections
+
+
+def test_reviewer_checklist_unavailable_artifact_handling(tmp_path):
+    checklist = build_reviewer_checklist(tmp_path)
+    flat = [item for section in checklist["sections"] for item in section["items"]]
+
+    assert checklist["status"] == "incomplete"
+    assert any(item["status"] == "unavailable" for item in flat)
+    artifact_item = next(item for item in flat if item["check_id"] == "artifact-consistency")
+    assert artifact_item["status"] == "unavailable"
+
+
+def test_reviewer_checklist_markdown_rendering(tmp_path):
+    export_from_documents([_synthetic_doc()], tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+
+    markdown = render_reviewer_checklist_markdown(build_reviewer_checklist(tmp_path))
+
+    assert "# Learned Calibration Reviewer Checklist" in markdown
+    assert "## Reproducibility Checks" in markdown
+    assert "| Check ID | Status | Evidence Artifact | Reviewer Note |" in markdown
+    assert "Proxy labels are not ground truth" in markdown

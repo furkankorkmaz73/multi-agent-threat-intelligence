@@ -424,6 +424,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     appendix_path = output / "learned_calibration_appendix.md"
     runtime_snapshot_path = output / "learned_calibration_runtime_snapshot.json"
     runtime_snapshot_summary_path = output / "learned_calibration_runtime_snapshot.md"
+    reviewer_checklist_path = output / "learned_calibration_reviewer_checklist.json"
+    reviewer_checklist_summary_path = output / "learned_calibration_reviewer_checklist.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
@@ -526,6 +528,9 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     runtime_snapshot = build_runtime_snapshot(output)
     runtime_snapshot_path.write_text(json.dumps(runtime_snapshot, indent=2, sort_keys=True, default=str), encoding="utf-8")
     runtime_snapshot_summary_path.write_text(render_runtime_snapshot_markdown(runtime_snapshot), encoding="utf-8")
+    reviewer_checklist = build_reviewer_checklist(output)
+    reviewer_checklist_path.write_text(json.dumps(reviewer_checklist, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    reviewer_checklist_summary_path.write_text(render_reviewer_checklist_markdown(reviewer_checklist), encoding="utf-8")
     appendix_path.write_text(
         render_learned_calibration_appendix(
             feasibility_report=report,
@@ -565,6 +570,9 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     runtime_snapshot = build_runtime_snapshot(output)
     runtime_snapshot_path.write_text(json.dumps(runtime_snapshot, indent=2, sort_keys=True, default=str), encoding="utf-8")
     runtime_snapshot_summary_path.write_text(render_runtime_snapshot_markdown(runtime_snapshot), encoding="utf-8")
+    reviewer_checklist = build_reviewer_checklist(output)
+    reviewer_checklist_path.write_text(json.dumps(reviewer_checklist, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    reviewer_checklist_summary_path.write_text(render_reviewer_checklist_markdown(reviewer_checklist), encoding="utf-8")
     return {
         "dataset": str(dataset_path),
         "labels": str(labels_path),
@@ -607,6 +615,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "appendix": str(appendix_path),
         "runtime_snapshot": str(runtime_snapshot_path),
         "runtime_snapshot_summary": str(runtime_snapshot_summary_path),
+        "reviewer_checklist": str(reviewer_checklist_path),
+        "reviewer_checklist_summary": str(reviewer_checklist_summary_path),
         "manifest": str(manifest_path),
         "manifest_summary": str(manifest_summary_path),
     }
@@ -2363,6 +2373,148 @@ def render_runtime_snapshot_markdown(snapshot: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def build_reviewer_checklist(artifact_dir: str | Path) -> dict[str, Any]:
+    root = Path(artifact_dir)
+    model = _read_json_mapping(root / "learned_calibration_model_report.json")
+    consistency = _read_json_mapping(root / "learned_calibration_consistency_audit.json")
+    leakage = _read_json_mapping(root / "learned_calibration_leakage_checks.json")
+    baseline = _read_json_mapping(root / "learned_calibration_baseline_metrics.json")
+    runtime = _read_json_mapping(root / "learned_calibration_runtime_snapshot.json")
+    sections = [
+        ("reproducibility checks", [
+            _checklist_item("repro-commands", _exists(root / "learned_calibration_runtime_snapshot.json"), "learned_calibration_runtime_snapshot.json", "Runtime snapshot records known validation commands and git metadata."),
+            _checklist_item("repro-manifest", _exists(root / "learned_calibration_manifest.json"), "learned_calibration_manifest.json", "Manifest should list generated learned-calibration artifacts."),
+        ]),
+        ("artifact checks", [
+            _checklist_item("artifact-consistency", consistency.get("status") == "passed", "learned_calibration_consistency_audit.json", "Consistency audit should pass before using artifacts."),
+            _checklist_item("artifact-runtime-status", runtime.get("status") == "available", "learned_calibration_runtime_snapshot.json", "Runtime snapshot should report available core artifacts."),
+        ]),
+        ("proxy-label validity checks", [
+            _manual_item("proxy-label-review", "learned_calibration_labels.csv", "Review Strategy A/B/C proxy definitions; proxy labels are not ground truth."),
+            _checklist_item("proxy-baseline-present", bool((baseline.get("strategies") or {}).get("strategy_a")), "learned_calibration_baseline_metrics.json", "Strategy A baseline metrics should be present."),
+        ]),
+        ("leakage checks", [
+            _checklist_item("leakage-status", leakage.get("status") == "passed", "learned_calibration_leakage_checks.json", "Leakage checks should pass."),
+            _checklist_item("risk-score-excluded", "final_risk_score_not_model_input" in json.dumps(leakage), "learned_calibration_leakage_checks.json", "Leakage artifact should document production risk_score exclusion."),
+        ]),
+        ("model-training checks", [
+            _status_item("model-status", _model_training_check_status(model), "learned_calibration_model_report.json", _model_training_note(model)),
+            _manual_item("model-dependency-review", "learned_calibration_model_report.json", "If model training is skipped, decide whether an approved scikit-learn environment is allowed."),
+        ]),
+        ("ranking metric checks", [
+            _checklist_item("baseline-metrics-present", bool((baseline.get("strategies") or {}).get("strategy_a")), "learned_calibration_baseline_metrics.json", "Heuristic baseline metrics should be available."),
+            _checklist_item("negative-controls-present", _exists(root / "learned_calibration_negative_controls.json"), "learned_calibration_negative_controls.json", "Negative controls should be generated for sanity checking."),
+        ]),
+        ("limitations checks", [
+            _checklist_item("limitations-present", _exists(root / "learned_calibration_limitations.md"), "learned_calibration_limitations.md", "Limitations artifact should be available."),
+            _manual_item("limitations-review", "learned_calibration_appendix.md", "Confirm thesis text states proxy labels are not ground truth and learned calibration is experimental."),
+        ]),
+        ("no-overclaim checks", [
+            _checklist_item("no-ground-truth-claim", consistency.get("status") == "passed", "learned_calibration_consistency_audit.json", "Audit should reject ground-truth exploitation prediction claims."),
+            _manual_item("claim-review", "learned_calibration_appendix.md", "Avoid claims of real-world predictive performance or production replacement."),
+        ]),
+        ("defense-readiness checks", [
+            _checklist_item("appendix-present", _exists(root / "learned_calibration_appendix.md"), "learned_calibration_appendix.md", "Appendix draft should be available for thesis review."),
+            _manual_item("defense-review", "learned_calibration_runtime_snapshot.md", "Review skipped model status, sparse evidence coverage, and manual thesis talking points."),
+        ]),
+        ("manual review items for the thesis author", [
+            _manual_item("external-label-plan", "learned_calibration_limitations.md", "Identify what external labels would be required for any future supervised claim."),
+            _manual_item("evidence-coverage-plan", "learned_calibration_coverage_strata.md", "Review EPSS/KEV and accepted-evidence gaps before thesis defense."),
+        ]),
+    ]
+    flat_items = [item for _section, items in sections for item in items]
+    return {
+        "status": "ready_with_manual_review" if all(item["status"] in {"pass", "manual", "warning"} for item in flat_items) else "incomplete",
+        "sections": [{"section": section, "items": items} for section, items in sections],
+        "item_count": len(flat_items),
+        "status_counts": _checklist_status_counts(flat_items),
+        "notes": [
+            "Checklist statuses are derived from generated artifact files where possible.",
+            "Manual items require thesis-author review and are not automatic pass/fail evidence.",
+        ],
+    }
+
+
+def render_reviewer_checklist_markdown(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration Reviewer Checklist",
+        "",
+        "This checklist supports thesis review of learned-calibration artifacts. Proxy labels are not ground truth, and manual items require thesis-author judgment.",
+        "",
+        f"- Status: `{payload.get('status', '')}`",
+        f"- Items: `{payload.get('item_count', 0)}`",
+        "",
+    ]
+    for section in payload.get("sections") or []:
+        lines.extend([f"## {section.get('section', '').title()}", "", "| Check ID | Status | Evidence Artifact | Reviewer Note |", "| --- | --- | --- | --- |"])
+        for item in section.get("items") or []:
+            lines.append(
+                "| {check_id} | {status} | {artifact} | {note} |".format(
+                    check_id=item.get("check_id", ""),
+                    status=item.get("status", ""),
+                    artifact=item.get("evidence_artifact", ""),
+                    note=item.get("reviewer_note", ""),
+                )
+            )
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _checklist_item(check_id: str, passed: bool, evidence_artifact: str, note: str) -> dict[str, str]:
+    return {
+        "check_id": check_id,
+        "status": "pass" if passed else "unavailable",
+        "evidence_artifact": evidence_artifact,
+        "reviewer_note": note,
+    }
+
+
+def _manual_item(check_id: str, evidence_artifact: str, note: str) -> dict[str, str]:
+    return {
+        "check_id": check_id,
+        "status": "manual",
+        "evidence_artifact": evidence_artifact,
+        "reviewer_note": note,
+    }
+
+
+def _status_item(check_id: str, status: str, evidence_artifact: str, note: str) -> dict[str, str]:
+    return {
+        "check_id": check_id,
+        "status": status,
+        "evidence_artifact": evidence_artifact,
+        "reviewer_note": note,
+    }
+
+
+def _model_training_check_status(model_report: Mapping[str, Any]) -> str:
+    status = str(model_report.get("status", ""))
+    if status == "completed":
+        return "pass"
+    if status == "skipped":
+        return "warning"
+    return "unavailable"
+
+
+def _model_training_note(model_report: Mapping[str, Any]) -> str:
+    status = str(model_report.get("status", "unavailable"))
+    if status == "skipped":
+        return f"Model training skipped: {model_report.get('skip_reason', 'reason unavailable')}"
+    return f"Model training status: {status}"
+
+
+def _checklist_status_counts(items: Sequence[Mapping[str, str]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        status = item.get("status", "unavailable")
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def _exists(path: Path) -> bool:
+    return path.exists()
+
+
 def _current_git_metadata() -> dict[str, str]:
     return {
         "branch": _git_command(["rev-parse", "--abbrev-ref", "HEAD"]),
@@ -2631,6 +2783,8 @@ def _learned_calibration_artifact_specs() -> list[dict[str, str]]:
         {"group": "appendix", "filename": "learned_calibration_appendix.md", "description": "Long-form learned-calibration appendix draft", "usage": "Thesis appendix draft assembled from generated artifact values."},
         {"group": "runtime snapshot", "filename": "learned_calibration_runtime_snapshot.json", "description": "Local learned-calibration artifact health snapshot", "usage": "Records git metadata, artifact presence, row counts, statuses, and warnings."},
         {"group": "runtime snapshot", "filename": "learned_calibration_runtime_snapshot.md", "description": "Readable runtime artifact health snapshot", "usage": "Quick review of generated artifact health before thesis use."},
+        {"group": "reviewer checklist", "filename": "learned_calibration_reviewer_checklist.json", "description": "Reviewer checklist payload", "usage": "Structured thesis/reviewer checklist for learned calibration."},
+        {"group": "reviewer checklist", "filename": "learned_calibration_reviewer_checklist.md", "description": "Readable reviewer checklist", "usage": "Checklist for thesis review and defense preparation."},
     ]
 
 
