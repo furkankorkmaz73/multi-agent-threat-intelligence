@@ -12,6 +12,7 @@ from evaluation.learned_calibration import (
     ABLATION_COLUMNS,
     BOOTSTRAP_STABILITY_COLUMNS,
     CASE_STUDY_COLUMNS,
+    COVERAGE_STRATA_COLUMNS,
     DATASET_COLUMNS,
     DISAGREEMENT_COLUMNS,
     FEATURE_IMPORTANCE_COLUMNS,
@@ -27,6 +28,7 @@ from evaluation.learned_calibration import (
     bootstrap_sample_indices,
     compute_baseline_metrics,
     compute_bootstrap_stability,
+    compute_coverage_strata,
     compute_disagreement_cases,
     compute_learned_vs_heuristic_comparison,
     compute_proxy_threshold_sensitivity,
@@ -37,6 +39,7 @@ from evaluation.learned_calibration import (
     extract_calibration_row,
     proxy_threshold_grid,
     read_analyzed_cves_from_mongo,
+    render_coverage_strata_markdown,
     select_case_studies,
     strict_validation_errors,
     summarize_bootstrap_metrics,
@@ -256,6 +259,9 @@ def test_export_writes_three_output_files(tmp_path):
     bootstrap = tmp_path / "learned_calibration_bootstrap_stability.csv"
     bootstrap_json = tmp_path / "learned_calibration_bootstrap_stability.json"
     bootstrap_summary = tmp_path / "learned_calibration_bootstrap_stability.md"
+    coverage_strata = tmp_path / "learned_calibration_coverage_strata.csv"
+    coverage_strata_json = tmp_path / "learned_calibration_coverage_strata.json"
+    coverage_strata_summary = tmp_path / "learned_calibration_coverage_strata.md"
     manifest = tmp_path / "learned_calibration_manifest.json"
     manifest_summary = tmp_path / "learned_calibration_manifest.md"
     assert result["paths"] == {
@@ -290,6 +296,9 @@ def test_export_writes_three_output_files(tmp_path):
         "bootstrap_stability": str(bootstrap),
         "bootstrap_stability_json": str(bootstrap_json),
         "bootstrap_stability_summary": str(bootstrap_summary),
+        "coverage_strata": str(coverage_strata),
+        "coverage_strata_json": str(coverage_strata_json),
+        "coverage_strata_summary": str(coverage_strata_summary),
         "manifest": str(manifest),
         "manifest_summary": str(manifest_summary),
     }
@@ -324,6 +333,9 @@ def test_export_writes_three_output_files(tmp_path):
     assert bootstrap.exists()
     assert bootstrap_json.exists()
     assert bootstrap_summary.exists()
+    assert coverage_strata.exists()
+    assert coverage_strata_json.exists()
+    assert coverage_strata_summary.exists()
     assert manifest.exists()
     assert manifest_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
@@ -371,6 +383,10 @@ def test_export_writes_three_output_files(tmp_path):
     bootstrap_rows = list(csv.DictReader(bootstrap.open(encoding="utf-8")))
     if bootstrap_rows:
         assert list(bootstrap_rows[0].keys()) == BOOTSTRAP_STABILITY_COLUMNS
+    coverage_rows = list(csv.DictReader(coverage_strata.open(encoding="utf-8")))
+    assert list(coverage_rows[0].keys()) == COVERAGE_STRATA_COLUMNS
+    coverage_payload = json.loads(coverage_strata_json.read_text(encoding="utf-8"))
+    assert coverage_payload["status"] == "evaluated"
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert manifest_payload["status"] == "complete"
     assert any(item["group"] == "dataset" for item in manifest_payload["artifacts"])
@@ -967,6 +983,9 @@ def test_learned_calibration_manifest_reports_files(tmp_path):
         "learned_calibration_bootstrap_stability.csv",
         "learned_calibration_bootstrap_stability.json",
         "learned_calibration_bootstrap_stability.md",
+        "learned_calibration_coverage_strata.csv",
+        "learned_calibration_coverage_strata.json",
+        "learned_calibration_coverage_strata.md",
     ):
         (tmp_path / name).write_text("x", encoding="utf-8")
 
@@ -1077,3 +1096,86 @@ def test_bootstrap_stability_skips_unusable_labels():
     assert result["status"] == "skipped"
     assert result["iterations"] == []
     assert "no positive proxy labels" in result["skip_reason"]
+
+
+def test_coverage_strata_grouping_and_aggregation_metrics():
+    rows = [
+        _row(
+            cve_id="CVE-A",
+            risk_score=8.0,
+            confidence=0.6,
+            epss_available=True,
+            kev_status_known=True,
+            kev_listed=True,
+            accepted_urlhaus_count=1,
+            intrinsic_criticality_floor_applied=True,
+            urlhaus_ignored_low_signal_count=0,
+            urlhaus_rejected_match_count=2,
+        ),
+        _row(
+            cve_id="CVE-B",
+            risk_score=4.0,
+            confidence=0.2,
+            epss_available=False,
+            kev_status_known=False,
+            kev_listed=False,
+            accepted_urlhaus_count=0,
+            intrinsic_criticality_floor_applied=False,
+            urlhaus_ignored_low_signal_count=12,
+            urlhaus_rejected_match_count=0,
+            cvss_score="",
+        ),
+    ]
+    labels = [
+        {**build_proxy_label_row(rows[0]), "proxy_binary_high_strategy_a": 1, "proxy_binary_high_strategy_b": 1, "proxy_binary_high_strategy_c": 1},
+        {**build_proxy_label_row(rows[1]), "proxy_binary_high_strategy_a": 0, "proxy_binary_high_strategy_b": 0, "proxy_binary_high_strategy_c": 0},
+    ]
+
+    result = compute_coverage_strata(rows, labels)
+
+    assert result["status"] == "evaluated"
+    epss_available = next(row for row in result["rows"] if row["stratum"] == "epss_availability" and row["group"] == "epss_available")
+    assert epss_available["count"] == 1
+    assert epss_available["average_risk_score"] == 8.0
+    assert epss_available["average_confidence"] == 0.6
+    assert epss_available["strategy_a_high_count"] == 1
+    missing = json.loads(epss_available["missing_feature_percentages"])
+    assert missing["cvss_score"] == 0.0
+    epss_unavailable = next(row for row in result["rows"] if row["stratum"] == "epss_availability" and row["group"] == "epss_unavailable")
+    assert json.loads(epss_unavailable["missing_feature_percentages"])["cvss_score"] == 1.0
+
+
+def test_coverage_strata_bucket_assignment():
+    rows = [
+        _row(cve_id="CVE-NONE", urlhaus_ignored_low_signal_count=0, urlhaus_rejected_match_count=0),
+        _row(cve_id="CVE-LOW", urlhaus_ignored_low_signal_count=4, urlhaus_rejected_match_count=3),
+        _row(cve_id="CVE-MED", urlhaus_ignored_low_signal_count=12, urlhaus_rejected_match_count=50),
+        _row(cve_id="CVE-HIGH", urlhaus_ignored_low_signal_count=150, urlhaus_rejected_match_count=120),
+    ]
+    labels = build_proxy_label_rows(rows)
+
+    result = compute_coverage_strata(rows, labels)
+    ignored_groups = {
+        row["group"]
+        for row in result["rows"]
+        if row["stratum"] == "ignored_urlhaus_candidate_bucket"
+    }
+    rejected_groups = {
+        row["group"]
+        for row in result["rows"]
+        if row["stratum"] == "rejected_urlhaus_candidate_bucket"
+    }
+
+    assert ignored_groups == {"none", "low_1_to_9", "medium_10_to_99", "high_100_plus"}
+    assert rejected_groups == {"none", "low_1_to_9", "medium_10_to_99", "high_100_plus"}
+
+
+def test_coverage_strata_markdown_summary_text():
+    rows = [_row(cve_id="CVE-A", risk_score=8.0, confidence=0.6, epss_available=False)]
+    labels = build_proxy_label_rows(rows)
+
+    markdown = render_coverage_strata_markdown(compute_coverage_strata(rows, labels))
+
+    assert "# Learned Calibration Coverage-Limitation Strata" in markdown
+    assert "| Stratum | Group | Count | Avg Risk | Avg Confidence | A High | B High | C High | Interpretation |" in markdown
+    assert "Missing-feature percentages are available" in markdown

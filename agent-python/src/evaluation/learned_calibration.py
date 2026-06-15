@@ -177,6 +177,19 @@ BOOTSTRAP_STABILITY_COLUMNS = [
     "skip_reason",
 ]
 
+COVERAGE_STRATA_COLUMNS = [
+    "stratum",
+    "group",
+    "count",
+    "average_risk_score",
+    "average_confidence",
+    "strategy_a_high_count",
+    "strategy_b_high_count",
+    "strategy_c_high_count",
+    "missing_feature_percentages",
+    "interpretation_note",
+]
+
 
 def extract_calibration_row(doc: Mapping[str, Any]) -> dict[str, Any] | None:
     source = deepcopy(dict(doc))
@@ -400,6 +413,9 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     bootstrap_path = output / "learned_calibration_bootstrap_stability.csv"
     bootstrap_json_path = output / "learned_calibration_bootstrap_stability.json"
     bootstrap_summary_path = output / "learned_calibration_bootstrap_stability.md"
+    coverage_strata_path = output / "learned_calibration_coverage_strata.csv"
+    coverage_strata_json_path = output / "learned_calibration_coverage_strata.json"
+    coverage_strata_summary_path = output / "learned_calibration_coverage_strata.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
@@ -418,6 +434,7 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     )
     proxy_sensitivity = compute_proxy_threshold_sensitivity(rows, label_rows)
     bootstrap_stability = compute_bootstrap_stability(rows, label_rows)
+    coverage_strata = compute_coverage_strata(rows, label_rows)
     with dataset_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=DATASET_COLUMNS)
         writer.writeheader()
@@ -488,6 +505,13 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
             writer.writerow({column: row.get(column, "") for column in BOOTSTRAP_STABILITY_COLUMNS})
     bootstrap_json_path.write_text(json.dumps(bootstrap_stability, indent=2, sort_keys=True, default=str), encoding="utf-8")
     bootstrap_summary_path.write_text(render_bootstrap_stability_markdown(bootstrap_stability), encoding="utf-8")
+    with coverage_strata_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=COVERAGE_STRATA_COLUMNS)
+        writer.writeheader()
+        for row in coverage_strata["rows"]:
+            writer.writerow({column: row.get(column, "") for column in COVERAGE_STRATA_COLUMNS})
+    coverage_strata_json_path.write_text(json.dumps(coverage_strata, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    coverage_strata_summary_path.write_text(render_coverage_strata_markdown(coverage_strata), encoding="utf-8")
     artifact_manifest = build_learned_calibration_manifest(output)
     manifest_path.write_text(json.dumps(artifact_manifest, indent=2, sort_keys=True, default=str), encoding="utf-8")
     manifest_summary_path.write_text(render_learned_calibration_manifest_markdown(artifact_manifest), encoding="utf-8")
@@ -523,6 +547,9 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "bootstrap_stability": str(bootstrap_path),
         "bootstrap_stability_json": str(bootstrap_json_path),
         "bootstrap_stability_summary": str(bootstrap_summary_path),
+        "coverage_strata": str(coverage_strata_path),
+        "coverage_strata_json": str(coverage_strata_json_path),
+        "coverage_strata_summary": str(coverage_strata_summary_path),
         "manifest": str(manifest_path),
         "manifest_summary": str(manifest_summary_path),
     }
@@ -1699,6 +1726,165 @@ def _set_overlap(sample: set[str], baseline: set[str]) -> float:
     return round(len(sample & baseline) / len(baseline), 4)
 
 
+def compute_coverage_strata(
+    rows: Sequence[Mapping[str, Any]],
+    label_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    label_by_cve = {str(row.get("cve_id", "")): row for row in label_rows}
+    output_rows: list[dict[str, Any]] = []
+    for stratum, grouper in _coverage_stratum_groupers():
+        grouped: dict[str, list[Mapping[str, Any]]] = {}
+        for row in rows:
+            grouped.setdefault(grouper(row), []).append(row)
+        for group in sorted(grouped):
+            members = grouped[group]
+            output_rows.append(_coverage_stratum_row(stratum, group, members, label_by_cve))
+    return {
+        "status": "evaluated" if rows else "skipped",
+        "record_count": len(rows),
+        "strata_count": len(output_rows),
+        "rows": output_rows,
+        "notes": [
+            "Coverage strata are computed from exported dataset rows and deterministic proxy labels.",
+            "The analysis does not train a model, mutate MongoDB, or change production scoring.",
+            "Missing feature percentages are calculated over learned-calibration model feature columns.",
+        ],
+    }
+
+
+def render_coverage_strata_markdown(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration Coverage-Limitation Strata",
+        "",
+        "This artifact groups exported CVE rows by coverage and score-context limitations.",
+        "It uses deterministic proxy labels and does not train a model or change production scoring.",
+        "",
+        f"- Status: `{payload.get('status', '')}`",
+        f"- Records: `{payload.get('record_count', 0)}`",
+        f"- Strata rows: `{payload.get('strata_count', 0)}`",
+        "",
+        "## Strata Summary",
+        "",
+        "| Stratum | Group | Count | Avg Risk | Avg Confidence | A High | B High | C High | Interpretation |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+    ]
+    for row in payload.get("rows") or []:
+        lines.append(
+            "| {stratum} | {group} | {count} | {risk} | {confidence} | {a} | {b} | {c} | {note} |".format(
+                stratum=row.get("stratum", ""),
+                group=row.get("group", ""),
+                count=row.get("count", 0),
+                risk=_format_metric(row.get("average_risk_score")),
+                confidence=_format_metric(row.get("average_confidence")),
+                a=row.get("strategy_a_high_count", 0),
+                b=row.get("strategy_b_high_count", 0),
+                c=row.get("strategy_c_high_count", 0),
+                note=row.get("interpretation_note", ""),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "Missing-feature percentages are available in the CSV and JSON artifacts for each stratum.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _coverage_stratum_groupers() -> list[tuple[str, Any]]:
+    return [
+        ("epss_availability", lambda row: "epss_available" if _truthy(row.get("epss_available")) else "epss_unavailable"),
+        ("kev_status", lambda row: "kev_known" if _truthy(row.get("kev_status_known")) else "kev_unknown"),
+        ("kev_listing", lambda row: "kev_listed" if _truthy(row.get("kev_listed")) else "kev_not_listed_or_unknown"),
+        ("accepted_external_evidence", _accepted_external_evidence_group),
+        ("intrinsic_floor", lambda row: "intrinsic_floor_applied" if _truthy(row.get("intrinsic_criticality_floor_applied")) else "intrinsic_floor_not_applied"),
+        ("confidence_bucket", lambda row: _confidence_bucket(_safe_float(row.get("confidence")))),
+        ("risk_bucket", lambda row: _risk_bucket(_safe_float(row.get("risk_score")))),
+        ("ignored_urlhaus_candidate_bucket", lambda row: _count_bucket(_safe_int(row.get("urlhaus_ignored_low_signal_count")))),
+        ("rejected_urlhaus_candidate_bucket", lambda row: _count_bucket(_safe_int(row.get("urlhaus_rejected_match_count")))),
+    ]
+
+
+def _coverage_stratum_row(
+    stratum: str,
+    group: str,
+    rows: Sequence[Mapping[str, Any]],
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "stratum": stratum,
+        "group": group,
+        "count": len(rows),
+        "average_risk_score": round(mean([_safe_float(row.get("risk_score")) for row in rows]), 4) if rows else 0.0,
+        "average_confidence": round(mean([_safe_float(row.get("confidence")) for row in rows]), 4) if rows else 0.0,
+        "strategy_a_high_count": _strategy_high_count(rows, label_by_cve, "strategy_a"),
+        "strategy_b_high_count": _strategy_high_count(rows, label_by_cve, "strategy_b"),
+        "strategy_c_high_count": _strategy_high_count(rows, label_by_cve, "strategy_c"),
+        "missing_feature_percentages": json.dumps(_strata_missing_feature_percentages(rows), sort_keys=True),
+        "interpretation_note": _coverage_interpretation(stratum, group),
+    }
+
+
+def _accepted_external_evidence_group(row: Mapping[str, Any]) -> str:
+    accepted = _safe_int(row.get("accepted_urlhaus_count")) + _safe_int(row.get("accepted_dread_count"))
+    return "accepted_external_evidence_present" if accepted > 0 else "accepted_external_evidence_absent"
+
+
+def _count_bucket(count: int) -> str:
+    if count <= 0:
+        return "none"
+    if count < 10:
+        return "low_1_to_9"
+    if count < 100:
+        return "medium_10_to_99"
+    return "high_100_plus"
+
+
+def _strategy_high_count(
+    rows: Sequence[Mapping[str, Any]],
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+    strategy: str,
+) -> int:
+    return sum(
+        _safe_int((label_by_cve.get(str(row.get("cve_id", ""))) or {}).get(f"proxy_binary_high_{strategy}"))
+        for row in rows
+    )
+
+
+def _strata_missing_feature_percentages(rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
+    if not rows:
+        return {feature: 0.0 for feature in MODEL_FEATURE_COLUMNS}
+    missing: dict[str, int] = {feature: 0 for feature in MODEL_FEATURE_COLUMNS}
+    for row in rows:
+        for feature in MODEL_FEATURE_COLUMNS:
+            if row.get(feature) in (None, ""):
+                missing[feature] += 1
+    return {feature: round(count / len(rows), 4) for feature, count in missing.items()}
+
+
+def _coverage_interpretation(stratum: str, group: str) -> str:
+    if stratum == "epss_availability":
+        return "EPSS coverage supports exploit-likelihood context." if group == "epss_available" else "Missing EPSS should be treated as a coverage limitation."
+    if stratum == "kev_status":
+        return "Known KEV status improves evidence coverage." if group == "kev_known" else "Unknown KEV status limits confidence interpretation."
+    if stratum == "kev_listing":
+        return "KEV-listed records have direct active-exploitation evidence." if group == "kev_listed" else "Not listed or unknown KEV status is not proof of no exploitation."
+    if stratum == "accepted_external_evidence":
+        return "Accepted external evidence can support risk and confidence." if group.endswith("present") else "Absent accepted evidence should limit confidence, not zero risk."
+    if stratum == "intrinsic_floor":
+        return "Intrinsic criticality floor indicates high technical severity context." if group == "intrinsic_floor_applied" else "No intrinsic floor was needed for this group."
+    if stratum == "confidence_bucket":
+        return "Confidence bucket summarizes reliability of available assessment inputs."
+    if stratum == "risk_bucket":
+        return "Risk bucket summarizes current heuristic prioritization."
+    if stratum == "ignored_urlhaus_candidate_bucket":
+        return "Ignored URLhaus candidates are retrieval noise and are not rejected evidence."
+    if stratum == "rejected_urlhaus_candidate_bucket":
+        return "Rejected URLhaus candidates are signal-bearing but insufficient for accepted evidence."
+    return "Coverage stratum for learned-calibration feasibility discussion."
+
+
 def _threshold_label(row: Mapping[str, Any], thresholds: Mapping[str, float]) -> str:
     if _truthy(row.get("kev_listed")) or _safe_float(row.get("epss_signal")) >= thresholds["epss_high_threshold"]:
         return "high"
@@ -1792,6 +1978,9 @@ def _learned_calibration_artifact_specs() -> list[dict[str, str]]:
         {"group": "bootstrap stability", "filename": "learned_calibration_bootstrap_stability.csv", "description": "Bootstrap ranking stability iterations", "usage": "Deterministic resampling check for heuristic ranking stability."},
         {"group": "bootstrap stability", "filename": "learned_calibration_bootstrap_stability.json", "description": "Bootstrap ranking stability payload", "usage": "Machine-readable bootstrap summary and iteration rows."},
         {"group": "bootstrap stability", "filename": "learned_calibration_bootstrap_stability.md", "description": "Readable bootstrap stability summary", "usage": "Thesis discussion of ranking robustness under resampling."},
+        {"group": "coverage strata", "filename": "learned_calibration_coverage_strata.csv", "description": "Coverage-limitation strata rows", "usage": "Stratifies proxy-label feasibility by evidence and score-context coverage."},
+        {"group": "coverage strata", "filename": "learned_calibration_coverage_strata.json", "description": "Coverage-limitation strata payload", "usage": "Machine-readable coverage strata analysis."},
+        {"group": "coverage strata", "filename": "learned_calibration_coverage_strata.md", "description": "Readable coverage-limitation strata summary", "usage": "Thesis discussion of data coverage effects."},
     ]
 
 
