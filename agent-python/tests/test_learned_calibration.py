@@ -9,17 +9,20 @@ from pymongo.errors import ServerSelectionTimeoutError
 
 import evaluation.learned_calibration as learned_calibration
 from evaluation.learned_calibration import (
+    ABLATION_COLUMNS,
     DATASET_COLUMNS,
     DISAGREEMENT_COLUMNS,
     FEATURE_IMPORTANCE_COLUMNS,
     LABEL_COLUMNS,
     MODEL_FEATURE_COLUMNS,
+    ablation_plan,
     build_proxy_label_row,
     build_proxy_label_rows,
     build_feasibility_report,
     compute_baseline_metrics,
     compute_disagreement_cases,
     compute_learned_vs_heuristic_comparison,
+    compute_ablation_experiments,
     export_from_documents,
     extract_feature_importance,
     extract_calibration_row,
@@ -225,6 +228,8 @@ def test_export_writes_three_output_files(tmp_path):
     disagreements_summary = tmp_path / "learned_calibration_disagreements.md"
     importance = tmp_path / "learned_calibration_feature_importance.csv"
     importance_summary = tmp_path / "learned_calibration_feature_importance.md"
+    ablation = tmp_path / "learned_calibration_ablation.csv"
+    ablation_summary = tmp_path / "learned_calibration_ablation.md"
     assert result["paths"] == {
         "dataset": str(dataset),
         "labels": str(labels),
@@ -241,6 +246,8 @@ def test_export_writes_three_output_files(tmp_path):
         "disagreements_summary": str(disagreements_summary),
         "feature_importance": str(importance),
         "feature_importance_summary": str(importance_summary),
+        "ablation": str(ablation),
+        "ablation_summary": str(ablation_summary),
     }
     assert dataset.exists()
     assert labels.exists()
@@ -257,6 +264,8 @@ def test_export_writes_three_output_files(tmp_path):
     assert disagreements_summary.exists()
     assert importance.exists()
     assert importance_summary.exists()
+    assert ablation.exists()
+    assert ablation_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
     assert rows[0]["cve_id"] == "CVE-2026-1234"
     label_rows = list(csv.DictReader(labels.open(encoding="utf-8")))
@@ -279,6 +288,8 @@ def test_export_writes_three_output_files(tmp_path):
     importance_rows = list(csv.DictReader(importance.open(encoding="utf-8")))
     if importance_rows:
         assert list(importance_rows[0].keys()) == FEATURE_IMPORTANCE_COLUMNS
+    ablation_rows = list(csv.DictReader(ablation.open(encoding="utf-8")))
+    assert list(ablation_rows[0].keys()) == ABLATION_COLUMNS
     text = summary.read_text(encoding="utf-8")
     assert "Proxy labels are not ground truth" in text
     assert "production `risk_score` behavior is unchanged" in text
@@ -659,3 +670,57 @@ def test_feature_importance_skips_without_coefficients():
     report = {"strategies": {"strategy_a": {"status": "skipped"}}}
 
     assert extract_feature_importance(report, [_row()]) == []
+
+
+def test_ablation_plan_contains_expected_variants_and_excludes_risk_score():
+    names = [item["name"] for item in ablation_plan()]
+
+    assert names == [
+        "all_features",
+        "no_cvss_severity",
+        "no_recency",
+        "no_nlp_context",
+        "no_confidence_data_completeness",
+        "no_intrinsic_floor_flag",
+        "evidence_only",
+        "signals_only",
+        "metadata_context_only",
+    ]
+    assert all("risk_score" not in item["features"] for item in ablation_plan())
+
+
+def test_ablation_experiments_skip_when_model_not_completed():
+    report = {"status": "skipped", "skip_reason": "scikit-learn unavailable"}
+
+    rows = compute_ablation_experiments(report)
+
+    assert len(rows) == 27
+    assert all(row["status"] == "skipped" for row in rows)
+    assert rows[0]["skip_reason"] == "scikit-learn unavailable"
+    assert set(rows[0].keys()) == set(ABLATION_COLUMNS)
+
+
+def test_ablation_experiments_emit_metric_table_shape_for_completed_report():
+    report = {
+        "status": "completed",
+        "strategies": {
+            "strategy_a": {
+                "status": "limited",
+                "metrics": {
+                    "accuracy": 0.8,
+                    "balanced_accuracy": 0.75,
+                    "precision": 0.5,
+                    "recall": 0.6,
+                    "f1": 0.55,
+                    "roc_auc": 0.7,
+                    "pr_auc": 0.4,
+                },
+            }
+        },
+    }
+
+    rows = compute_ablation_experiments(report)
+
+    assert rows[0]["status"] == "baseline_only"
+    assert rows[0]["balanced_accuracy"] == 0.75
+    assert set(rows[0].keys()) == set(ABLATION_COLUMNS)

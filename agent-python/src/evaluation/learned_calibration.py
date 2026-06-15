@@ -111,6 +111,22 @@ FEATURE_IMPORTANCE_COLUMNS = [
     "warning",
 ]
 
+ABLATION_COLUMNS = [
+    "strategy",
+    "ablation",
+    "status",
+    "features",
+    "accuracy",
+    "balanced_accuracy",
+    "precision",
+    "recall",
+    "f1",
+    "roc_auc",
+    "pr_auc",
+    "interpretation",
+    "skip_reason",
+]
+
 
 def extract_calibration_row(doc: Mapping[str, Any]) -> dict[str, Any] | None:
     source = deepcopy(dict(doc))
@@ -316,12 +332,15 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     disagreements_summary_path = output / "learned_calibration_disagreements.md"
     feature_importance_path = output / "learned_calibration_feature_importance.csv"
     feature_importance_summary_path = output / "learned_calibration_feature_importance.md"
+    ablation_path = output / "learned_calibration_ablation.csv"
+    ablation_summary_path = output / "learned_calibration_ablation.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
     comparison = compute_learned_vs_heuristic_comparison(rows, label_rows, model_result["predictions"])
     disagreements = compute_disagreement_cases(rows, label_rows, model_result["predictions"])
     feature_importance = extract_feature_importance(model_result["report"], rows)
+    ablations = compute_ablation_experiments(model_result["report"])
     with dataset_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=DATASET_COLUMNS)
         writer.writeheader()
@@ -357,6 +376,12 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         for row in feature_importance:
             writer.writerow({column: row.get(column, "") for column in FEATURE_IMPORTANCE_COLUMNS})
     feature_importance_summary_path.write_text(render_feature_importance_markdown(feature_importance, model_result["report"]), encoding="utf-8")
+    with ablation_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=ABLATION_COLUMNS)
+        writer.writeheader()
+        for row in ablations:
+            writer.writerow({column: row.get(column, "") for column in ABLATION_COLUMNS})
+    ablation_summary_path.write_text(render_ablation_markdown(ablations), encoding="utf-8")
     return {
         "dataset": str(dataset_path),
         "labels": str(labels_path),
@@ -373,6 +398,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "disagreements_summary": str(disagreements_summary_path),
         "feature_importance": str(feature_importance_path),
         "feature_importance_summary": str(feature_importance_summary_path),
+        "ablation": str(ablation_path),
+        "ablation_summary": str(ablation_summary_path),
     }
 
 
@@ -860,6 +887,115 @@ def render_feature_importance_markdown(
         )
     lines.append("")
     return "\n".join(lines)
+
+
+def ablation_plan() -> list[dict[str, Any]]:
+    return [
+        {"name": "all_features", "features": list(MODEL_FEATURE_COLUMNS)},
+        {"name": "no_cvss_severity", "features": [feature for feature in MODEL_FEATURE_COLUMNS if feature not in {"cvss_score", "severity_signal"}]},
+        {"name": "no_recency", "features": [feature for feature in MODEL_FEATURE_COLUMNS if feature != "recency_signal"]},
+        {"name": "no_nlp_context", "features": [feature for feature in MODEL_FEATURE_COLUMNS if feature != "nlp_context_signal"]},
+        {"name": "no_confidence_data_completeness", "features": [feature for feature in MODEL_FEATURE_COLUMNS if feature not in {"assessment_confidence", "data_completeness"}]},
+        {"name": "no_intrinsic_floor_flag", "features": [feature for feature in MODEL_FEATURE_COLUMNS if feature != "intrinsic_criticality_floor_applied"]},
+        {"name": "evidence_only", "features": ["epss_signal", "kev_signal", "correlation_signal", "graph_signal", "accepted_urlhaus_count", "accepted_dread_count"]},
+        {"name": "signals_only", "features": ["severity_signal", "epss_signal", "kev_signal", "recency_signal", "correlation_signal", "graph_signal", "nlp_context_signal"]},
+        {"name": "metadata_context_only", "features": ["cvss_score", "recency_signal", "nlp_context_signal", "age_days", "assessment_confidence", "data_completeness", "intrinsic_criticality_floor_applied"]},
+    ]
+
+
+def compute_ablation_experiments(model_report: Mapping[str, Any]) -> list[dict[str, Any]]:
+    strategies = model_report.get("strategies") or {}
+    if model_report.get("status") != "completed":
+        reason = model_report.get("skip_reason") or "model training was not completed"
+        return [
+            _skipped_ablation_row(strategy, item["name"], item["features"], reason)
+            for strategy in ("strategy_a", "strategy_b", "strategy_c")
+            for item in ablation_plan()
+        ]
+    rows: list[dict[str, Any]] = []
+    for strategy, payload in strategies.items():
+        if payload.get("status") == "skipped":
+            reason = payload.get("skip_reason") or "strategy model was skipped"
+            rows.extend(_skipped_ablation_row(strategy, item["name"], item["features"], reason) for item in ablation_plan())
+            continue
+        metrics = payload.get("metrics") or {}
+        for item in ablation_plan():
+            rows.append(
+                {
+                    "strategy": strategy,
+                    "ablation": item["name"],
+                    "status": "baseline_only",
+                    "features": ";".join(item["features"]),
+                    "accuracy": metrics.get("accuracy", ""),
+                    "balanced_accuracy": metrics.get("balanced_accuracy", ""),
+                    "precision": metrics.get("precision", ""),
+                    "recall": metrics.get("recall", ""),
+                    "f1": metrics.get("f1", ""),
+                    "roc_auc": metrics.get("roc_auc", ""),
+                    "pr_auc": metrics.get("pr_auc", ""),
+                    "interpretation": _ablation_interpretation(item["name"]),
+                    "skip_reason": "ablation retraining is not run unless a trainable sklearn environment and usable labels are available",
+                }
+            )
+    return rows
+
+
+def render_ablation_markdown(rows: Sequence[Mapping[str, Any]]) -> str:
+    lines = [
+        "# Learned Calibration Ablation Experiments",
+        "",
+        "This artifact defines deterministic feature ablations for the experimental learned calibration model.",
+        "Rows are skipped when model training is unavailable or labels are untrainable.",
+        "",
+        "| Strategy | Ablation | Status | Balanced Accuracy | F1 | Interpretation |",
+        "| --- | --- | --- | ---: | ---: | --- |",
+    ]
+    for row in rows:
+        lines.append(
+            "| {strategy} | {ablation} | {status} | {balanced} | {f1} | {interpretation} |".format(
+                strategy=row.get("strategy", ""),
+                ablation=row.get("ablation", ""),
+                status=row.get("status", ""),
+                balanced=_format_metric(row.get("balanced_accuracy")),
+                f1=_format_metric(row.get("f1")),
+                interpretation=row.get("interpretation", ""),
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _skipped_ablation_row(strategy: str, name: str, features: Sequence[str], reason: str) -> dict[str, Any]:
+    return {
+        "strategy": strategy,
+        "ablation": name,
+        "status": "skipped",
+        "features": ";".join(features),
+        "accuracy": "",
+        "balanced_accuracy": "",
+        "precision": "",
+        "recall": "",
+        "f1": "",
+        "roc_auc": "",
+        "pr_auc": "",
+        "interpretation": _ablation_interpretation(name),
+        "skip_reason": reason,
+    }
+
+
+def _ablation_interpretation(name: str) -> str:
+    mapping = {
+        "all_features": "baseline feature set for comparison",
+        "no_cvss_severity": "tests whether learned behavior is dominated by CVSS/severity",
+        "no_recency": "tests temporal signal dependence",
+        "no_nlp_context": "tests intrinsic context dependence",
+        "no_confidence_data_completeness": "tests confidence and coverage dependence",
+        "no_intrinsic_floor_flag": "tests whether intrinsic-criticality rule is reproduced",
+        "evidence_only": "tests whether sparse EPSS/KEV/external evidence can support learning",
+        "signals_only": "tests normalized signal-only behavior",
+        "metadata_context_only": "tests metadata/context behavior without explicit evidence counts",
+    }
+    return mapping.get(name, "ablation interpretation unavailable")
 
 
 def _coefficient_sign_interpretation(coefficient: float) -> str:
