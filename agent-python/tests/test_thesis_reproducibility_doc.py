@@ -23,6 +23,12 @@ def test_thesis_reproducibility_doc_contains_required_commands_and_artifacts():
         "docs/thesis_limitations.md",
         "docs/thesis_claim_evidence_map.md",
         "docs/thesis_chapter_blueprint.md",
+        "docs/learned_calibration.md",
+        "make thesis-learned-calibration",
+        "learned_calibration_dataset.csv",
+        "learned_calibration_labels.csv",
+        "learned_calibration_leakage_checks.json",
+        "learned_calibration_thesis_section.md",
         "deterministic",
         "live network access",
         "no live network",
@@ -143,3 +149,23 @@ def test_makefile_exposes_runtime_diagnostics_target():
         "--output-dir ../reports/runtime",
     ):
         assert required in makefile
+
+
+def test_learned_calibration_doc_contains_safe_experimental_framing():
+    repo_root = Path(__file__).resolve().parents[2]
+    doc_path = repo_root / "docs" / "learned_calibration.md"
+
+    assert doc_path.exists()
+    text = doc_path.read_text(encoding="utf-8")
+
+    for required in (
+        "make thesis-learned-calibration",
+        "Proxy labels are not ground truth",
+        "production `risk_score`",
+        "URLhaus/Dread evidence gates",
+        "Dread live crawling is not used",
+        "confidence remains separate from risk",
+        "diagnostic thesis material",
+        "learned_calibration_leakage_checks.json",
+    ):
+        assert required in text

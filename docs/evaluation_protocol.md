@@ -69,6 +69,18 @@ make thesis-runtime-diagnostics
 
 The command is read-only and writes operational diagnostics under `reports/runtime/`. It reports processed counts, risk and confidence distributions, EPSS/KEV coverage, URLhaus raw/ignored/evaluated/accepted/manual/rejected candidate counts, and high-risk moderate-confidence examples. This is an operational sanity check for the local database, not the deterministic thesis benchmark.
 
+## Learned Calibration Experiment
+
+Run:
+
+```bash
+make thesis-learned-calibration
+```
+
+This read-only export creates experimental learned-calibration artifacts from existing analyzed CVE records. It builds deterministic proxy labels, baseline heuristic-ranking metrics, optional scikit-learn model outputs, learned-vs-heuristic comparisons, disagreement examples, feature-importance exports, ablation plans, leakage checks, and thesis narrative summaries.
+
+The proxy labels are not ground truth. The experiment does not change production `risk_score`, does not change URLhaus/Dread evidence gates, does not use live Dread crawling, and does not recalibrate confidence. Results are diagnostic and limited by sparse EPSS, KEV, and accepted external-evidence coverage; they should not be presented as proof of real-world exploit prediction.
+
 ## Thesis Artifacts
 
 Run:
