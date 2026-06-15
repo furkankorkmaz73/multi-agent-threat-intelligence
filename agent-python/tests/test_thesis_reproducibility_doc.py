@@ -18,6 +18,7 @@ def test_thesis_reproducibility_doc_contains_required_commands_and_artifacts():
         "limitations_and_validity.md",
         "thesis_defense_pack.md",
         "docs/thesis_limitations.md",
+        "docs/thesis_claim_evidence_map.md",
         "deterministic",
         "live network access",
         "no live network",
@@ -55,5 +56,27 @@ def test_thesis_limitations_doc_contains_required_sections():
         "not treated as ground truth",
         "Neo4j or other persistent graph databases are future work",
         "larger curated NVD, EPSS, CISA KEV, URLhaus/Dread, and asset-context datasets",
+    ):
+        assert required in text
+
+
+def test_thesis_claim_evidence_map_contains_required_claim_boundaries():
+    repo_root = Path(__file__).resolve().parents[2]
+    doc_path = repo_root / "docs" / "thesis_claim_evidence_map.md"
+
+    assert doc_path.exists()
+    text = doc_path.read_text(encoding="utf-8")
+
+    for required in (
+        "controlled behavioral validation",
+        "multi-agent-inspired",
+        "| Thesis claim | Supporting artifact / file | What it demonstrates | Limitation / non-claim |",
+        "full autonomy",
+        "production readiness",
+        "statistical significance",
+        "real-world validation",
+        "optimized or learned weights",
+        "Dread as ground truth",
+        "persistent graph database implementation",
     ):
         assert required in text
