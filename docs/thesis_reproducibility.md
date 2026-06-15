@@ -84,7 +84,7 @@ reports/thesis/methodology_summary.md
 - `thesis_defense_pack.md`: concise defense preparation artifact with claim scope and Q&A.
 - `methodology_summary.md`: concise method summary for the deterministic artifact bundle.
 
-For the static version of the thesis claim boundaries, see [`docs/thesis_limitations.md`](thesis_limitations.md). For a claim-to-evidence map for thesis writing and defense preparation, see [`docs/thesis_claim_evidence_map.md`](thesis_claim_evidence_map.md).
+For the static version of the thesis claim boundaries, see [`docs/thesis_limitations.md`](thesis_limitations.md). For a claim-to-evidence map for thesis writing and defense preparation, see [`docs/thesis_claim_evidence_map.md`](thesis_claim_evidence_map.md). For a chapter-by-chapter English writing plan, see [`docs/thesis_chapter_blueprint.md`](thesis_chapter_blueprint.md).
 
 ## Interpreting Evaluation Outputs
 

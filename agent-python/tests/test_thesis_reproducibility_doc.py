@@ -19,6 +19,7 @@ def test_thesis_reproducibility_doc_contains_required_commands_and_artifacts():
         "thesis_defense_pack.md",
         "docs/thesis_limitations.md",
         "docs/thesis_claim_evidence_map.md",
+        "docs/thesis_chapter_blueprint.md",
         "deterministic",
         "live network access",
         "no live network",
@@ -80,3 +81,37 @@ def test_thesis_claim_evidence_map_contains_required_claim_boundaries():
         "persistent graph database implementation",
     ):
         assert required in text
+
+
+def test_thesis_chapter_blueprint_contains_required_english_writing_plan():
+    repo_root = Path(__file__).resolve().parents[2]
+    doc_path = repo_root / "docs" / "thesis_chapter_blueprint.md"
+
+    assert doc_path.exists()
+    text = doc_path.read_text(encoding="utf-8")
+
+    for required in (
+        "multi-agent-inspired",
+        "controlled behavioral validation",
+        "heuristic engineering choices",
+        "bounded sensitivity analysis",
+        "Dread is optional, experimental, bounded, default-off",
+        "Neo4j are future work",
+        "### System Architecture",
+        "### Risk Scoring Model",
+        "### Evaluation Methodology",
+        "### Results",
+        "### Limitations and Threats to Validity",
+        "## Final Defense Checklist",
+    ):
+        assert required in text
+
+    for forbidden in (
+        "Bulgular",
+        "Değerlendirme",
+        "Türkçe",
+        "çeviri",
+        "translation",
+        "translate",
+    ):
+        assert forbidden not in text
