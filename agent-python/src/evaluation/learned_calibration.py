@@ -358,6 +358,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     limitations_path = output / "learned_calibration_limitations.md"
     case_studies_path = output / "learned_calibration_case_studies.csv"
     case_studies_summary_path = output / "learned_calibration_case_studies.md"
+    tables_path = output / "learned_calibration_tables.json"
+    tables_summary_path = output / "learned_calibration_tables.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
@@ -367,6 +369,13 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     ablations = compute_ablation_experiments(model_result["report"])
     leakage_checks = build_leakage_checks(model_result["report"], report, summary_text=render_summary_markdown(report))
     case_studies = select_case_studies(rows, label_rows, model_result["predictions"])
+    publication_tables = build_publication_tables(
+        feasibility_report=report,
+        baseline_metrics=baseline_metrics,
+        model_report=model_result["report"],
+        ablations=ablations,
+        leakage_checks=leakage_checks,
+    )
     with dataset_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=DATASET_COLUMNS)
         writer.writeheader()
@@ -421,6 +430,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         for row in case_studies:
             writer.writerow({column: row.get(column, "") for column in CASE_STUDY_COLUMNS})
     case_studies_summary_path.write_text(render_case_studies_markdown(case_studies), encoding="utf-8")
+    tables_path.write_text(json.dumps(publication_tables, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    tables_summary_path.write_text(render_publication_tables_markdown(publication_tables), encoding="utf-8")
     return {
         "dataset": str(dataset_path),
         "labels": str(labels_path),
@@ -445,6 +456,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "limitations": str(limitations_path),
         "case_studies": str(case_studies_path),
         "case_studies_summary": str(case_studies_summary_path),
+        "tables": str(tables_path),
+        "tables_summary": str(tables_summary_path),
     }
 
 
@@ -1259,6 +1272,108 @@ def render_case_studies_markdown(rows: Sequence[Mapping[str, Any]]) -> str:
         lines.append(f"- `{group}`: {count}")
     lines.append("")
     return "\n".join(lines)
+
+
+def build_publication_tables(
+    *,
+    feasibility_report: Mapping[str, Any],
+    baseline_metrics: Mapping[str, Any],
+    model_report: Mapping[str, Any],
+    ablations: Sequence[Mapping[str, Any]],
+    leakage_checks: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "dataset_coverage_summary": [
+            {"metric": "analyzed_records", "value": feasibility_report.get("analyzed_records_exported", 0)},
+            {"metric": "records_with_cvss", "value": feasibility_report.get("records_with_cvss", 0)},
+            {"metric": "epss_available", "value": feasibility_report.get("epss_availability_count", 0)},
+            {"metric": "kev_known", "value": feasibility_report.get("kev_known_count", 0)},
+            {"metric": "accepted_external_evidence", "value": feasibility_report.get("accepted_external_evidence_count", 0)},
+        ],
+        "proxy_label_class_distribution": _table_proxy_label_distribution(feasibility_report),
+        "heuristic_baseline_metrics": _table_baseline_metrics(baseline_metrics),
+        "learned_model_metrics": _table_model_metrics(model_report),
+        "ablation_summary": _table_ablation_summary(ablations),
+        "leakage_robustness_checks": list(leakage_checks.get("checks") or []),
+        "artifact_inventory": [
+            {"artifact": "learned_calibration_dataset.csv", "usage": "feature export"},
+            {"artifact": "learned_calibration_labels.csv", "usage": "proxy labels"},
+            {"artifact": "learned_calibration_baseline_metrics.json", "usage": "heuristic baseline"},
+            {"artifact": "learned_calibration_model_report.json", "usage": "optional model metrics"},
+            {"artifact": "learned_calibration_leakage_checks.json", "usage": "leakage controls"},
+            {"artifact": "learned_calibration_case_studies.csv", "usage": "case studies"},
+        ],
+    }
+
+
+def render_publication_tables_markdown(tables: Mapping[str, Any]) -> str:
+    lines = ["# Learned Calibration Publication Tables", ""]
+    lines.extend(_markdown_table("Dataset Coverage Summary", ["metric", "value"], tables.get("dataset_coverage_summary") or []))
+    lines.extend(_markdown_table("Proxy Label Class Distribution", ["strategy", "label", "count"], tables.get("proxy_label_class_distribution") or []))
+    lines.extend(_markdown_table("Heuristic Baseline Metrics", ["strategy", "status", "precision_at_10", "recall_at_50", "ndcg_at_50"], tables.get("heuristic_baseline_metrics") or []))
+    lines.extend(_markdown_table("Learned Model Metrics", ["strategy", "status", "balanced_accuracy", "f1"], tables.get("learned_model_metrics") or []))
+    lines.extend(_markdown_table("Ablation Summary", ["ablation", "status", "interpretation"], tables.get("ablation_summary") or []))
+    lines.extend(_markdown_table("Leakage and Robustness Checks", ["check", "status", "details"], tables.get("leakage_robustness_checks") or []))
+    lines.extend(_markdown_table("Artifact Inventory", ["artifact", "usage"], tables.get("artifact_inventory") or []))
+    return "\n".join(lines)
+
+
+def _table_proxy_label_distribution(report: Mapping[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for strategy, counts in (report.get("proxy_label_class_counts") or {}).items():
+        for label, count in counts.items():
+            rows.append({"strategy": strategy, "label": label, "count": count})
+    return rows or [{"strategy": "unavailable", "label": "unavailable", "count": 0}]
+
+
+def _table_baseline_metrics(metrics: Mapping[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for strategy, payload in (metrics.get("strategies") or {}).items():
+        rows.append(
+            {
+                "strategy": strategy,
+                "status": payload.get("status", ""),
+                "precision_at_10": (payload.get("precision_at_k") or {}).get("10"),
+                "recall_at_50": (payload.get("recall_at_k") or {}).get("50"),
+                "ndcg_at_50": (payload.get("ndcg_at_k") or {}).get("50"),
+            }
+        )
+    return rows or [{"strategy": "unavailable", "status": "unavailable", "precision_at_10": "", "recall_at_50": "", "ndcg_at_50": ""}]
+
+
+def _table_model_metrics(report: Mapping[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for strategy, payload in (report.get("strategies") or {}).items():
+        metrics = payload.get("metrics") or {}
+        rows.append(
+            {
+                "strategy": strategy,
+                "status": payload.get("status", ""),
+                "balanced_accuracy": metrics.get("balanced_accuracy", ""),
+                "f1": metrics.get("f1", ""),
+            }
+        )
+    return rows or [{"strategy": "unavailable", "status": report.get("status", "unavailable"), "balanced_accuracy": "", "f1": ""}]
+
+
+def _table_ablation_summary(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        name = str(row.get("ablation", ""))
+        if name in seen:
+            continue
+        seen.add(name)
+        output.append({"ablation": name, "status": row.get("status", ""), "interpretation": row.get("interpretation", "")})
+    return output or [{"ablation": "unavailable", "status": "unavailable", "interpretation": ""}]
+
+
+def _markdown_table(title: str, columns: Sequence[str], rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    lines = [f"## {title}", "", "| " + " | ".join(columns) + " |", "| " + " | ".join("---" for _ in columns) + " |"]
+    for row in rows:
+        lines.append("| " + " | ".join(str(row.get(column, "")) for column in columns) + " |")
+    lines.append("")
+    return lines
 
 
 def _best_probability_by_cve(prediction_rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:

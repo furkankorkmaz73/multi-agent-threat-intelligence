@@ -20,6 +20,7 @@ from evaluation.learned_calibration import (
     build_proxy_label_row,
     build_proxy_label_rows,
     build_leakage_checks,
+    build_publication_tables,
     build_feasibility_report,
     compute_baseline_metrics,
     compute_disagreement_cases,
@@ -240,6 +241,8 @@ def test_export_writes_three_output_files(tmp_path):
     limitations = tmp_path / "learned_calibration_limitations.md"
     case_studies = tmp_path / "learned_calibration_case_studies.csv"
     case_studies_summary = tmp_path / "learned_calibration_case_studies.md"
+    tables = tmp_path / "learned_calibration_tables.json"
+    tables_summary = tmp_path / "learned_calibration_tables.md"
     assert result["paths"] == {
         "dataset": str(dataset),
         "labels": str(labels),
@@ -264,6 +267,8 @@ def test_export_writes_three_output_files(tmp_path):
         "limitations": str(limitations),
         "case_studies": str(case_studies),
         "case_studies_summary": str(case_studies_summary),
+        "tables": str(tables),
+        "tables_summary": str(tables_summary),
     }
     assert dataset.exists()
     assert labels.exists()
@@ -288,6 +293,8 @@ def test_export_writes_three_output_files(tmp_path):
     assert limitations.exists()
     assert case_studies.exists()
     assert case_studies_summary.exists()
+    assert tables.exists()
+    assert tables_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
     assert rows[0]["cve_id"] == "CVE-2026-1234"
     label_rows = list(csv.DictReader(labels.open(encoding="utf-8")))
@@ -323,6 +330,9 @@ def test_export_writes_three_output_files(tmp_path):
     case_study_rows = list(csv.DictReader(case_studies.open(encoding="utf-8")))
     if case_study_rows:
         assert list(case_study_rows[0].keys()) == CASE_STUDY_COLUMNS
+    table_payload = json.loads(tables.read_text(encoding="utf-8"))
+    assert "dataset_coverage_summary" in table_payload
+    assert "artifact_inventory" in table_payload
     text = summary.read_text(encoding="utf-8")
     assert "Proxy labels are not ground truth" in text
     assert "production `risk_score` behavior is unchanged" in text
@@ -853,3 +863,33 @@ def test_case_study_selection_limits_examples_per_group():
     high = [case for case in cases if case["case_group"] == "high_heuristic_risk_and_high_learned_probability"]
 
     assert len(high) == 3
+
+
+def test_publication_tables_generated_from_artifact_payloads():
+    feasibility = {
+        "analyzed_records_exported": 10,
+        "records_with_cvss": 8,
+        "epss_availability_count": 2,
+        "kev_known_count": 1,
+        "accepted_external_evidence_count": 0,
+        "proxy_label_class_counts": {"strategy_a": {"high": 1, "low": 9}},
+    }
+    baseline = {"strategies": {"strategy_a": {"status": "tiny_positive_class", "precision_at_k": {"10": 0.1}, "recall_at_k": {"50": 1.0}, "ndcg_at_k": {"50": 0.5}}}}
+    model = {"strategies": {"strategy_a": {"status": "skipped", "metrics": {}}}}
+    ablations = [{"ablation": "all_features", "status": "skipped", "interpretation": "baseline feature set for comparison"}]
+    leakage = {"checks": [{"check": "risk_score", "status": "passed", "details": "excluded"}]}
+
+    tables = build_publication_tables(
+        feasibility_report=feasibility,
+        baseline_metrics=baseline,
+        model_report=model,
+        ablations=ablations,
+        leakage_checks=leakage,
+    )
+
+    assert tables["dataset_coverage_summary"][0]["value"] == 10
+    assert tables["proxy_label_class_distribution"][0]["strategy"] == "strategy_a"
+    assert tables["heuristic_baseline_metrics"][0]["precision_at_10"] == 0.1
+    assert tables["learned_model_metrics"][0]["status"] == "skipped"
+    assert tables["ablation_summary"][0]["ablation"] == "all_features"
+    assert tables["leakage_robustness_checks"][0]["status"] == "passed"

@@ -45,6 +45,8 @@ Generated files:
 - `reports/thesis/learned_calibration_limitations.md`
 - `reports/thesis/learned_calibration_case_studies.csv`
 - `reports/thesis/learned_calibration_case_studies.md`
+- `reports/thesis/learned_calibration_tables.json`
+- `reports/thesis/learned_calibration_tables.md`
 
 The dataset includes exported scoring signals, confidence fields, URLhaus candidate accounting, accepted evidence counts, EPSS/KEV coverage flags, and intrinsic-criticality floor indicators when available.
 
@@ -73,6 +75,8 @@ The leakage-check artifacts document that production `risk_score` is not used as
 The thesis-section and limitations artifacts provide concise academic prose that can be adapted into the thesis. They emphasize that proxy labels are not ground truth, the experiment is diagnostic thesis material, and the production heuristic risk score remains unchanged and explainable.
 
 The case-study artifacts select thesis-useful examples for discussing high heuristic risk, learned-probability disagreements, intrinsic criticality, missing EPSS/KEV coverage, URLhaus ignored/rejected volume, and low-confidence/high-risk records. They illustrate proxy behavior and do not claim ground truth exploitation.
+
+The publication-table artifacts collect compact thesis-ready tables for dataset coverage, proxy-label distribution, heuristic baseline metrics, optional learned-model metrics, ablation status, leakage checks, and artifact inventory. Tables are generated from artifact payloads and include unavailable/skipped rows rather than hand-written numbers.
 
 Rows are sorted deterministically by CVE identifier. The exporter accepts the current `analysis.*` shape and legacy top-level evidence, feature, and confidence structures so older analyzed records can be inspected without rewriting database contents.
 
