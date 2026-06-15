@@ -1,6 +1,7 @@
 import csv
 import json
 
+from analysis.scoring_signals import DEFAULT_RISK_SIGNAL_WEIGHTS, RISK_SIGNAL_NAMES, calculate_risk_score_from_normalized_signals
 from evaluation.thesis_artifacts import SCORING_DISTRIBUTION_FIELDS, generate_thesis_artifacts
 from integration.thesis_scenario import run_thesis_scenario
 
@@ -39,6 +40,17 @@ def test_scoring_distribution_artifacts_are_generated_with_expected_columns(tmp_
     assert rows
     assert list(rows[0].keys()) == SCORING_DISTRIBUTION_FIELDS
     assert len(rows) == manifest["record_count"] == 24
+    for column in (
+        "severity_weighted_contribution",
+        "epss_weighted_contribution",
+        "kev_weighted_contribution",
+        "recency_weighted_contribution",
+        "correlation_weighted_contribution",
+        "graph_weighted_contribution",
+        "nlp_context_weighted_contribution",
+        "weighted_signal_score",
+    ):
+        assert column in rows[0]
 
     markdown = (output_dir / "scoring_distribution.md").read_text(encoding="utf-8")
     assert "Risk level distribution" in markdown
@@ -111,6 +123,32 @@ def test_signal_scoring_calibration_guardrails(tmp_path):
     assert all(abs(record["model_risk_score"] - record["model_confidence"]) > 1.0 for record in records.values())
     disagreements = [cve_id for cve_id in records if abs(model_rank[cve_id] - cvss_rank[cve_id]) >= 5]
     assert len(disagreements) >= 5
+
+
+def test_thesis_fixture_scores_are_formula_derived_from_canonical_weights(tmp_path):
+    report, _manifest, _output_dir = _build_artifacts(tmp_path)
+    records = report["evaluation"]["records"]
+
+    for record in records:
+        breakdown = record["feature_breakdown"]
+        signals = {name: breakdown[name] for name in RISK_SIGNAL_NAMES}
+        recomputed = calculate_risk_score_from_normalized_signals(signals)
+
+        assert breakdown["risk_signal_weights"] == dict(DEFAULT_RISK_SIGNAL_WEIGHTS)
+        assert record["model_risk_score"] == breakdown["final_score"]
+        assert breakdown["final_score"] == breakdown["risk_score_from_signals"]
+        assert record["model_risk_score"] == recomputed["risk_score_from_signals"]
+        assert breakdown["weighted_signal_score"] == recomputed["weighted_signal_score"]
+        assert breakdown["risk_raw"] == recomputed["risk_raw"]
+
+        contributions = breakdown["risk_signal_contributions"]
+        assert set(contributions) == set(RISK_SIGNAL_NAMES)
+        assert contributions == recomputed["risk_signal_contributions"]
+        assert round(sum(contributions.values()), 6) == breakdown["weighted_signal_score"]
+
+        for name in RISK_SIGNAL_NAMES:
+            assert 0.0 <= float(breakdown[name]) <= 1.0
+        assert 0.0 <= record["model_risk_score"] <= 10.0
 
 
 def _risk_level(score: float) -> str:

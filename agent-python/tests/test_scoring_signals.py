@@ -1,5 +1,8 @@
 from analysis.scoring_signals import (
+    DEFAULT_RISK_SIGNAL_WEIGHTS,
+    RISK_SIGNAL_NAMES,
     RiskSignalInputs,
+    calculate_risk_score_from_normalized_signals,
     calculate_risk_signal_breakdown,
     clamp01,
     extract_external_risk_signals,
@@ -53,6 +56,31 @@ def test_risk_signal_breakdown_is_bounded_and_explainable():
         assert 0.0 <= breakdown[key] <= 1.0
     assert 0.0 <= breakdown["risk_score_from_signals"] <= 10.0
     assert breakdown["risk_raw"] >= breakdown["risk_score_from_signals"]
+    assert set(breakdown["risk_signal_weights"]) == set(RISK_SIGNAL_NAMES)
+    assert breakdown["risk_signal_weights"] == dict(DEFAULT_RISK_SIGNAL_WEIGHTS)
+    assert round(sum(breakdown["risk_signal_contributions"].values()), 6) == breakdown["weighted_signal_score"]
+
+
+def test_normalized_signal_helper_uses_canonical_weights():
+    breakdown = calculate_risk_score_from_normalized_signals(
+        {
+            "severity_signal": 0.65,
+            "epss_signal": 0.91,
+            "kev_signal": 1.0,
+            "recency_signal": 0.45,
+            "correlation_signal": 0.0,
+            "graph_signal": 0.0,
+            "nlp_context_signal": 1.0,
+        }
+    )
+
+    assert breakdown["risk_signal_weights"] == dict(DEFAULT_RISK_SIGNAL_WEIGHTS)
+    expected_weighted = round(
+        sum(breakdown[name] * DEFAULT_RISK_SIGNAL_WEIGHTS[name] for name in RISK_SIGNAL_NAMES),
+        6,
+    )
+    assert breakdown["weighted_signal_score"] == expected_weighted
+    assert breakdown["risk_score_from_signals"] == round(expected_weighted * 10.0, 2)
 
 
 def test_external_signal_extraction_preserves_unknown_kev():

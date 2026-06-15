@@ -30,6 +30,14 @@ SCORING_DISTRIBUTION_FIELDS = [
     "correlation_signal",
     "graph_signal",
     "nlp_context_signal",
+    "severity_weighted_contribution",
+    "epss_weighted_contribution",
+    "kev_weighted_contribution",
+    "recency_weighted_contribution",
+    "correlation_weighted_contribution",
+    "graph_weighted_contribution",
+    "nlp_context_weighted_contribution",
+    "weighted_signal_score",
     "fixture_rationale",
 ]
 
@@ -274,6 +282,9 @@ def _scoring_summary_markdown(
 def _scoring_distribution_rows(records: Sequence[EvaluationRecord]) -> list[dict[str, Any]]:
     rows = []
     for record in sorted(records, key=lambda item: item.cve_id):
+        contributions = _feature_value(record, "risk_signal_contributions", {})
+        if not isinstance(contributions, Mapping):
+            contributions = {}
         rows.append(
             {
                 "cve_id": record.cve_id,
@@ -290,6 +301,14 @@ def _scoring_distribution_rows(records: Sequence[EvaluationRecord]) -> list[dict
                 "correlation_signal": _feature_value(record, "correlation_signal", ""),
                 "graph_signal": _feature_value(record, "graph_signal", ""),
                 "nlp_context_signal": _feature_value(record, "nlp_context_signal", ""),
+                "severity_weighted_contribution": contributions.get("severity_signal", ""),
+                "epss_weighted_contribution": contributions.get("epss_signal", ""),
+                "kev_weighted_contribution": contributions.get("kev_signal", ""),
+                "recency_weighted_contribution": contributions.get("recency_signal", ""),
+                "correlation_weighted_contribution": contributions.get("correlation_signal", ""),
+                "graph_weighted_contribution": contributions.get("graph_signal", ""),
+                "nlp_context_weighted_contribution": contributions.get("nlp_context_signal", ""),
+                "weighted_signal_score": _feature_value(record, "weighted_signal_score", ""),
                 "fixture_rationale": _feature_value(record, "fixture_rationale", ""),
             }
         )

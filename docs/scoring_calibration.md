@@ -19,11 +19,30 @@ The controlled thesis fixture validates that:
 
 These checks support thesis evaluation by making the model behavior auditable and reproducible. They are regression guardrails, not a fitted calibration procedure.
 
+## Formula Consistency Guardrails
+
+The deterministic thesis fixture records normalized signal inputs and derives `risk_score_from_signals`, `final_score`, and `model_risk_score` through the canonical scoring helper in `analysis.scoring_signals`. The fixture does not independently assign model risk scores. Tests recompute every fixture score from the exported normalized signals and `DEFAULT_RISK_SIGNAL_WEIGHTS`.
+
+The scoring distribution CSV exports each weighted contribution:
+
+- severity contribution
+- EPSS contribution
+- KEV contribution
+- recency contribution
+- accepted-correlation contribution
+- graph contribution
+- NLP/context contribution
+- total weighted signal score before scaling
+
+This makes the model auditable at the record level and prevents benchmark artifacts from drifting away from the implemented formula.
+
 ## What It Does Not Validate
 
 The deterministic fixture is not a live threat-intelligence benchmark. It does not estimate real-world prevalence, incident likelihood, statistical significance, or operational utility across all environments.
 
 Real-world validation should use larger NVD, EPSS, and CISA KEV exports, plus organization-specific asset context where operational risk is being evaluated [CVSS-FIRST] [EPSS-FIRST] [CISA-KEV] [CISA-SSVC].
+
+The current weights are heuristic engineering choices, not learned parameters. Real-world calibration would require larger NVD, EPSS, CISA KEV, URLhaus/Dread, and asset-context datasets with a clearly defined evaluation objective.
 
 ## Interpretation Notes
 

@@ -91,6 +91,16 @@ class RiskSignalInputs:
     nlp_context_score: float
 
 
+RISK_SIGNAL_NAMES = (
+    "severity_signal",
+    "epss_signal",
+    "kev_signal",
+    "recency_signal",
+    "correlation_signal",
+    "graph_signal",
+    "nlp_context_signal",
+)
+
 DEFAULT_RISK_SIGNAL_WEIGHTS: Mapping[str, float] = {
     "severity_signal": 0.68,
     "epss_signal": 0.12,
@@ -121,18 +131,27 @@ def calculate_risk_signal_breakdown(inputs: RiskSignalInputs, *, weights: Mappin
         "graph_signal": normalize_graph(inputs.graph_centrality),
         "nlp_context_signal": normalize_nlp_context(inputs.nlp_context_score),
     }
-    contributions = {name: round(signals[name] * float(weights.get(name, 0.0)), 6) for name in signals}
+    breakdown = calculate_risk_score_from_normalized_signals(signals, weights=weights)
+    return {
+        **breakdown,
+        "epss_available": inputs.epss_probability is not None,
+        "kev_status_known": inputs.kev_listed is not None,
+    }
+
+
+def calculate_risk_score_from_normalized_signals(signals: Mapping[str, Any], *, weights: Mapping[str, float] = DEFAULT_RISK_SIGNAL_WEIGHTS) -> dict[str, Any]:
+    normalized = {name: round(clamp01(signals.get(name, 0.0)), 4) for name in RISK_SIGNAL_NAMES}
+    contributions = {name: round(normalized[name] * float(weights.get(name, 0.0)), 6) for name in RISK_SIGNAL_NAMES}
     risk_raw_01 = round(sum(contributions.values()), 6)
     risk_raw = round(risk_raw_01 * 10.0, 4)
     risk_score = round(clamp_score(risk_raw), 2)
     return {
-        **signals,
-        "risk_signal_weights": {name: round(float(weights.get(name, 0.0)), 4) for name in signals},
+        **normalized,
+        "risk_signal_weights": {name: round(float(weights.get(name, 0.0)), 4) for name in RISK_SIGNAL_NAMES},
         "risk_signal_contributions": contributions,
+        "weighted_signal_score": risk_raw_01,
         "risk_raw": risk_raw,
         "risk_score_from_signals": risk_score,
-        "epss_available": inputs.epss_probability is not None,
-        "kev_status_known": inputs.kev_listed is not None,
     }
 
 

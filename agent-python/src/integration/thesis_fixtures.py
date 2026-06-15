@@ -4,6 +4,7 @@ from typing import Any, Dict, List
 
 from analysis.applicability import VulnerableProduct
 from analysis.assets import Asset, AssetCriticality, CompensatingControl, InstalledProduct, NetworkExposure, PatchState
+from analysis.scoring_signals import calculate_risk_score_from_normalized_signals, normalize_cvss
 
 
 def fixture_cves() -> List[Dict[str, Any]]:
@@ -187,30 +188,30 @@ def fixture_evaluation_model_results() -> List[Dict[str, Any]]:
     confidence cases so ranking and ablation tables have observable behavior.
     """
     specs = [
-        ("CVE-2026-9001", 9.8, 0.94, 0.99, 8.59, 0.95, True, 0.80, 0.69, 0.32, 1.00, 1, 1, "exact CVE match plus URLhaus and Dread corroboration"),
-        ("CVE-2026-9002", 6.5, 0.91, 0.98, 7.48, 0.78, True, 0.45, 0.00, 0.00, 1.00, 0, 0, "medium CVSS but high EPSS and KEV-listed"),
-        ("CVE-2026-9003", 5.5, 0.30, 0.55, 5.60, 0.74, False, 0.80, 0.46, 0.20, 0.70, 1, 0, "medium severity with accepted URLhaus IOC evidence"),
-        ("CVE-2026-9004", 9.8, 0.02, 0.08, 6.90, 0.46, False, 0.05, 0.00, 0.00, 0.40, 0, 0, "high CVSS stale record with little external support"),
-        ("CVE-2026-9005", 7.2, 0.62, 0.88, 7.30, 0.84, False, 1.00, 0.74, 0.50, 0.90, 1, 0, "recent moderate CVE with strong accepted correlation"),
-        ("CVE-2026-9006", 7.0, 0.25, 0.40, 5.20, 0.46, False, 0.45, 0.00, 0.00, 0.65, 0, 0, "Dread-only weak signal routed to manual review"),
-        ("CVE-2026-9007", 9.9, 0.01, 0.05, 6.95, 0.43, False, 0.30, 0.00, 0.00, 0.35, 0, 0, "high CVSS with low EPSS and no accepted evidence"),
-        ("CVE-2026-9008", 6.0, 0.88, 0.97, 7.20, 0.81, True, 0.80, 0.18, 0.10, 0.80, 0, 0, "medium severity KEV case with high EPSS"),
-        ("CVE-2026-9009", 4.2, 0.55, 0.82, 5.10, 0.73, False, 1.00, 0.52, 0.25, 0.55, 1, 0, "low CVSS but accepted URLhaus evidence"),
-        ("CVE-2026-9010", 8.8, 0.76, 0.93, 7.90, 0.86, True, 0.05, 0.35, 0.20, 0.75, 1, 0, "older high-severity KEV case with active IOC support"),
-        ("CVE-2026-9011", 9.5, 0.03, 0.12, 6.80, 0.42, False, 0.30, 0.00, 0.00, 0.40, 0, 0, "high CVSS but low confidence and weak external evidence"),
-        ("CVE-2026-9012", 6.8, 0.70, 0.90, 7.00, 0.82, False, 1.00, 0.62, 0.45, 0.80, 1, 0, "moderate recent CVE with accepted correlation and graph context"),
-        ("CVE-2026-9013", 5.0, 0.04, 0.15, 3.90, 0.38, False, 0.30, 0.00, 0.00, 0.25, 0, 0, "medium severity control with low exploitation signal"),
-        ("CVE-2026-9014", 7.0, 0.72, 0.91, 7.55, 0.84, True, 0.45, 0.20, 0.10, 0.70, 0, 0, "KEV-listed operationally relevant admin console issue"),
-        ("CVE-2026-9015", 5.8, 0.15, 0.30, 5.80, 0.76, False, 0.80, 0.58, 0.35, 0.60, 1, 0, "exact URLhaus CVE reference despite lower EPSS"),
-        ("CVE-2026-9016", 8.5, 0.10, 0.28, 5.95, 0.44, False, 0.30, 0.00, 0.00, 0.35, 0, 0, "generic keyword-only candidate rejected"),
-        ("CVE-2026-9017", 6.2, 0.40, 0.68, 4.95, 0.52, False, 0.45, 0.00, 0.00, 0.55, 0, 0, "ambiguous Dread evidence kept for manual review"),
-        ("CVE-2026-9018", 4.5, 0.05, 0.18, 3.20, 0.34, False, 0.45, 0.00, 0.00, 0.20, 0, 0, "weak Dread signal rejected"),
-        ("CVE-2026-9019", 5.5, 0.93, 0.99, 5.95, 0.64, False, 0.80, 0.00, 0.00, 0.45, 0, 0, "high EPSS non-KEV without corroborating IOC evidence"),
-        ("CVE-2026-9020", 9.0, 0.85, 0.96, 7.60, 0.72, False, 0.45, 0.00, 0.00, 0.60, 0, 0, "high CVSS and EPSS but not KEV-listed"),
-        ("CVE-2026-9021", 6.1, 0.33, 0.58, 6.30, 0.75, True, 0.45, 0.12, 0.20, 0.60, 0, 0, "KEV-listed medium severity with modest EPSS"),
-        ("CVE-2026-9022", 3.9, 0.90, 0.98, 5.70, 0.80, True, 1.00, 0.10, 0.10, 0.40, 0, 0, "low CVSS but KEV and high EPSS"),
-        ("CVE-2026-9023", 7.0, 0.50, 0.80, 7.10, 0.83, False, 1.00, 0.70, 0.60, 0.75, 1, 0, "recent moderate issue with strong URLhaus and graph support"),
-        ("CVE-2026-9024", 7.8, 0.02, 0.10, 5.40, 0.40, False, 0.05, 0.00, 0.00, 0.35, 0, 0, "stale non-KEV control with no active evidence"),
+        ("CVE-2026-9001", 9.8, 0.94, 0.99, 0.95, True, 0.80, 0.69, 0.32, 1.00, 1, 1, "exact CVE match plus URLhaus and Dread corroboration"),
+        ("CVE-2026-9002", 6.5, 0.91, 0.98, 0.78, True, 0.45, 0.00, 0.00, 1.00, 0, 0, "medium CVSS but high EPSS and KEV-listed"),
+        ("CVE-2026-9003", 5.5, 0.30, 0.55, 0.74, False, 0.80, 0.46, 0.20, 0.70, 1, 0, "medium severity with accepted URLhaus IOC evidence"),
+        ("CVE-2026-9004", 9.8, 0.02, 0.08, 0.46, False, 0.05, 0.00, 0.00, 0.40, 0, 0, "high CVSS stale record with little external support"),
+        ("CVE-2026-9005", 7.2, 0.62, 0.88, 0.84, False, 1.00, 0.74, 0.50, 0.90, 1, 0, "recent moderate CVE with strong accepted correlation"),
+        ("CVE-2026-9006", 7.0, 0.25, 0.40, 0.46, False, 0.45, 0.00, 0.00, 0.65, 0, 0, "Dread-only weak signal routed to manual review"),
+        ("CVE-2026-9007", 9.9, 0.01, 0.05, 0.43, False, 0.30, 0.00, 0.00, 0.35, 0, 0, "high CVSS with low EPSS and no accepted evidence"),
+        ("CVE-2026-9008", 6.0, 0.88, 0.97, 0.81, True, 0.80, 0.18, 0.10, 0.80, 0, 0, "medium severity KEV case with high EPSS"),
+        ("CVE-2026-9009", 4.2, 0.55, 0.82, 0.73, False, 1.00, 0.52, 0.25, 0.55, 1, 0, "low CVSS but accepted URLhaus evidence"),
+        ("CVE-2026-9010", 8.8, 0.76, 0.93, 0.86, True, 0.05, 0.35, 0.20, 0.75, 1, 0, "older high-severity KEV case with active IOC support"),
+        ("CVE-2026-9011", 9.5, 0.03, 0.12, 0.42, False, 0.30, 0.00, 0.00, 0.40, 0, 0, "high CVSS but low confidence and weak external evidence"),
+        ("CVE-2026-9012", 6.8, 0.70, 0.90, 0.82, False, 1.00, 0.62, 0.45, 0.80, 1, 0, "moderate recent CVE with accepted correlation and graph context"),
+        ("CVE-2026-9013", 5.0, 0.04, 0.15, 0.38, False, 0.30, 0.00, 0.00, 0.25, 0, 0, "medium severity control with low exploitation signal"),
+        ("CVE-2026-9014", 7.0, 0.72, 0.91, 0.84, True, 0.45, 0.20, 0.10, 0.70, 0, 0, "KEV-listed operationally relevant admin console issue"),
+        ("CVE-2026-9015", 5.8, 0.15, 0.30, 0.76, False, 0.80, 0.58, 0.35, 0.60, 1, 0, "exact URLhaus CVE reference despite lower EPSS"),
+        ("CVE-2026-9016", 8.5, 0.10, 0.28, 0.44, False, 0.30, 0.00, 0.00, 0.35, 0, 0, "generic keyword-only candidate rejected"),
+        ("CVE-2026-9017", 6.2, 0.40, 0.68, 0.52, False, 0.45, 0.00, 0.00, 0.55, 0, 0, "ambiguous Dread evidence kept for manual review"),
+        ("CVE-2026-9018", 4.5, 0.05, 0.18, 0.34, False, 0.45, 0.00, 0.00, 0.20, 0, 0, "weak Dread signal rejected"),
+        ("CVE-2026-9019", 5.5, 0.93, 0.99, 0.64, False, 0.80, 0.00, 0.00, 0.45, 0, 0, "high EPSS non-KEV without corroborating IOC evidence"),
+        ("CVE-2026-9020", 9.0, 0.85, 0.96, 0.72, False, 0.45, 0.00, 0.00, 0.60, 0, 0, "high CVSS and EPSS but not KEV-listed"),
+        ("CVE-2026-9021", 6.1, 0.33, 0.58, 0.75, True, 0.45, 0.12, 0.20, 0.60, 0, 0, "KEV-listed medium severity with modest EPSS"),
+        ("CVE-2026-9022", 3.9, 0.90, 0.98, 0.80, True, 1.00, 0.10, 0.10, 0.40, 0, 0, "low CVSS but KEV and high EPSS"),
+        ("CVE-2026-9023", 7.0, 0.50, 0.80, 0.83, False, 1.00, 0.70, 0.60, 0.75, 1, 0, "recent moderate issue with strong URLhaus and graph support"),
+        ("CVE-2026-9024", 7.8, 0.02, 0.10, 0.40, False, 0.05, 0.00, 0.00, 0.35, 0, 0, "stale non-KEV control with no active evidence"),
     ]
     return [
         _evaluation_row(
@@ -218,7 +219,6 @@ def fixture_evaluation_model_results() -> List[Dict[str, Any]]:
             cvss_score=cvss,
             epss_score=epss,
             epss_percentile=percentile,
-            risk_score=risk,
             confidence=confidence,
             is_kev=is_kev,
             recency_signal=recency,
@@ -229,7 +229,7 @@ def fixture_evaluation_model_results() -> List[Dict[str, Any]]:
             related_dread_count=dread,
             rationale=rationale,
         )
-        for cve_id, cvss, epss, percentile, risk, confidence, is_kev, recency, correlation, graph, nlp, urlhaus, dread, rationale in specs
+        for cve_id, cvss, epss, percentile, confidence, is_kev, recency, correlation, graph, nlp, urlhaus, dread, rationale in specs
     ]
 
 
@@ -239,7 +239,6 @@ def _evaluation_row(
     cvss_score: float,
     epss_score: float,
     epss_percentile: float,
-    risk_score: float,
     confidence: float,
     is_kev: bool,
     recency_signal: float,
@@ -250,18 +249,8 @@ def _evaluation_row(
     related_dread_count: int,
     rationale: str,
 ) -> Dict[str, Any]:
-    weights = {
-        "severity_signal": 0.68,
-        "epss_signal": 0.12,
-        "kev_signal": 0.12,
-        "recency_signal": 0.05,
-        "correlation_signal": 0.12,
-        "graph_signal": 0.03,
-        "nlp_context_signal": 0.06,
-    }
-    severity_signal = round(cvss_score / 10.0, 4)
     signals = {
-        "severity_signal": severity_signal,
+        "severity_signal": normalize_cvss(cvss_score),
         "epss_signal": epss_score,
         "kev_signal": 1.0 if is_kev else 0.0,
         "recency_signal": recency_signal,
@@ -269,6 +258,8 @@ def _evaluation_row(
         "graph_signal": graph_signal,
         "nlp_context_signal": nlp_context_signal,
     }
+    signal_breakdown = calculate_risk_score_from_normalized_signals(signals)
+    risk_score = signal_breakdown["risk_score_from_signals"]
     return {
         "cve_id": cve_id,
         "risk_score": risk_score,
@@ -284,10 +275,7 @@ def _evaluation_row(
             "fixture_rationale": rationale,
         },
         "feature_breakdown": {
-            **signals,
-            "risk_signal_weights": weights,
-            "risk_raw": risk_score,
-            "risk_score_from_signals": risk_score,
+            **signal_breakdown,
             "final_score": risk_score,
             "raw_score_before_clamp": risk_score,
             "recentness_bonus": round(recency_signal, 3),

@@ -24,10 +24,24 @@ All signal values are bounded in `[0, 1]`.
 | `graph_signal` | graph centrality/context | graph centrality clamped to `[0, 1]` |
 | `nlp_context_signal` | intrinsic CVE context | capped NLP context score |
 
+## Canonical Formula
+
+The canonical CVE signal weights are defined in `agent-python/src/analysis/scoring_signals.py` as `DEFAULT_RISK_SIGNAL_WEIGHTS`. The CVE scorer, thesis fixture generation, thesis artifacts, and formula-consistency tests all use that source of truth.
+
+| Signal | Weight | Rationale |
+| --- | ---: | --- |
+| `severity_signal` | `0.68` | CVSS severity remains the dominant intrinsic technical signal. |
+| `epss_signal` | `0.12` | EPSS contributes exploit likelihood without replacing severity. |
+| `kev_signal` | `0.12` | CISA KEV contributes active exploitation evidence when listed. |
+| `recency_signal` | `0.05` | Recent publication/modification modestly increases operational urgency. |
+| `correlation_signal` | `0.12` | Accepted CVE-IOC evidence adds support only after evidence gating. |
+| `graph_signal` | `0.03` | Graph context provides a bounded contextual adjustment. |
+| `nlp_context_signal` | `0.06` | Intrinsic CVE context contributes a bounded domain-context signal. |
+
 Default signal scoring:
 
 ```text
-risk_raw =
+weighted_signal_score =
   severity_signal * 0.68
 + epss_signal * 0.12
 + kev_signal * 0.12
@@ -36,8 +50,17 @@ risk_raw =
 + graph_signal * 0.03
 + nlp_context_signal * 0.06
 
-risk_score = clamp(risk_raw * 10, 0, 10)
+risk_raw = weighted_signal_score * 10
+risk_score = clamp(risk_raw, 0, 10)
 ```
+
+The weights are heuristic engineering choices, not learned parameters and not statistical calibration. Their purpose is to encode the thesis model's intended risk semantics: CVSS supplies severity, EPSS supplies likelihood, KEV supplies active exploitation evidence, and accepted correlation/graph/context signals refine operational prioritization.
+
+## Contribution Breakdown
+
+Each scored CVE exposes `risk_signal_contributions`, where each entry is the normalized signal multiplied by its canonical weight before scaling to `[0, 10]`. The sum is exported as `weighted_signal_score`; `risk_raw` is the scaled value before the final `[0, 10]` clamp; `risk_score_from_signals` and `final_score` are the bounded final model score.
+
+The deterministic thesis fixture uses the same helper as the scorer to derive `risk_score_from_signals`, `final_score`, and `model_risk_score`. Fixture records define normalized signal inputs rather than independently assigning final model scores, so thesis artifacts cannot silently drift away from the implemented formula.
 
 EPSS is exploit likelihood, not impact [EPSS-FIRST]. KEV is active exploitation evidence, not a complete list of all exploited CVEs [CISA-KEV]. KEV absence therefore means "not listed in KEV", not "not exploited".
 
