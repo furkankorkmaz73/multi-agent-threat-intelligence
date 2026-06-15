@@ -10,6 +10,9 @@ from pymongo.errors import ServerSelectionTimeoutError
 import evaluation.learned_calibration as learned_calibration
 from evaluation.learned_calibration import (
     DATASET_COLUMNS,
+    LABEL_COLUMNS,
+    build_proxy_label_row,
+    build_proxy_label_rows,
     build_feasibility_report,
     export_from_documents,
     extract_calibration_row,
@@ -60,6 +63,29 @@ def _synthetic_doc() -> dict:
             },
         },
     }
+
+
+def _row(**overrides) -> dict:
+    row = {column: "" for column in DATASET_COLUMNS}
+    row.update(
+        {
+            "cve_id": "CVE-2026-LABEL",
+            "cvss_score": 5.0,
+            "risk_score": 4.0,
+            "confidence": 0.45,
+            "epss_signal": 0.0,
+            "nlp_context_signal": 0.2,
+            "recency_signal": 0.2,
+            "accepted_urlhaus_count": 0,
+            "accepted_dread_count": 0,
+            "epss_available": False,
+            "kev_status_known": False,
+            "kev_listed": False,
+            "intrinsic_criticality_floor_applied": False,
+        }
+    )
+    row.update(overrides)
+    return row
 
 
 def test_extract_calibration_row_from_synthetic_analyzed_cve():
@@ -152,6 +178,9 @@ def test_feasibility_report_from_synthetic_rows():
     assert "missing_feature_percentages" in report
     assert "coverage" in report
     assert report["dataset_columns"] == DATASET_COLUMNS
+    assert "proxy_label_class_counts" in report
+    assert "proxy_binary_counts" in report
+    assert "proxy_label_trainability" in report
 
 
 def test_feasibility_report_accounts_for_missing_features():
@@ -174,23 +203,31 @@ def test_export_writes_three_output_files(tmp_path):
     result = export_from_documents(docs, tmp_path, generated_at="2026-06-16T00:00:00+03:00")
 
     dataset = tmp_path / "learned_calibration_dataset.csv"
+    labels = tmp_path / "learned_calibration_labels.csv"
     report = tmp_path / "learned_calibration_report.json"
     summary = tmp_path / "learned_calibration_summary.md"
     assert result["paths"] == {
         "dataset": str(dataset),
+        "labels": str(labels),
         "report": str(report),
         "summary": str(summary),
     }
     assert dataset.exists()
+    assert labels.exists()
     assert report.exists()
     assert summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
     assert rows[0]["cve_id"] == "CVE-2026-1234"
+    label_rows = list(csv.DictReader(labels.open(encoding="utf-8")))
+    assert list(label_rows[0].keys()) == LABEL_COLUMNS
+    assert label_rows[0]["cve_id"] == "CVE-2026-1234"
     payload = json.loads(report.read_text(encoding="utf-8"))
     assert payload["analyzed_records_exported"] == 1
+    assert payload["proxy_label_class_counts"]["strategy_a"]["high"] == 1
     text = summary.read_text(encoding="utf-8")
     assert "Proxy labels are not ground truth" in text
     assert "production `risk_score` behavior is unchanged" in text
+    assert "Proxy labels are deterministic thesis-analysis aids" in text
 
 
 def test_export_sorts_rows_by_cve_id(tmp_path):
@@ -219,3 +256,62 @@ def test_mongodb_unavailable_error_is_clear(monkeypatch):
 
     with pytest.raises(RuntimeError, match="MongoDB is unavailable for learned calibration export"):
         read_analyzed_cves_from_mongo()
+
+
+def test_proxy_label_strategy_a_intrinsic_known_evidence_rules():
+    kev = build_proxy_label_row(_row(kev_listed=True, kev_status_known=True))
+    epss = build_proxy_label_row(_row(epss_signal=0.7, epss_available=True))
+    intrinsic = build_proxy_label_row(
+        _row(cvss_score=9.8, nlp_context_signal=0.8, recency_signal=0.5)
+    )
+    medium = build_proxy_label_row(_row(cvss_score=7.0))
+    low = build_proxy_label_row(_row(cvss_score=4.0, nlp_context_signal=0.1))
+
+    assert kev["proxy_label_strategy_a"] == "high"
+    assert epss["proxy_label_strategy_a"] == "high"
+    assert intrinsic["proxy_label_strategy_a"] == "high"
+    assert medium["proxy_label_strategy_a"] == "medium"
+    assert low["proxy_label_strategy_a"] == "low"
+    assert intrinsic["proxy_binary_high_strategy_a"] == 1
+    assert "intrinsic criticality pattern" in intrinsic["proxy_label_reason"]
+
+
+def test_proxy_label_strategy_b_sparse_evidence_and_accepted_support():
+    sparse = _row()
+    accepted = _row(accepted_urlhaus_count=1, confidence=0.62)
+
+    sparse_label = build_proxy_label_row(sparse)
+    accepted_label = build_proxy_label_row(accepted)
+    report = build_feasibility_report([sparse, accepted], total_records_read=2, generated_at="2026-06-16T00:00:00+03:00")
+
+    assert sparse_label["proxy_label_strategy_b"] == "low"
+    assert accepted_label["proxy_label_strategy_b"] == "high"
+    assert "accepted external evidence with adequate confidence" in accepted_label["proxy_label_reason"]
+    assert report["proxy_label_trainability"]["strategy_b"] == "not_recommended"
+    assert "Strategy B is limited by sparse EPSS/KEV" in " ".join(report["warnings"])
+
+
+def test_proxy_label_strategy_c_conservative_binary_rules():
+    high = build_proxy_label_row(
+        _row(
+            cvss_score=9.8,
+            nlp_context_signal=0.9,
+            intrinsic_criticality_floor_applied=True,
+        )
+    )
+    not_high = build_proxy_label_row(_row(cvss_score=9.8, nlp_context_signal=0.9))
+
+    assert high["proxy_label_strategy_c"] == "high"
+    assert high["proxy_binary_high_strategy_c"] == 1
+    assert not_high["proxy_label_strategy_c"] == "not_high"
+    assert not_high["proxy_binary_high_strategy_c"] == 0
+
+
+def test_proxy_label_generation_does_not_mutate_input_rows():
+    rows = [_row(cvss_score=9.8, nlp_context_signal=0.8, recency_signal=0.7)]
+    before = deepcopy(rows)
+
+    labels = build_proxy_label_rows(rows)
+
+    assert rows == before
+    assert labels[0]["proxy_label_strategy_a"] == "high"

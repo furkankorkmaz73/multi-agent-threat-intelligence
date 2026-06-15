@@ -48,6 +48,18 @@ DATASET_COLUMNS = [
     "age_days",
 ]
 
+LABEL_COLUMNS = [
+    "cve_id",
+    "proxy_label_strategy_a",
+    "proxy_binary_high_strategy_a",
+    "proxy_label_strategy_b",
+    "proxy_binary_high_strategy_b",
+    "proxy_label_strategy_c",
+    "proxy_binary_high_strategy_c",
+    "proxy_label_reason",
+    "proxy_label_limitations",
+]
+
 
 def extract_calibration_row(doc: Mapping[str, Any]) -> dict[str, Any] | None:
     source = deepcopy(dict(doc))
@@ -138,12 +150,15 @@ def build_feasibility_report(
     floor_count = sum(1 for row in rows if _truthy(row.get("intrinsic_criticality_floor_applied")))
     missing_feature_counts = _missing_feature_counts(rows)
     missing_feature_percentages = _missing_feature_percentages(missing_feature_counts, analyzed)
+    label_rows = build_proxy_label_rows(rows)
+    label_summary = summarize_proxy_labels(label_rows, rows)
     warnings = _coverage_warnings(
         analyzed=analyzed,
         epss_count=epss_count,
         kev_known_count=kev_known_count,
         accepted_external_count=urlhaus_accepted + dread_accepted,
     )
+    warnings.extend(label_summary["warnings"])
     return {
         "generated_at": generated,
         "total_cve_records_read": int(total_records_read),
@@ -185,6 +200,12 @@ def build_feasibility_report(
             accepted_external_count=urlhaus_accepted + dread_accepted,
         ),
         "summary_statistics": _summary_statistics(rows),
+        "proxy_label_class_counts": label_summary["class_counts"],
+        "proxy_label_percentages": label_summary["percentages"],
+        "proxy_binary_counts": label_summary["binary_counts"],
+        "proxy_label_trainability": label_summary["trainability"],
+        "proxy_label_limitations": label_summary["limitations"],
+        "proxy_label_reason_counts": label_summary["reason_counts"],
     }
 
 
@@ -206,12 +227,14 @@ def render_summary_markdown(report: Mapping[str, Any]) -> str:
         f"- EPSS available: `{report.get('epss_availability_count', 0)}`",
         f"- KEV status known: `{report.get('kev_known_count', 0)}`",
         f"- Accepted external evidence count: `{report.get('accepted_external_evidence_count', 0)}`",
+        f"- Proxy label rows: `{report.get('analyzed_records_exported', 0)}`",
         "",
         "## Feasibility",
         "",
         f"- Proxy-supervised learning feasibility: `{label}`",
         "",
         "The current data is suitable for proxy-supervised learning only if feature coverage and externally defensible proxy labels are adequate. Weak EPSS, KEV, or external-evidence coverage limits what can be learned responsibly.",
+        "Proxy labels are deterministic thesis-analysis aids, not verified exploitation outcomes.",
         "",
         "## Warnings",
         "",
@@ -228,17 +251,25 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     dataset_path = output / "learned_calibration_dataset.csv"
+    labels_path = output / "learned_calibration_labels.csv"
     report_path = output / "learned_calibration_report.json"
     summary_path = output / "learned_calibration_summary.md"
+    label_rows = build_proxy_label_rows(rows)
     with dataset_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=DATASET_COLUMNS)
         writer.writeheader()
         for row in rows:
             writer.writerow({column: row.get(column, "") for column in DATASET_COLUMNS})
+    with labels_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=LABEL_COLUMNS)
+        writer.writeheader()
+        for row in label_rows:
+            writer.writerow({column: row.get(column, "") for column in LABEL_COLUMNS})
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True, default=str), encoding="utf-8")
     summary_path.write_text(render_summary_markdown(report), encoding="utf-8")
     return {
         "dataset": str(dataset_path),
+        "labels": str(labels_path),
         "report": str(report_path),
         "summary": str(summary_path),
     }
@@ -319,6 +350,208 @@ def strict_validation_errors(report: Mapping[str, Any]) -> list[str]:
     if _safe_int(report.get("records_with_cvss")) == 0:
         errors.append("No exported records include CVSS scores.")
     return errors
+
+
+def build_proxy_label_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    return [build_proxy_label_row(row) for row in deepcopy(list(rows))]
+
+
+def build_proxy_label_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    strategy_a, reason_a = _strategy_a_label(row)
+    strategy_b, reason_b, limitations_b = _strategy_b_label(row)
+    strategy_c, reason_c = _strategy_c_label(row)
+    limitations = list(limitations_b)
+    if _safe_float(row.get("epss_signal")) == 0 and not _truthy(row.get("epss_available")):
+        limitations.append("epss coverage missing or unavailable")
+    if not _truthy(row.get("kev_status_known")):
+        limitations.append("kev status unknown")
+    if _accepted_external_count(row) == 0:
+        limitations.append("no accepted external evidence")
+    return {
+        "cve_id": row.get("cve_id", ""),
+        "proxy_label_strategy_a": strategy_a,
+        "proxy_binary_high_strategy_a": int(strategy_a == "high"),
+        "proxy_label_strategy_b": strategy_b,
+        "proxy_binary_high_strategy_b": int(strategy_b == "high"),
+        "proxy_label_strategy_c": strategy_c,
+        "proxy_binary_high_strategy_c": int(strategy_c == "high"),
+        "proxy_label_reason": f"strategy_a:{reason_a}; strategy_b:{reason_b}; strategy_c:{reason_c}",
+        "proxy_label_limitations": "; ".join(dict.fromkeys(limitations)),
+    }
+
+
+def summarize_proxy_labels(
+    label_rows: Sequence[Mapping[str, Any]],
+    feature_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    strategies = ("strategy_a", "strategy_b", "strategy_c")
+    class_counts = {
+        strategy: _label_counts(label_rows, f"proxy_label_{strategy}")
+        for strategy in strategies
+    }
+    percentages = {
+        strategy: _label_percentages(counts, len(label_rows))
+        for strategy, counts in class_counts.items()
+    }
+    binary_counts = {
+        strategy: {
+            "high": sum(_safe_int(row.get(f"proxy_binary_high_{strategy}")) for row in label_rows),
+            "not_high": len(label_rows) - sum(_safe_int(row.get(f"proxy_binary_high_{strategy}")) for row in label_rows),
+        }
+        for strategy in strategies
+    }
+    reason_counts = _proxy_reason_counts(label_rows)
+    limitations = {
+        "strategy_a": ["Uses intrinsic technical severity when external evidence is sparse."],
+        "strategy_b": _strategy_b_limitations(feature_rows),
+        "strategy_c": ["Conservative binary proxy; non-high cases are not negative ground truth."],
+    }
+    trainability = {
+        strategy: _trainability_decision(
+            total=len(label_rows),
+            high_count=binary_counts[strategy]["high"],
+            limitations=limitations[strategy],
+        )
+        for strategy in strategies
+    }
+    warnings = _proxy_label_warnings(label_rows, feature_rows, reason_counts)
+    return {
+        "class_counts": class_counts,
+        "percentages": percentages,
+        "binary_counts": binary_counts,
+        "trainability": trainability,
+        "limitations": limitations,
+        "reason_counts": reason_counts,
+        "warnings": warnings,
+    }
+
+
+def _strategy_a_label(row: Mapping[str, Any]) -> tuple[str, str]:
+    if _truthy(row.get("kev_listed")):
+        return "high", "kev listed"
+    if _safe_float(row.get("epss_signal")) >= 0.7:
+        return "high", "epss signal >= 0.7"
+    if (
+        _safe_float(row.get("cvss_score")) >= 9.8
+        and _safe_float(row.get("nlp_context_signal")) >= 0.8
+        and _safe_float(row.get("recency_signal")) >= 0.5
+    ):
+        return "high", "intrinsic criticality pattern"
+    if (
+        _safe_float(row.get("cvss_score")) >= 7.0
+        or _safe_float(row.get("epss_signal")) >= 0.1
+        or _safe_float(row.get("nlp_context_signal")) >= 0.5
+    ):
+        return "medium", "moderate intrinsic or exploit-likelihood signal"
+    return "low", "no high or medium proxy condition met"
+
+
+def _strategy_b_label(row: Mapping[str, Any]) -> tuple[str, str, list[str]]:
+    limitations: list[str] = []
+    epss = _safe_float(row.get("epss_signal"))
+    accepted_external = _accepted_external_count(row)
+    confidence = _safe_float(row.get("confidence"))
+    if not _truthy(row.get("epss_available")):
+        limitations.append("epss unavailable")
+    if not _truthy(row.get("kev_status_known")):
+        limitations.append("kev status unknown")
+    if accepted_external == 0:
+        limitations.append("accepted external evidence absent")
+    if _truthy(row.get("kev_listed")):
+        return "high", "kev listed", limitations
+    if epss >= 0.7:
+        return "high", "high epss signal", limitations
+    if accepted_external > 0 and confidence >= 0.5:
+        return "high", "accepted external evidence with adequate confidence", limitations
+    if epss >= 0.1 or accepted_external > 0:
+        return "medium", "some evidence signal but below high threshold", limitations
+    return "low", "no accepted evidence-prioritized high condition met", limitations
+
+
+def _strategy_c_label(row: Mapping[str, Any]) -> tuple[str, str]:
+    if _truthy(row.get("kev_listed")):
+        return "high", "kev listed"
+    if _safe_float(row.get("epss_signal")) >= 0.8:
+        return "high", "epss signal >= 0.8"
+    if (
+        _truthy(row.get("intrinsic_criticality_floor_applied"))
+        and _safe_float(row.get("cvss_score")) >= 9.8
+        and _safe_float(row.get("nlp_context_signal")) >= 0.8
+    ):
+        return "high", "intrinsic floor with critical cvss and strong context"
+    return "not_high", "no conservative high proxy condition met"
+
+
+def _accepted_external_count(row: Mapping[str, Any]) -> int:
+    return _safe_int(row.get("accepted_urlhaus_count")) + _safe_int(row.get("accepted_dread_count"))
+
+
+def _label_counts(rows: Sequence[Mapping[str, Any]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        label = str(row.get(key, ""))
+        counts[label] = counts.get(label, 0) + 1
+    return counts
+
+
+def _label_percentages(counts: Mapping[str, int], total: int) -> dict[str, float]:
+    if total <= 0:
+        return {label: 0.0 for label in counts}
+    return {label: round(count / total, 4) for label, count in counts.items()}
+
+
+def _strategy_b_limitations(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    total = len(rows)
+    if total == 0:
+        return ["no exported rows"]
+    limitations: list[str] = []
+    epss_available = sum(1 for row in rows if _truthy(row.get("epss_available")))
+    kev_known = sum(1 for row in rows if _truthy(row.get("kev_status_known")))
+    accepted_external = sum(1 for row in rows if _accepted_external_count(row) > 0)
+    if epss_available / total < 0.25:
+        limitations.append("EPSS coverage is sparse")
+    if kev_known / total < 0.25:
+        limitations.append("KEV status coverage is sparse")
+    if accepted_external == 0:
+        limitations.append("accepted external evidence is absent")
+    return limitations or ["evidence coverage is adequate for this proxy definition"]
+
+
+def _trainability_decision(*, total: int, high_count: int, limitations: Sequence[str]) -> str:
+    if total < 50 or high_count == 0:
+        return "not_recommended"
+    high_fraction = high_count / total
+    if high_fraction < 0.01 or high_fraction > 0.95:
+        return "not_recommended"
+    if any("sparse" in limitation or "absent" in limitation for limitation in limitations):
+        return "limited"
+    return "usable"
+
+
+def _proxy_reason_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        for reason in str(row.get("proxy_label_reason", "")).split(";"):
+            reason = reason.strip()
+            if not reason:
+                continue
+            counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
+def _proxy_label_warnings(
+    label_rows: Sequence[Mapping[str, Any]],
+    feature_rows: Sequence[Mapping[str, Any]],
+    reason_counts: Mapping[str, int],
+) -> list[str]:
+    warnings: list[str] = []
+    high_a = sum(1 for row in label_rows if row.get("proxy_label_strategy_a") == "high")
+    intrinsic_high_a = reason_counts.get("strategy_a:intrinsic criticality pattern", 0)
+    if high_a and intrinsic_high_a / high_a >= 0.7:
+        warnings.append("Strategy A high labels are mostly CVSS/intrinsic-context driven.")
+    if _strategy_b_limitations(feature_rows) != ["evidence coverage is adequate for this proxy definition"]:
+        warnings.append("Strategy B is limited by sparse EPSS/KEV or accepted external-evidence coverage.")
+    return warnings
 
 
 def _missing_feature_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:

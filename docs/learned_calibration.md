@@ -23,10 +23,19 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.learned_
 Generated files:
 
 - `reports/thesis/learned_calibration_dataset.csv`
+- `reports/thesis/learned_calibration_labels.csv`
 - `reports/thesis/learned_calibration_report.json`
 - `reports/thesis/learned_calibration_summary.md`
 
 The dataset includes exported scoring signals, confidence fields, URLhaus candidate accounting, accepted evidence counts, EPSS/KEV coverage flags, and intrinsic-criticality floor indicators when available.
+
+The labels CSV adds deterministic proxy labels for later learned-calibration experiments:
+
+- Strategy A combines intrinsic technical severity with known evidence.
+- Strategy B prioritizes KEV, high EPSS, and accepted external evidence, and is marked limited when evidence coverage is sparse.
+- Strategy C is a conservative high-vs-rest proxy for strongly defensible high cases.
+
+These labels are experimental proxies. They are not ground truth and should not be presented as real-world exploitation outcomes.
 
 Rows are sorted deterministically by CVE identifier. The exporter accepts the current `analysis.*` shape and legacy top-level evidence, feature, and confidence structures so older analyzed records can be inspected without rewriting database contents.
 
