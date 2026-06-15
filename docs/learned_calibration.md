@@ -8,6 +8,18 @@ The command reads existing analyzed CVE records from MongoDB collection `cve_int
 make thesis-learned-calibration
 ```
 
+The underlying CLI also supports:
+
+```bash
+cd agent-python
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.learned_calibration \
+  --output-dir ../reports/thesis \
+  --limit 0 \
+  --strict
+```
+
+`--limit` can be used for local smoke checks. `--strict` exits non-zero when no usable analyzed CVE rows or no CVSS-bearing rows are exported.
+
 Generated files:
 
 - `reports/thesis/learned_calibration_dataset.csv`
@@ -15,6 +27,10 @@ Generated files:
 - `reports/thesis/learned_calibration_summary.md`
 
 The dataset includes exported scoring signals, confidence fields, URLhaus candidate accounting, accepted evidence counts, EPSS/KEV coverage flags, and intrinsic-criticality floor indicators when available.
+
+Rows are sorted deterministically by CVE identifier. The exporter accepts the current `analysis.*` shape and legacy top-level evidence, feature, and confidence structures so older analyzed records can be inspected without rewriting database contents.
+
+The JSON report includes both legacy top-level counts and structured sections for coverage, evidence counts, dataset columns, and missing-feature accounting. Missing EPSS/KEV or accepted external evidence should be interpreted as coverage limitations, not as proof that learned calibration is valid or invalid by itself.
 
 ## Interpretation
 
