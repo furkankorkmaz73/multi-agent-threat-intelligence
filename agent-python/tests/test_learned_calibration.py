@@ -280,6 +280,7 @@ def test_export_writes_three_output_files(tmp_path):
     runtime_snapshot_summary = tmp_path / "learned_calibration_runtime_snapshot.md"
     reviewer_checklist = tmp_path / "learned_calibration_reviewer_checklist.json"
     reviewer_checklist_summary = tmp_path / "learned_calibration_reviewer_checklist.md"
+    defense_qa = tmp_path / "learned_calibration_defense_qa.md"
     manifest = tmp_path / "learned_calibration_manifest.json"
     manifest_summary = tmp_path / "learned_calibration_manifest.md"
     assert result["paths"] == {
@@ -326,6 +327,7 @@ def test_export_writes_three_output_files(tmp_path):
         "runtime_snapshot_summary": str(runtime_snapshot_summary),
         "reviewer_checklist": str(reviewer_checklist),
         "reviewer_checklist_summary": str(reviewer_checklist_summary),
+        "defense_qa": str(defense_qa),
         "manifest": str(manifest),
         "manifest_summary": str(manifest_summary),
     }
@@ -372,6 +374,7 @@ def test_export_writes_three_output_files(tmp_path):
     assert runtime_snapshot_summary.exists()
     assert reviewer_checklist.exists()
     assert reviewer_checklist_summary.exists()
+    assert defense_qa.exists()
     assert manifest.exists()
     assert manifest_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
@@ -438,6 +441,10 @@ def test_export_writes_three_output_files(tmp_path):
     checklist_payload = json.loads(reviewer_checklist.read_text(encoding="utf-8"))
     assert checklist_payload["item_count"] >= 10
     assert any(section["section"] == "manual review items for the thesis author" for section in checklist_payload["sections"])
+    defense_text = defense_qa.read_text(encoding="utf-8")
+    assert defense_text.count("## Q") >= 20
+    assert "live Dread crawling was not used" in defense_text
+    assert "does not prove real-world exploitation prediction" in defense_text
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert manifest_payload["status"] == "complete"
     assert any(item["group"] == "dataset" for item in manifest_payload["artifacts"])
@@ -1046,6 +1053,7 @@ def test_learned_calibration_manifest_reports_files(tmp_path):
         "learned_calibration_runtime_snapshot.md",
         "learned_calibration_reviewer_checklist.json",
         "learned_calibration_reviewer_checklist.md",
+        "learned_calibration_defense_qa.md",
     ):
         (tmp_path / name).write_text("x", encoding="utf-8")
 

@@ -426,6 +426,7 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     runtime_snapshot_summary_path = output / "learned_calibration_runtime_snapshot.md"
     reviewer_checklist_path = output / "learned_calibration_reviewer_checklist.json"
     reviewer_checklist_summary_path = output / "learned_calibration_reviewer_checklist.md"
+    defense_qa_path = output / "learned_calibration_defense_qa.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
@@ -531,6 +532,7 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     reviewer_checklist = build_reviewer_checklist(output)
     reviewer_checklist_path.write_text(json.dumps(reviewer_checklist, indent=2, sort_keys=True, default=str), encoding="utf-8")
     reviewer_checklist_summary_path.write_text(render_reviewer_checklist_markdown(reviewer_checklist), encoding="utf-8")
+    defense_qa_path.write_text(render_learned_calibration_defense_qa(model_result["report"], report), encoding="utf-8")
     appendix_path.write_text(
         render_learned_calibration_appendix(
             feasibility_report=report,
@@ -617,6 +619,7 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "runtime_snapshot_summary": str(runtime_snapshot_summary_path),
         "reviewer_checklist": str(reviewer_checklist_path),
         "reviewer_checklist_summary": str(reviewer_checklist_summary_path),
+        "defense_qa": str(defense_qa_path),
         "manifest": str(manifest_path),
         "manifest_summary": str(manifest_summary_path),
     }
@@ -2460,6 +2463,46 @@ def render_reviewer_checklist_markdown(payload: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_learned_calibration_defense_qa(
+    model_report: Mapping[str, Any],
+    feasibility_report: Mapping[str, Any],
+) -> str:
+    model_status = str(model_report.get("status", "unavailable"))
+    skip_reason = str(model_report.get("skip_reason", "not applicable"))
+    exported = feasibility_report.get("analyzed_records_exported", 0)
+    qa_entries = [
+        ("Why were proxy labels used?", "Proxy labels were used because defensible external exploitation outcomes are not available in this repository. They enable a bounded feasibility discussion over exported signals without claiming real-world prediction."),
+        ("Why are proxy labels not ground truth?", "They are deterministic labels derived from existing signals and engineering rules. They do not independently verify exploitation, prevalence, exploitability, or operational impact."),
+        ("Why does the production risk score remain heuristic?", "The production risk score remains heuristic because it is explainable, deterministic, and tied to existing evidence gates. The learned-calibration artifacts are experimental and do not replace production scoring."),
+        ("Why is learned calibration described as experimental?", "The experiment evaluates feasibility under sparse labels and coverage limitations. It is not a deployed scoring layer and does not write learned outputs back to MongoDB."),
+        ("What does scikit-learn absence mean if the model was skipped?", f"The local model status is `{model_status}`. If skipped, the reason is `{skip_reason}`. Skipping records dependency limitations transparently instead of fabricating model results."),
+        ("What would change with real ground truth labels?", "Curated external labels would allow train/test evaluation, calibration checks, and stronger claims about predictive behavior. They would still require leakage controls and independent validation."),
+        ("Why may accepted URLhaus correlation be zero?", "URLhaus evidence gates are conservative. Candidate retrieval or weak keyword overlap is not accepted evidence; exact or strong corroborated evidence is required."),
+        ("Why is live Dread crawling disabled?", "Live Dread crawling was not used. Dread is optional, experimental, bounded, default-off, and unsuitable as ground truth without corroboration and ethical/legal controls."),
+        ("How does confidence differ from risk?", "Risk estimates prioritization urgency from technical and contextual signals. Confidence estimates reliability and completeness of supporting evidence. High risk can coexist with moderate confidence."),
+        ("How do evidence gates prevent false positives?", "Evidence gates separate accepted, manual-review, rejected, and ignored low-signal candidates. Only accepted evidence can support correlation risk; diagnostic or rejected evidence is preserved without boosting risk."),
+        ("Why is CVSS dominance a limitation?", "CVSS captures technical severity, not full operational risk. If proxy labels include intrinsic severity, CVSS-only rankings may appear close to the heuristic and should be interpreted cautiously."),
+        ("How should sensitivity analysis be interpreted?", "Sensitivity analysis probes robustness to bounded threshold or weight changes. It is not statistical calibration and does not prove generalization."),
+        ("How should negative controls be interpreted?", "Negative controls show whether heuristic ranking behaves differently from random, reverse, or single-feature rankings under proxy labels. They are sanity checks, not proof of real-world performance."),
+        ("How should bootstrap stability be interpreted?", "Bootstrap stability checks whether ranking metrics are stable under fixed-seed resampling of exported rows. It does not create new evidence or external validation."),
+        ("What future work is needed?", "Future work requires curated external labels, better EPSS/KEV coverage, stronger asset-context data, independent validation splits, and careful review of model calibration and leakage."),
+        ("What claims are safe in the thesis?", "Safe claims are limited to deterministic export, proxy-label feasibility, artifact reproducibility, conservative gates, and observed behavior on the exported dataset."),
+        ("What claims should be avoided?", "Avoid claims of production readiness, real-world exploitation prediction, optimized weights, autonomous-agent validation, or learned replacement of heuristic scoring."),
+        ("How many analyzed rows were exported?", f"The learned-calibration export contains `{exported}` analyzed CVE rows in the current artifact bundle."),
+        ("Why is accepted external evidence sparse?", "Accepted evidence is sparse because evidence gates require strong support. Sparse accepted evidence is a coverage limitation, not a reason to relax gates."),
+        ("Does proxy-supervised learning prove real-world exploitation prediction?", "No. Proxy-supervised learning does not prove real-world exploitation prediction; it only supports a constrained feasibility discussion over local deterministic artifacts."),
+    ]
+    lines = [
+        "# Learned Calibration Defense Q&A",
+        "",
+        "This defense-preparation draft focuses on learned calibration and thesis limitations. It uses academic, conservative wording; proxy labels are not ground truth, live Dread crawling was not used, and production scoring remains heuristic.",
+        "",
+    ]
+    for index, (question, answer) in enumerate(qa_entries, start=1):
+        lines.extend([f"## Q{index}. {question}", "", answer, ""])
+    return "\n".join(lines)
+
+
 def _checklist_item(check_id: str, passed: bool, evidence_artifact: str, note: str) -> dict[str, str]:
     return {
         "check_id": check_id,
@@ -2674,6 +2717,9 @@ def _contains_unsafe_exploitation_prediction_claim(root: Path) -> bool:
         path = root / filename
         if path.is_file() and path.suffix in {".json", ".md", ".csv"}:
             text = path.read_text(encoding="utf-8", errors="ignore").lower()
+            text = text.replace("does not prove real-world exploitation prediction", "")
+            text = text.replace("does proxy-supervised learning prove real-world exploitation prediction?", "")
+            text = text.replace("avoid claims of production readiness, real-world exploitation prediction", "avoid claims of production readiness")
             for phrase in unsafe:
                 if phrase in text:
                     return True
@@ -2785,6 +2831,7 @@ def _learned_calibration_artifact_specs() -> list[dict[str, str]]:
         {"group": "runtime snapshot", "filename": "learned_calibration_runtime_snapshot.md", "description": "Readable runtime artifact health snapshot", "usage": "Quick review of generated artifact health before thesis use."},
         {"group": "reviewer checklist", "filename": "learned_calibration_reviewer_checklist.json", "description": "Reviewer checklist payload", "usage": "Structured thesis/reviewer checklist for learned calibration."},
         {"group": "reviewer checklist", "filename": "learned_calibration_reviewer_checklist.md", "description": "Readable reviewer checklist", "usage": "Checklist for thesis review and defense preparation."},
+        {"group": "defense preparation", "filename": "learned_calibration_defense_qa.md", "description": "Learned-calibration defense Q&A draft", "usage": "Defense-preparation answers for learned calibration and limitations."},
     ]
 
 

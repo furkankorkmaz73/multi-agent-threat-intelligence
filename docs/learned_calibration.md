@@ -68,6 +68,7 @@ Generated files:
 - `reports/thesis/learned_calibration_runtime_snapshot.md`
 - `reports/thesis/learned_calibration_reviewer_checklist.json`
 - `reports/thesis/learned_calibration_reviewer_checklist.md`
+- `reports/thesis/learned_calibration_defense_qa.md`
 - `reports/thesis/learned_calibration_quality_report.json`
 - `reports/thesis/learned_calibration_quality_report.md`
 
@@ -118,6 +119,8 @@ The appendix artifact is a long-form English draft assembled from generated arti
 The runtime-snapshot artifacts summarize local learned-calibration artifact health from files and git metadata. They record the current branch and HEAD, core artifact presence, key CSV row counts, JSON status values, model-training status, scikit-learn availability, known validation commands, and warnings for missing or empty optional artifacts.
 
 The reviewer-checklist artifacts provide structured thesis review items across reproducibility, artifacts, proxy-label validity, leakage, model training, ranking metrics, limitations, no-overclaim checks, defense readiness, and manual author review. Each item records a status, evidence artifact, and reviewer note.
+
+The defense Q&A artifact provides concise academic answers for common thesis-defense questions about proxy labels, heuristic scoring, skipped model training, URLhaus/Dread limitations, confidence-vs-risk separation, sensitivity, bootstrap stability, negative controls, and safe thesis claims.
 
 The quality report artifacts are produced by `make thesis-learned-calibration-quality`. The gate checks required learned-calibration files, JSON parseability, CSV headers, limitation language, experimental framing, unchanged production risk score wording, unchanged evidence-gate wording, and absence of real-world exploitation-proof claims.
 
