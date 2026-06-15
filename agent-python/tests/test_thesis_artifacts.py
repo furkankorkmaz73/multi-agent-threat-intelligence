@@ -1,6 +1,68 @@
 import json
+from pathlib import Path
 
 from evaluation.thesis_artifacts import generate_thesis_artifacts
+
+
+RESULTS_ABLATION_HEADER = "| Variant | Status | Precision@5 | Recall@5 | NDCG@5 | Mean KEV Rank | Reason |"
+BAD_RESULTS_SUMMARY_FORMATTING = (
+    "likelihood,KEV",
+    "fixture,while",
+    "evidence,graph",
+    "confidence,while",
+    "donot",
+    "Mean KEVRank",
+    "1.0|",
+    "7.571429|",
+    "removalrequires",
+)
+
+
+def _assert_markdown_tables_have_consistent_pipe_counts(markdown: str) -> None:
+    table_counts: list[int] = []
+    for line in [*markdown.splitlines(), ""]:
+        if line.startswith("|"):
+            assert line.startswith("| ")
+            assert line.endswith(" |")
+            table_counts.append(_unescaped_pipe_count(line))
+            continue
+
+        if table_counts:
+            assert len(set(table_counts)) == 1
+            table_counts = []
+
+
+def _unescaped_pipe_count(line: str) -> int:
+    count = 0
+    for index, character in enumerate(line):
+        if character == "|" and (index == 0 or line[index - 1] != "\\"):
+            count += 1
+    return count
+
+
+def _assert_results_ablation_table_is_well_formed(markdown: str) -> None:
+    lines = markdown.splitlines()
+    heading_index = lines.index("## Ablation Findings")
+    table = []
+    for line in lines[heading_index + 1 :]:
+        if line.startswith("|"):
+            table.append(line)
+        elif table:
+            break
+
+    assert table
+    assert table[0] == RESULTS_ABLATION_HEADER
+    assert len({_unescaped_pipe_count(line) for line in table}) == 1
+    assert _unescaped_pipe_count(table[0]) == 8
+    for row in table[2:]:
+        cells = [cell.strip() for cell in row.strip("|").split("|")]
+        assert len(cells) == 7
+        if cells[0] == "without_external_evidence":
+            assert cells[1] == "unsupported"
+            assert cells[2:6] == ["", "", "", ""]
+            assert cells[6].startswith("Removing external evidence")
+        else:
+            assert cells[6] == ""
 
 
 def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
@@ -90,6 +152,7 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
         "ablation_summary.md",
         "correlation_decisions.csv",
         "case_studies.json",
+        "results_summary.md",
         "methodology_summary.md",
         "manifest.json",
     }
@@ -97,6 +160,7 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
     assert first["record_count"] == second["record_count"] == 1
     assert "scoring_distribution" in first["generated_files"]
     assert "scoring_distribution_md" in first["generated_files"]
+    assert "results_summary" in first["generated_files"]
     assert (tmp_path / "first" / "benchmark_summary.csv").read_text(encoding="utf-8") == (
         tmp_path / "second" / "benchmark_summary.csv"
     ).read_text(encoding="utf-8")
@@ -104,6 +168,7 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
     assert "| Strategy | Top 5 CVEs | Precision@5 | Recall@5 | NDCG@5 | Mean KEV Rank |" in (
         tmp_path / "first" / "benchmark_summary.md"
     ).read_text(encoding="utf-8")
+    assert "## Evaluation Setup" in (tmp_path / "first" / "results_summary.md").read_text(encoding="utf-8")
 
 
 def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
@@ -136,11 +201,67 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
     } <= case_names
     benchmark_md = (tmp_path / "out" / "benchmark_summary.md").read_text(encoding="utf-8")
     ablation_md = (tmp_path / "out" / "ablation_summary.md").read_text(encoding="utf-8")
+    results_path = tmp_path / "out" / "results_summary.md"
+    assert results_path == Path(manifest["generated_files"]["results_summary"])
+    results_md = results_path.read_text(encoding="utf-8")
     assert "Mean KEV Rank" in benchmark_md
     assert "Mean KEV Rank" in ablation_md
     assert "Mean KEVRank" not in ablation_md
     assert "1.0| 5.714286" not in ablation_md
-    for line in benchmark_md.splitlines() + ablation_md.splitlines():
-        if line.startswith("|"):
-            assert line.startswith("| ")
-            assert line.endswith(" |")
+    _assert_markdown_tables_have_consistent_pipe_counts(benchmark_md)
+    _assert_markdown_tables_have_consistent_pipe_counts(ablation_md)
+    for heading in (
+        "## Evaluation Setup",
+        "## Benchmark Findings",
+        "## Scoring Distribution Findings",
+        "## Ablation Findings",
+        "## Correlation Decision Findings",
+        "## Case Study Highlights",
+        "## Limitations",
+    ):
+        assert heading in results_md
+    for strategy in (
+        "cvss_only",
+        "epss_only",
+        "cvss_epss",
+        "kev_first",
+        "model_risk",
+        "model_confidence_weighted",
+        "model_confidence_filtered",
+        "signal_based_model",
+    ):
+        assert strategy in results_md
+    for variant in (
+        "without_epss",
+        "without_kev",
+        "without_correlation",
+        "without_graph",
+        "without_recency",
+        "without_confidence_weighting",
+        "without_external_evidence",
+    ):
+        assert variant in results_md
+    assert "not a live operational benchmark" in results_md
+    assert "statistical significance" in results_md
+    for case in (
+        "high_risk_correlated",
+        "medium_cvss_high_epss_kev",
+        "high_cvss_low_external_evidence",
+        "dread_only_manual_review",
+        "asset_applicability_difference",
+    ):
+        assert case in results_md
+    assert RESULTS_ABLATION_HEADER in results_md
+    assert "| without_external_evidence | unsupported |  |  |  |  | Removing external evidence" in results_md
+    for expected_spacing in (
+        "likelihood, KEV",
+        "fixture, while",
+        "evidence, graph",
+        "confidence, while",
+        "do not",
+    ):
+        assert expected_spacing in results_md
+    for regression in BAD_RESULTS_SUMMARY_FORMATTING:
+        assert regression not in results_md
+    _assert_markdown_tables_have_consistent_pipe_counts(results_md)
+    _assert_results_ablation_table_is_well_formed(results_md)

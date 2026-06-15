@@ -72,6 +72,7 @@ def generate_thesis_artifacts(
         "ablation_summary_md": output / "ablation_summary.md",
         "correlation_decisions": output / "correlation_decisions.csv",
         "case_studies": output / "case_studies.json",
+        "results_summary": output / "results_summary.md",
         "methodology_summary": output / "methodology_summary.md",
         "manifest": output / "manifest.json",
     }
@@ -101,6 +102,15 @@ def generate_thesis_artifacts(
         files["correlation_decisions"],
     )
     write_report_json({"cases": scenario.get("notable_cases") or []}, files["case_studies"])
+    files["results_summary"].write_text(
+        _results_summary_markdown(
+            scenario=scenario,
+            records=records,
+            baselines=evaluation.get("baselines") or {},
+            ablation_report=ablation_report,
+        ),
+        encoding="utf-8",
+    )
     files["methodology_summary"].write_text(_methodology_summary_markdown(), encoding="utf-8")
 
     manifest = {
@@ -371,6 +381,225 @@ def _methodology_summary_markdown() -> str:
             "Citation placeholders: [CVSS-FIRST], [EPSS-FIRST], [CISA-KEV], [CISA-SSVC].",
         ]
     ) + "\n"
+
+
+def _results_summary_markdown(
+    *,
+    scenario: Mapping[str, Any],
+    records: Sequence[EvaluationRecord],
+    baselines: Mapping[str, Any],
+    ablation_report: Mapping[str, Any],
+) -> str:
+    level_counts = _risk_level_counts(records)
+    risk_scores = [record.model_risk_score for record in records]
+    model_ranked = sorted(records, key=lambda record: (-record.model_risk_score, record.cve_id))
+    cvss_ranked = sorted(records, key=lambda record: (-record.cvss_score, record.cve_id))
+    model_rank = {record.cve_id: index + 1 for index, record in enumerate(model_ranked)}
+    cvss_rank = {record.cve_id: index + 1 for index, record in enumerate(cvss_ranked)}
+    disagreements = sorted(
+        records,
+        key=lambda record: (abs(model_rank[record.cve_id] - cvss_rank[record.cve_id]), record.cve_id),
+        reverse=True,
+    )[:5]
+    decision_counts = _decision_counts(scenario.get("correlation_decisions") or [])
+    cases = list(scenario.get("notable_cases") or [])
+
+    lines = [
+        "# Thesis Results Summary",
+        "",
+        "## Evaluation Setup",
+        "",
+        f"The evaluation uses a controlled deterministic fixture with {len(records)} CVE-like records. It has no live network dependency and is intended for behavioral validation, not statistical real-world benchmarking.",
+        "",
+        "Compared strategies: `cvss_only`, `epss_only`, `cvss_epss`, `kev_first`, `model_risk`, `model_confidence_weighted`, `model_confidence_filtered`, and `signal_based_model`.",
+        "",
+        "## Benchmark Findings",
+        "",
+        "CVSS-only underperforms in this controlled fixture because high-severity records with weak exploitation evidence can outrank more operationally urgent cases. Signal/model-based rankings improve prioritization by combining severity with exploit likelihood, KEV status, recency, accepted correlation, graph context, and intrinsic context.",
+        "",
+        _benchmark_findings_sentence(baselines),
+        "",
+        "KEV-first is a useful baseline for active exploitation, but it is not the same as full risk modeling because it does not account for non-KEV high-EPSS records, correlation strength, confidence, or contextual signals.",
+        "",
+        _benchmark_results_table(baselines),
+        "",
+        "## Scoring Distribution Findings",
+        "",
+        "- Risk level distribution: "
+        + ", ".join(f"{level}={count}" for level, count in sorted(level_counts.items()))
+        + ".",
+        f"- Risk score range: min={min(risk_scores) if risk_scores else 0.0}, max={max(risk_scores) if risk_scores else 0.0}, mean={round(mean(risk_scores), 4) if risk_scores else 0.0}.",
+        "- High-CVSS / weak-evidence cases remain meaningful risk, but they are not automatically CRITICAL when confidence and exploitation evidence are weak.",
+        "- Medium-CVSS records with high EPSS and KEV can outrank high-CVSS weak-evidence controls.",
+        "",
+        _ranking_disagreement_table(disagreements, model_rank=model_rank, cvss_rank=cvss_rank),
+        "",
+        "## Ablation Findings",
+        "",
+        "Removing EPSS weakens prioritization in the controlled fixture, while removing KEV weakens KEV ranking quality. Temporal/recency removal also changes ranking quality. The external-evidence ablation remains explicitly unsupported because accepted evidence, graph context, temporal caps, and confidence would need recomputation.",
+        "",
+        _ablation_results_table(ablation_report),
+        "",
+        "## Correlation Decision Findings",
+        "",
+        "Accepted, rejected, and manual-review correlation outcomes are exported. Accepted correlations can support risk and confidence, while rejected and manual-review cases remain diagnostic and do not automatically increase risk.",
+        "",
+        _markdown_table(
+            ["Decision", "Count"],
+            [[decision, count] for decision, count in sorted(decision_counts.items())],
+            align=["left", "right"],
+        ),
+        "",
+        "## Case Study Highlights",
+        "",
+        _case_study_highlights(cases),
+        "",
+        "## Limitations",
+        "",
+        "This fixture is deterministic and controlled. It is not a live operational benchmark and does not support statistical significance claims.",
+        "",
+        "Real-world validation requires larger NVD, EPSS, CISA KEV, URLhaus/Dread, and asset-context datasets. Dread remains optional and experimental.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _benchmark_findings_sentence(baselines: Mapping[str, Any]) -> str:
+    weighted = _metric(baselines, "model_confidence_weighted", "precision_at_5")
+    model = _metric(baselines, "model_risk", "precision_at_5")
+    if weighted != "" and model != "" and safe_float(weighted) >= safe_float(model):
+        return "The confidence-weighted model reaches stronger top-5 prioritization in this fixture."
+    return "The confidence-weighted model is reported separately because confidence changes prioritization semantics."
+
+
+def _benchmark_results_table(baselines: Mapping[str, Any]) -> str:
+    strategies = [
+        "cvss_only",
+        "epss_only",
+        "cvss_epss",
+        "kev_first",
+        "model_risk",
+        "model_confidence_weighted",
+        "model_confidence_filtered",
+        "signal_based_model",
+    ]
+    return _markdown_table(
+        ["Strategy", "Precision@5", "Recall@5", "NDCG@5", "Mean KEV Rank"],
+        [
+            [
+                strategy,
+                _metric(baselines, strategy, "precision_at_5"),
+                _metric(baselines, strategy, "recall_at_5"),
+                _metric(baselines, strategy, "ndcg_at_5"),
+                _metric(baselines, strategy, "mean_kev_rank"),
+            ]
+            for strategy in strategies
+        ],
+        align=["left", "right", "right", "right", "right"],
+    )
+
+
+def _ablation_results_table(ablation_report: Mapping[str, Any]) -> str:
+    rows = []
+    for variant, payload in sorted((ablation_report.get("supported") or {}).items()):
+        metrics = payload.get("metrics") or {}
+        rows.append(
+            [
+                variant,
+                payload.get("status"),
+                metrics.get("precision_at_5", ""),
+                metrics.get("recall_at_5", ""),
+                metrics.get("ndcg_at_5", ""),
+                metrics.get("mean_kev_rank", ""),
+                "",
+            ]
+        )
+    for variant, payload in sorted((ablation_report.get("unsupported") or {}).items()):
+        rows.append([variant, payload.get("status"), "", "", "", "", payload.get("reason")])
+    return _markdown_table(
+        ["Variant", "Status", "Precision@5", "Recall@5", "NDCG@5", "Mean KEV Rank", "Reason"],
+        rows,
+        align=["left", "left", "right", "right", "right", "right", "left"],
+    )
+
+
+def _ranking_disagreement_table(
+    records: Sequence[EvaluationRecord],
+    *,
+    model_rank: Mapping[str, int],
+    cvss_rank: Mapping[str, int],
+) -> str:
+    return _markdown_table(
+        ["CVE", "Model Rank", "CVSS Rank", "Risk", "CVSS", "EPSS", "KEV", "Rationale"],
+        [
+            [
+                record.cve_id,
+                model_rank[record.cve_id],
+                cvss_rank[record.cve_id],
+                record.model_risk_score,
+                record.cvss_score,
+                record.epss_score,
+                record.is_kev,
+                _feature_value(record, "fixture_rationale", ""),
+            ]
+            for record in records
+        ],
+        align=["left", "right", "right", "right", "right", "right", "left", "left"],
+    )
+
+
+def _case_study_highlights(cases: Sequence[Mapping[str, Any]]) -> str:
+    required = [
+        "high_risk_correlated",
+        "medium_cvss_high_epss_kev",
+        "high_cvss_low_external_evidence",
+        "dread_only_manual_review",
+        "asset_applicability_difference",
+        "stale_low_risk",
+    ]
+    by_name = {case.get("case"): case for case in cases}
+    rows = []
+    for name in required:
+        case = by_name.get(name)
+        if not case:
+            continue
+        rows.append([name, case.get("entity_id", ""), _case_note(case)])
+    return _markdown_table(["Case", "Entity", "Highlight"], rows, align=["left", "left", "left"])
+
+
+def _case_note(case: Mapping[str, Any]) -> str:
+    if case.get("case") == "high_risk_correlated":
+        return f"High-risk correlated case with {case.get('accepted_decisions', 0)} accepted decision(s)."
+    if case.get("case") == "medium_cvss_high_epss_kev":
+        return "Medium CVSS is prioritized by high EPSS and KEV evidence."
+    if case.get("case") == "high_cvss_low_external_evidence":
+        return "High CVSS remains meaningful but lacks strong external support."
+    if case.get("case") == "dread_only_manual_review":
+        return f"Dread-only evidence remains manual review ({case.get('manual_review_decisions', 0)} decision)."
+    if case.get("case") == "asset_applicability_difference":
+        return f"Applicable asset score {case.get('applicable_asset_score')}; non-applicable asset score {case.get('non_applicable_asset_score')}."
+    if case.get("case") == "stale_low_risk":
+        return f"Stale case remains lower priority with risk score {case.get('risk_score')}."
+    return str(case.get("description", ""))
+
+
+def _metric(baselines: Mapping[str, Any], strategy: str, metric: str) -> Any:
+    return ((baselines.get(strategy) or {}).get("metrics") or {}).get(metric, "")
+
+
+def _decision_counts(decisions: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for decision in decisions:
+        status = str(decision.get("decision") or decision.get("status") or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def _risk_level_counts(records: Sequence[EvaluationRecord]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in records:
+        level = _risk_level(record.model_risk_score)
+        counts[level] = counts.get(level, 0) + 1
+    return counts
 
 
 def _write_benchmark_summary(baselines: Mapping[str, Any], path: Path) -> None:
