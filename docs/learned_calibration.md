@@ -59,6 +59,8 @@ Generated files:
 - `reports/thesis/learned_calibration_coverage_strata.csv`
 - `reports/thesis/learned_calibration_coverage_strata.json`
 - `reports/thesis/learned_calibration_coverage_strata.md`
+- `reports/thesis/learned_calibration_negative_controls.json`
+- `reports/thesis/learned_calibration_negative_controls.md`
 - `reports/thesis/learned_calibration_quality_report.json`
 - `reports/thesis/learned_calibration_quality_report.md`
 
@@ -99,6 +101,8 @@ The proxy-sensitivity artifacts evaluate deterministic threshold combinations fo
 The bootstrap-stability artifacts run a fixed-seed deterministic bootstrap over exported CVE rows. Each iteration resamples rows with replacement, evaluates the unchanged heuristic `risk_score` ranking against Strategy A proxy labels, and records precision@10/50/100, recall@50/100, and top-50/top-100 overlap with the full-data ranking. The summary reports mean, standard deviation, min, max, and 5th/95th percentiles. This is a ranking robustness probe, not statistical calibration or evidence of real-world generalization.
 
 The coverage-strata artifacts group exported CVE rows by EPSS availability, KEV status, KEV listing, accepted external evidence, intrinsic-floor application, confidence bucket, risk bucket, ignored URLhaus candidate bucket, and rejected URLhaus candidate bucket. Each row reports count, average risk, average confidence, proxy high counts, missing feature percentages, and an interpretation note. This helps explain where learned-calibration feasibility is limited by evidence coverage rather than by ranking mechanics.
+
+The negative-control artifacts compare the unchanged heuristic `risk_score` ranking with fixed-seed random ranking, reverse risk ranking, CVSS-only ranking, recency-only ranking, NLP-context-only ranking, and confidence-only ranking. They report precision@10/50/100, recall@50/100, and top-K overlap with the heuristic ranking. The interpretation explicitly notes when CVSS-only is close to the heuristic because Strategy A is partly intrinsic-severity driven.
 
 The quality report artifacts are produced by `make thesis-learned-calibration-quality`. The gate checks required learned-calibration files, JSON parseability, CSV headers, limitation language, experimental framing, unchanged production risk score wording, unchanged evidence-gate wording, and absence of real-world exploitation-proof claims.
 

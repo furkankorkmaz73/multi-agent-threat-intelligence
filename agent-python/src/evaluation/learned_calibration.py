@@ -416,6 +416,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     coverage_strata_path = output / "learned_calibration_coverage_strata.csv"
     coverage_strata_json_path = output / "learned_calibration_coverage_strata.json"
     coverage_strata_summary_path = output / "learned_calibration_coverage_strata.md"
+    negative_controls_path = output / "learned_calibration_negative_controls.json"
+    negative_controls_summary_path = output / "learned_calibration_negative_controls.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
@@ -435,6 +437,7 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     proxy_sensitivity = compute_proxy_threshold_sensitivity(rows, label_rows)
     bootstrap_stability = compute_bootstrap_stability(rows, label_rows)
     coverage_strata = compute_coverage_strata(rows, label_rows)
+    negative_controls = compute_negative_controls(rows, label_rows)
     with dataset_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=DATASET_COLUMNS)
         writer.writeheader()
@@ -512,6 +515,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
             writer.writerow({column: row.get(column, "") for column in COVERAGE_STRATA_COLUMNS})
     coverage_strata_json_path.write_text(json.dumps(coverage_strata, indent=2, sort_keys=True, default=str), encoding="utf-8")
     coverage_strata_summary_path.write_text(render_coverage_strata_markdown(coverage_strata), encoding="utf-8")
+    negative_controls_path.write_text(json.dumps(negative_controls, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    negative_controls_summary_path.write_text(render_negative_controls_markdown(negative_controls), encoding="utf-8")
     artifact_manifest = build_learned_calibration_manifest(output)
     manifest_path.write_text(json.dumps(artifact_manifest, indent=2, sort_keys=True, default=str), encoding="utf-8")
     manifest_summary_path.write_text(render_learned_calibration_manifest_markdown(artifact_manifest), encoding="utf-8")
@@ -550,6 +555,8 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "coverage_strata": str(coverage_strata_path),
         "coverage_strata_json": str(coverage_strata_json_path),
         "coverage_strata_summary": str(coverage_strata_summary_path),
+        "negative_controls": str(negative_controls_path),
+        "negative_controls_summary": str(negative_controls_summary_path),
         "manifest": str(manifest_path),
         "manifest_summary": str(manifest_summary_path),
     }
@@ -1885,6 +1892,172 @@ def _coverage_interpretation(stratum: str, group: str) -> str:
     return "Coverage stratum for learned-calibration feasibility discussion."
 
 
+def build_negative_control_rankings(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    seed: int = 42,
+) -> dict[str, list[Mapping[str, Any]]]:
+    base_rows = sorted(rows, key=lambda row: str(row.get("cve_id", "")))
+    random_rows = list(base_rows)
+    Random(seed).shuffle(random_rows)
+    return {
+        "heuristic_risk_score": sorted(base_rows, key=lambda row: (-_safe_float(row.get("risk_score")), str(row.get("cve_id", "")))),
+        "random_seed_42": random_rows,
+        "reverse_risk_score": sorted(base_rows, key=lambda row: (_safe_float(row.get("risk_score")), str(row.get("cve_id", "")))),
+        "cvss_only": sorted(base_rows, key=lambda row: (-_safe_float(row.get("cvss_score")), str(row.get("cve_id", "")))),
+        "recency_only": sorted(base_rows, key=lambda row: (-_safe_float(row.get("recency_signal")), str(row.get("cve_id", "")))),
+        "nlp_context_only": sorted(base_rows, key=lambda row: (-_safe_float(row.get("nlp_context_signal")), str(row.get("cve_id", "")))),
+        "confidence_only": sorted(base_rows, key=lambda row: (-_safe_float(row.get("confidence")), str(row.get("cve_id", "")))),
+    }
+
+
+def compute_negative_controls(
+    rows: Sequence[Mapping[str, Any]],
+    label_rows: Sequence[Mapping[str, Any]],
+    *,
+    seed: int = 42,
+) -> dict[str, Any]:
+    label_by_cve = {str(row.get("cve_id", "")): row for row in label_rows}
+    rankings = build_negative_control_rankings(rows, seed=seed)
+    heuristic_ids = [str(row.get("cve_id", "")) for row in rankings["heuristic_risk_score"]]
+    control_rows = [
+        _negative_control_metrics(name, ranked, label_by_cve, heuristic_ids)
+        for name, ranked in rankings.items()
+    ]
+    heuristic = next(row for row in control_rows if row["control"] == "heuristic_risk_score")
+    random_control = next(row for row in control_rows if row["control"] == "random_seed_42")
+    cvss_control = next(row for row in control_rows if row["control"] == "cvss_only")
+    interpretation = _negative_control_interpretation(heuristic, random_control, cvss_control)
+    return {
+        "status": "evaluated" if rows else "skipped",
+        "seed": seed,
+        "record_count": len(rows),
+        "proxy_label_strategy": "strategy_a",
+        "controls": control_rows,
+        "interpretation": interpretation,
+        "notes": [
+            "Negative controls compare alternate deterministic rankings against Strategy A proxy labels.",
+            "The analysis does not train a model and does not change production scoring.",
+            "CVSS-only may be close to heuristic ranking when proxy labels are driven by intrinsic severity.",
+        ],
+    }
+
+
+def render_negative_controls_markdown(payload: Mapping[str, Any]) -> str:
+    interpretation = payload.get("interpretation") or {}
+    lines = [
+        "# Learned Calibration Negative Controls",
+        "",
+        "This artifact compares the unchanged heuristic `risk_score` ranking with deterministic weak or single-feature rankings.",
+        "It uses Strategy A proxy labels and does not train a model or change production scoring.",
+        "",
+        f"- Status: `{payload.get('status', '')}`",
+        f"- Seed: `{payload.get('seed', '')}`",
+        f"- Records: `{payload.get('record_count', 0)}`",
+        f"- Heuristic outperforms random control: `{interpretation.get('heuristic_outperforms_random', False)}`",
+        f"- CVSS-only close to heuristic: `{interpretation.get('cvss_only_close_to_heuristic', False)}`",
+        "",
+        "## Metric Comparison",
+        "",
+        "| Control | Precision@10 | Precision@50 | Precision@100 | Recall@50 | Recall@100 | Top50 Overlap | Top100 Overlap |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in payload.get("controls") or []:
+        lines.append(
+            "| {control} | {p10} | {p50} | {p100} | {r50} | {r100} | {o50} | {o100} |".format(
+                control=row.get("control", ""),
+                p10=_format_metric(row.get("precision_at_10")),
+                p50=_format_metric(row.get("precision_at_50")),
+                p100=_format_metric(row.get("precision_at_100")),
+                r50=_format_metric(row.get("recall_at_50")),
+                r100=_format_metric(row.get("recall_at_100")),
+                o50=_format_metric(row.get("top50_overlap_with_heuristic")),
+                o100=_format_metric(row.get("top100_overlap_with_heuristic")),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Interpretation",
+            "",
+            str(interpretation.get("summary", "")),
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _negative_control_metrics(
+    control: str,
+    ranked_rows: Sequence[Mapping[str, Any]],
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+    heuristic_ids: Sequence[str],
+) -> dict[str, Any]:
+    labels = [
+        _safe_int((label_by_cve.get(str(row.get("cve_id", ""))) or {}).get("proxy_binary_high_strategy_a"))
+        for row in ranked_rows
+    ]
+    positives = sum(labels)
+    return {
+        "control": control,
+        "status": "evaluated" if positives else "no_positive_labels",
+        "positive_count": positives,
+        "precision_at_10": _precision_at_k(labels, 10) if positives else None,
+        "precision_at_50": _precision_at_k(labels, 50) if positives else None,
+        "precision_at_100": _precision_at_k(labels, 100) if positives else None,
+        "recall_at_50": _recall_at_k(labels, 50) if positives else None,
+        "recall_at_100": _recall_at_k(labels, 100) if positives else None,
+        "top10_overlap_with_heuristic": _ordered_top_overlap(ranked_rows, heuristic_ids, 10),
+        "top50_overlap_with_heuristic": _ordered_top_overlap(ranked_rows, heuristic_ids, 50),
+        "top100_overlap_with_heuristic": _ordered_top_overlap(ranked_rows, heuristic_ids, 100),
+    }
+
+
+def _negative_control_interpretation(
+    heuristic: Mapping[str, Any],
+    random_control: Mapping[str, Any],
+    cvss_control: Mapping[str, Any],
+) -> dict[str, Any]:
+    heuristic_p50 = _safe_float(heuristic.get("precision_at_50"))
+    random_p50 = _safe_float(random_control.get("precision_at_50"))
+    cvss_p50 = _safe_float(cvss_control.get("precision_at_50"))
+    outperforms_random = heuristic_p50 > random_p50
+    cvss_close = abs(heuristic_p50 - cvss_p50) <= 0.05
+    if outperforms_random and cvss_close:
+        summary = (
+            "The heuristic ranking outperforms the fixed-seed random control under Strategy A proxy labels. "
+            "CVSS-only is close to the heuristic, which is expected because Strategy A includes intrinsic severity."
+        )
+    elif outperforms_random:
+        summary = "The heuristic ranking outperforms the fixed-seed random control under Strategy A proxy labels."
+    elif cvss_close:
+        summary = (
+            "The heuristic ranking does not clearly outperform the fixed-seed random control under Strategy A proxy labels. "
+            "CVSS-only is close to the heuristic, which is expected because Strategy A includes intrinsic severity."
+        )
+    else:
+        summary = "The heuristic ranking does not clearly outperform the fixed-seed random control under Strategy A proxy labels."
+    return {
+        "heuristic_outperforms_random": outperforms_random,
+        "cvss_only_close_to_heuristic": cvss_close,
+        "summary": summary,
+    }
+
+
+def _ordered_top_overlap(
+    ranked_rows: Sequence[Mapping[str, Any]],
+    heuristic_ids: Sequence[str],
+    k: int,
+) -> float:
+    if k <= 0:
+        return 0.0
+    heuristic_top = set(heuristic_ids[: min(k, len(heuristic_ids))])
+    if not heuristic_top:
+        return 0.0
+    ranked_top = {str(row.get("cve_id", "")) for row in ranked_rows[: min(k, len(ranked_rows))]}
+    return round(len(ranked_top & heuristic_top) / len(heuristic_top), 4)
+
+
 def _threshold_label(row: Mapping[str, Any], thresholds: Mapping[str, float]) -> str:
     if _truthy(row.get("kev_listed")) or _safe_float(row.get("epss_signal")) >= thresholds["epss_high_threshold"]:
         return "high"
@@ -1981,6 +2154,8 @@ def _learned_calibration_artifact_specs() -> list[dict[str, str]]:
         {"group": "coverage strata", "filename": "learned_calibration_coverage_strata.csv", "description": "Coverage-limitation strata rows", "usage": "Stratifies proxy-label feasibility by evidence and score-context coverage."},
         {"group": "coverage strata", "filename": "learned_calibration_coverage_strata.json", "description": "Coverage-limitation strata payload", "usage": "Machine-readable coverage strata analysis."},
         {"group": "coverage strata", "filename": "learned_calibration_coverage_strata.md", "description": "Readable coverage-limitation strata summary", "usage": "Thesis discussion of data coverage effects."},
+        {"group": "negative controls", "filename": "learned_calibration_negative_controls.json", "description": "Negative-control ranking comparisons", "usage": "Compares heuristic ranking with random, reverse, and single-feature controls."},
+        {"group": "negative controls", "filename": "learned_calibration_negative_controls.md", "description": "Readable negative-control summary", "usage": "Thesis sanity check for proxy-label ranking metrics."},
     ]
 
 

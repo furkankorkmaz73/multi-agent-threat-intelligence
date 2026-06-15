@@ -23,6 +23,7 @@ from evaluation.learned_calibration import (
     build_proxy_label_rows,
     build_leakage_checks,
     build_learned_calibration_manifest,
+    build_negative_control_rankings,
     build_publication_tables,
     build_feasibility_report,
     bootstrap_sample_indices,
@@ -31,6 +32,7 @@ from evaluation.learned_calibration import (
     compute_coverage_strata,
     compute_disagreement_cases,
     compute_learned_vs_heuristic_comparison,
+    compute_negative_controls,
     compute_proxy_threshold_sensitivity,
     compute_ablation_experiments,
     export_from_documents,
@@ -40,6 +42,7 @@ from evaluation.learned_calibration import (
     proxy_threshold_grid,
     read_analyzed_cves_from_mongo,
     render_coverage_strata_markdown,
+    render_negative_controls_markdown,
     select_case_studies,
     strict_validation_errors,
     summarize_bootstrap_metrics,
@@ -262,6 +265,8 @@ def test_export_writes_three_output_files(tmp_path):
     coverage_strata = tmp_path / "learned_calibration_coverage_strata.csv"
     coverage_strata_json = tmp_path / "learned_calibration_coverage_strata.json"
     coverage_strata_summary = tmp_path / "learned_calibration_coverage_strata.md"
+    negative_controls = tmp_path / "learned_calibration_negative_controls.json"
+    negative_controls_summary = tmp_path / "learned_calibration_negative_controls.md"
     manifest = tmp_path / "learned_calibration_manifest.json"
     manifest_summary = tmp_path / "learned_calibration_manifest.md"
     assert result["paths"] == {
@@ -299,6 +304,8 @@ def test_export_writes_three_output_files(tmp_path):
         "coverage_strata": str(coverage_strata),
         "coverage_strata_json": str(coverage_strata_json),
         "coverage_strata_summary": str(coverage_strata_summary),
+        "negative_controls": str(negative_controls),
+        "negative_controls_summary": str(negative_controls_summary),
         "manifest": str(manifest),
         "manifest_summary": str(manifest_summary),
     }
@@ -336,6 +343,8 @@ def test_export_writes_three_output_files(tmp_path):
     assert coverage_strata.exists()
     assert coverage_strata_json.exists()
     assert coverage_strata_summary.exists()
+    assert negative_controls.exists()
+    assert negative_controls_summary.exists()
     assert manifest.exists()
     assert manifest_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
@@ -387,6 +396,9 @@ def test_export_writes_three_output_files(tmp_path):
     assert list(coverage_rows[0].keys()) == COVERAGE_STRATA_COLUMNS
     coverage_payload = json.loads(coverage_strata_json.read_text(encoding="utf-8"))
     assert coverage_payload["status"] == "evaluated"
+    negative_payload = json.loads(negative_controls.read_text(encoding="utf-8"))
+    assert negative_payload["status"] == "evaluated"
+    assert "random_seed_42" in {row["control"] for row in negative_payload["controls"]}
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert manifest_payload["status"] == "complete"
     assert any(item["group"] == "dataset" for item in manifest_payload["artifacts"])
@@ -986,6 +998,8 @@ def test_learned_calibration_manifest_reports_files(tmp_path):
         "learned_calibration_coverage_strata.csv",
         "learned_calibration_coverage_strata.json",
         "learned_calibration_coverage_strata.md",
+        "learned_calibration_negative_controls.json",
+        "learned_calibration_negative_controls.md",
     ):
         (tmp_path / name).write_text("x", encoding="utf-8")
 
@@ -1179,3 +1193,65 @@ def test_coverage_strata_markdown_summary_text():
     assert "# Learned Calibration Coverage-Limitation Strata" in markdown
     assert "| Stratum | Group | Count | Avg Risk | Avg Confidence | A High | B High | C High | Interpretation |" in markdown
     assert "Missing-feature percentages are available" in markdown
+
+
+def test_negative_control_random_ranking_is_reproducible():
+    rows = [_row(cve_id=f"CVE-{index}", risk_score=index) for index in range(10)]
+
+    first = build_negative_control_rankings(rows, seed=42)["random_seed_42"]
+    second = build_negative_control_rankings(rows, seed=42)["random_seed_42"]
+
+    assert [row["cve_id"] for row in first] == [row["cve_id"] for row in second]
+    assert [row["cve_id"] for row in first] != [row["cve_id"] for row in rows]
+
+
+def test_negative_control_reverse_risk_ranking():
+    rows = [
+        _row(cve_id="CVE-HIGH", risk_score=9.0),
+        _row(cve_id="CVE-LOW", risk_score=1.0),
+        _row(cve_id="CVE-MED", risk_score=5.0),
+    ]
+
+    rankings = build_negative_control_rankings(rows)
+
+    assert [row["cve_id"] for row in rankings["heuristic_risk_score"]] == ["CVE-HIGH", "CVE-MED", "CVE-LOW"]
+    assert [row["cve_id"] for row in rankings["reverse_risk_score"]] == ["CVE-LOW", "CVE-MED", "CVE-HIGH"]
+
+
+def test_negative_control_single_feature_rankings():
+    rows = [
+        _row(cve_id="CVE-CVSS", cvss_score=9.8, recency_signal=0.1, nlp_context_signal=0.1, confidence=0.1),
+        _row(cve_id="CVE-RECENCY", cvss_score=4.0, recency_signal=0.9, nlp_context_signal=0.2, confidence=0.2),
+        _row(cve_id="CVE-NLP", cvss_score=5.0, recency_signal=0.2, nlp_context_signal=0.95, confidence=0.3),
+        _row(cve_id="CVE-CONF", cvss_score=6.0, recency_signal=0.3, nlp_context_signal=0.4, confidence=0.99),
+    ]
+
+    rankings = build_negative_control_rankings(rows)
+
+    assert rankings["cvss_only"][0]["cve_id"] == "CVE-CVSS"
+    assert rankings["recency_only"][0]["cve_id"] == "CVE-RECENCY"
+    assert rankings["nlp_context_only"][0]["cve_id"] == "CVE-NLP"
+    assert rankings["confidence_only"][0]["cve_id"] == "CVE-CONF"
+
+
+def test_negative_control_metric_comparison_table():
+    rows = [
+        _row(cve_id="CVE-H1", risk_score=10.0, cvss_score=9.8, nlp_context_signal=0.9, recency_signal=0.8),
+        _row(cve_id="CVE-H2", risk_score=9.0, cvss_score=9.8, nlp_context_signal=0.9, recency_signal=0.8),
+        _row(cve_id="CVE-L1", risk_score=1.0, cvss_score=4.0, nlp_context_signal=0.1, recency_signal=0.1),
+        _row(cve_id="CVE-L2", risk_score=0.5, cvss_score=3.0, nlp_context_signal=0.1, recency_signal=0.1),
+    ]
+    labels = [
+        {**build_proxy_label_row(row), "proxy_binary_high_strategy_a": int(row["cve_id"].startswith("CVE-H"))}
+        for row in rows
+    ]
+
+    result = compute_negative_controls(rows, labels, seed=42)
+    markdown = render_negative_controls_markdown(result)
+
+    assert result["status"] == "evaluated"
+    assert {"heuristic_risk_score", "random_seed_42", "reverse_risk_score", "cvss_only"}.issubset(
+        {row["control"] for row in result["controls"]}
+    )
+    assert "| Control | Precision@10 | Precision@50 | Precision@100 | Recall@50 | Recall@100 | Top50 Overlap | Top100 Overlap |" in markdown
+    assert "CVSS-only is close to the heuristic" in markdown
