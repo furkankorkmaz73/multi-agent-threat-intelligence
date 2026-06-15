@@ -26,6 +26,8 @@ Generated files:
 - `reports/thesis/learned_calibration_labels.csv`
 - `reports/thesis/learned_calibration_report.json`
 - `reports/thesis/learned_calibration_summary.md`
+- `reports/thesis/learned_calibration_baseline_metrics.json`
+- `reports/thesis/learned_calibration_baseline_metrics.md`
 
 The dataset includes exported scoring signals, confidence fields, URLhaus candidate accounting, accepted evidence counts, EPSS/KEV coverage flags, and intrinsic-criticality floor indicators when available.
 
@@ -36,6 +38,8 @@ The labels CSV adds deterministic proxy labels for later learned-calibration exp
 - Strategy C is a conservative high-vs-rest proxy for strongly defensible high cases.
 
 These labels are experimental proxies. They are not ground truth and should not be presented as real-world exploitation outcomes.
+
+The baseline metric artifacts compare the existing heuristic `risk_score` ranking against the proxy labels. They report precision@K, recall@K, nDCG@K, high-label coverage, average risk by proxy class, risk bucket distribution by proxy class, and confidence distribution by proxy class. No-positive and tiny-positive strategies are retained with explicit status fields so sparse-label limitations remain visible.
 
 Rows are sorted deterministically by CVE identifier. The exporter accepts the current `analysis.*` shape and legacy top-level evidence, feature, and confidence structures so older analyzed records can be inspected without rewriting database contents.
 

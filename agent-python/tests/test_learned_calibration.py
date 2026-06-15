@@ -14,6 +14,7 @@ from evaluation.learned_calibration import (
     build_proxy_label_row,
     build_proxy_label_rows,
     build_feasibility_report,
+    compute_baseline_metrics,
     export_from_documents,
     extract_calibration_row,
     read_analyzed_cves_from_mongo,
@@ -206,16 +207,22 @@ def test_export_writes_three_output_files(tmp_path):
     labels = tmp_path / "learned_calibration_labels.csv"
     report = tmp_path / "learned_calibration_report.json"
     summary = tmp_path / "learned_calibration_summary.md"
+    baseline = tmp_path / "learned_calibration_baseline_metrics.json"
+    baseline_summary = tmp_path / "learned_calibration_baseline_metrics.md"
     assert result["paths"] == {
         "dataset": str(dataset),
         "labels": str(labels),
         "report": str(report),
         "summary": str(summary),
+        "baseline_metrics": str(baseline),
+        "baseline_summary": str(baseline_summary),
     }
     assert dataset.exists()
     assert labels.exists()
     assert report.exists()
     assert summary.exists()
+    assert baseline.exists()
+    assert baseline_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
     assert rows[0]["cve_id"] == "CVE-2026-1234"
     label_rows = list(csv.DictReader(labels.open(encoding="utf-8")))
@@ -224,6 +231,9 @@ def test_export_writes_three_output_files(tmp_path):
     payload = json.loads(report.read_text(encoding="utf-8"))
     assert payload["analyzed_records_exported"] == 1
     assert payload["proxy_label_class_counts"]["strategy_a"]["high"] == 1
+    baseline_payload = json.loads(baseline.read_text(encoding="utf-8"))
+    assert baseline_payload["ranking_method"] == "heuristic_risk_score"
+    assert "strategy_a" in baseline_payload["strategies"]
     text = summary.read_text(encoding="utf-8")
     assert "Proxy labels are not ground truth" in text
     assert "production `risk_score` behavior is unchanged" in text
@@ -315,3 +325,74 @@ def test_proxy_label_generation_does_not_mutate_input_rows():
 
     assert rows == before
     assert labels[0]["proxy_label_strategy_a"] == "high"
+
+
+def test_baseline_metrics_precision_recall_and_ndcg():
+    rows = [
+        _row(cve_id="CVE-1", risk_score=0.9),
+        _row(cve_id="CVE-2", risk_score=0.8),
+        _row(cve_id="CVE-3", risk_score=0.7),
+        _row(cve_id="CVE-4", risk_score=0.6),
+    ]
+    labels = [
+        {**build_proxy_label_row(rows[0]), "proxy_binary_high_strategy_a": 1, "proxy_label_strategy_a": "high"},
+        {**build_proxy_label_row(rows[1]), "proxy_binary_high_strategy_a": 0, "proxy_label_strategy_a": "low"},
+        {**build_proxy_label_row(rows[2]), "proxy_binary_high_strategy_a": 1, "proxy_label_strategy_a": "high"},
+        {**build_proxy_label_row(rows[3]), "proxy_binary_high_strategy_a": 0, "proxy_label_strategy_a": "low"},
+    ]
+
+    metrics = compute_baseline_metrics(rows, labels, generated_at="2026-06-16T00:00:00+03:00")
+    strategy = metrics["strategies"]["strategy_a"]
+
+    assert strategy["precision_at_k"]["10"] == 0.5
+    assert strategy["recall_at_k"]["10"] == 1.0
+    assert strategy["ndcg_at_k"]["10"] > 0
+    assert strategy["high_label_coverage"] == 0.5
+
+
+def test_baseline_metrics_handle_no_positive_labels():
+    rows = [_row(cve_id="CVE-1", risk_score=0.9), _row(cve_id="CVE-2", risk_score=0.8)]
+    labels = [
+        {**build_proxy_label_row(rows[0]), "proxy_binary_high_strategy_b": 0, "proxy_label_strategy_b": "low"},
+        {**build_proxy_label_row(rows[1]), "proxy_binary_high_strategy_b": 0, "proxy_label_strategy_b": "low"},
+    ]
+
+    metrics = compute_baseline_metrics(rows, labels, generated_at="2026-06-16T00:00:00+03:00")
+    strategy = metrics["strategies"]["strategy_b"]
+
+    assert strategy["status"] == "no_positive_labels"
+    assert strategy["precision_at_k"]["10"] is None
+    assert strategy["recall_at_k"]["50"] is None
+    assert strategy["ndcg_at_k"]["50"] is None
+
+
+def test_baseline_metrics_use_cve_id_for_tied_score_ordering():
+    rows = [_row(cve_id="CVE-B", risk_score=5.0), _row(cve_id="CVE-A", risk_score=5.0)]
+    labels = [
+        {**build_proxy_label_row(rows[0]), "proxy_binary_high_strategy_a": 0, "proxy_label_strategy_a": "low"},
+        {**build_proxy_label_row(rows[1]), "proxy_binary_high_strategy_a": 1, "proxy_label_strategy_a": "high"},
+    ]
+
+    metrics = compute_baseline_metrics(rows, labels, generated_at="2026-06-16T00:00:00+03:00")
+
+    assert metrics["strategies"]["strategy_a"]["precision_at_k"]["10"] == 0.5
+    assert metrics["strategies"]["strategy_a"]["recall_at_k"]["10"] == 1.0
+
+
+def test_baseline_metrics_include_bucket_distributions():
+    rows = [
+        _row(cve_id="CVE-H", risk_score=8.2, risk_level="HIGH", confidence=0.75),
+        _row(cve_id="CVE-L", risk_score=3.2, risk_level="LOW", confidence=0.25),
+    ]
+    labels = [
+        {**build_proxy_label_row(rows[0]), "proxy_binary_high_strategy_a": 1, "proxy_label_strategy_a": "high"},
+        {**build_proxy_label_row(rows[1]), "proxy_binary_high_strategy_a": 0, "proxy_label_strategy_a": "low"},
+    ]
+
+    metrics = compute_baseline_metrics(rows, labels, generated_at="2026-06-16T00:00:00+03:00")
+    strategy = metrics["strategies"]["strategy_a"]
+
+    assert strategy["risk_bucket_distribution_by_proxy_class"]["high"]["HIGH"] == 1
+    assert strategy["risk_bucket_distribution_by_proxy_class"]["low"]["LOW"] == 1
+    assert strategy["confidence_distribution_by_proxy_class"]["high"]["high"] == 1
+    assert strategy["confidence_distribution_by_proxy_class"]["low"]["low"] == 1

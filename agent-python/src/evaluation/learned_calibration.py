@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+from math import log2
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -254,7 +255,10 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     labels_path = output / "learned_calibration_labels.csv"
     report_path = output / "learned_calibration_report.json"
     summary_path = output / "learned_calibration_summary.md"
+    baseline_json_path = output / "learned_calibration_baseline_metrics.json"
+    baseline_md_path = output / "learned_calibration_baseline_metrics.md"
     label_rows = build_proxy_label_rows(rows)
+    baseline_metrics = compute_baseline_metrics(rows, label_rows)
     with dataset_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=DATASET_COLUMNS)
         writer.writeheader()
@@ -267,11 +271,15 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
             writer.writerow({column: row.get(column, "") for column in LABEL_COLUMNS})
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True, default=str), encoding="utf-8")
     summary_path.write_text(render_summary_markdown(report), encoding="utf-8")
+    baseline_json_path.write_text(json.dumps(baseline_metrics, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    baseline_md_path.write_text(render_baseline_metrics_markdown(baseline_metrics), encoding="utf-8")
     return {
         "dataset": str(dataset_path),
         "labels": str(labels_path),
         "report": str(report_path),
         "summary": str(summary_path),
+        "baseline_metrics": str(baseline_json_path),
+        "baseline_summary": str(baseline_md_path),
     }
 
 
@@ -424,6 +432,204 @@ def summarize_proxy_labels(
         "reason_counts": reason_counts,
         "warnings": warnings,
     }
+
+
+def compute_baseline_metrics(
+    rows: Sequence[Mapping[str, Any]],
+    label_rows: Sequence[Mapping[str, Any]],
+    *,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    label_by_cve = {str(row.get("cve_id", "")): row for row in label_rows}
+    ranked_rows = sorted(
+        rows,
+        key=lambda row: (-_safe_float(row.get("risk_score")), str(row.get("cve_id", ""))),
+    )
+    generated = generated_at or datetime.now(timezone.utc).isoformat()
+    return {
+        "generated_at": generated,
+        "ranking_method": "heuristic_risk_score",
+        "notes": [
+            "Metrics compare existing heuristic risk_score ranking against deterministic proxy labels.",
+            "Proxy labels are not ground truth and should not be interpreted as real-world exploitation labels.",
+            "No model training is performed in this baseline task.",
+        ],
+        "strategies": {
+            strategy: _baseline_metrics_for_strategy(ranked_rows, label_by_cve, strategy)
+            for strategy in ("strategy_a", "strategy_b", "strategy_c")
+        },
+    }
+
+
+def render_baseline_metrics_markdown(metrics: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration Baseline Metrics",
+        "",
+        "This artifact evaluates the existing heuristic `risk_score` ranking against deterministic proxy labels.",
+        "It does not train a model and does not change production scoring behavior.",
+        "",
+        "| Strategy | Status | Positives | Precision@10 | Recall@50 | nDCG@50 | High-label Coverage |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for strategy, payload in (metrics.get("strategies") or {}).items():
+        lines.append(
+            "| {strategy} | {status} | {positives} | {p10} | {r50} | {n50} | {coverage} |".format(
+                strategy=strategy,
+                status=payload.get("status", ""),
+                positives=payload.get("positive_count", 0),
+                p10=_format_metric((payload.get("precision_at_k") or {}).get("10")),
+                r50=_format_metric((payload.get("recall_at_k") or {}).get("50")),
+                n50=_format_metric((payload.get("ndcg_at_k") or {}).get("50")),
+                coverage=_format_metric(payload.get("high_label_coverage")),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "No-positive and tiny-positive strategies are retained in the report so limitations remain visible.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _baseline_metrics_for_strategy(
+    ranked_rows: Sequence[Mapping[str, Any]],
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+    strategy: str,
+) -> dict[str, Any]:
+    labels = [
+        _safe_int((label_by_cve.get(str(row.get("cve_id", ""))) or {}).get(f"proxy_binary_high_{strategy}"))
+        for row in ranked_rows
+    ]
+    total = len(labels)
+    positives = sum(labels)
+    status = "evaluated"
+    if positives == 0:
+        status = "no_positive_labels"
+    elif positives < 10:
+        status = "tiny_positive_class"
+    precision_ks = (10, 25, 50, 100, 250)
+    recall_ks = (10, 50, 100, 250)
+    ndcg_ks = (10, 50, 100)
+    return {
+        "status": status,
+        "record_count": total,
+        "positive_count": positives,
+        "high_label_coverage": round(positives / total, 4) if total else 0.0,
+        "precision_at_k": {
+            str(k): _precision_at_k(labels, k) if positives else None for k in precision_ks
+        },
+        "recall_at_k": {
+            str(k): _recall_at_k(labels, k) if positives else None for k in recall_ks
+        },
+        "ndcg_at_k": {
+            str(k): _ndcg_at_k(labels, k) if positives else None for k in ndcg_ks
+        },
+        "average_risk_score_by_proxy_class": _average_risk_score_by_proxy_class(
+            ranked_rows, label_by_cve, strategy
+        ),
+        "risk_bucket_distribution_by_proxy_class": _risk_bucket_distribution_by_proxy_class(
+            ranked_rows, label_by_cve, strategy
+        ),
+        "confidence_distribution_by_proxy_class": _confidence_distribution_by_proxy_class(
+            ranked_rows, label_by_cve, strategy
+        ),
+    }
+
+
+def _precision_at_k(labels: Sequence[int], k: int) -> float:
+    if not labels or k <= 0:
+        return 0.0
+    top = labels[: min(k, len(labels))]
+    return round(sum(top) / len(top), 4)
+
+
+def _recall_at_k(labels: Sequence[int], k: int) -> float:
+    positives = sum(labels)
+    if positives == 0 or k <= 0:
+        return 0.0
+    return round(sum(labels[: min(k, len(labels))]) / positives, 4)
+
+
+def _ndcg_at_k(labels: Sequence[int], k: int) -> float:
+    if not labels or sum(labels) == 0 or k <= 0:
+        return 0.0
+    top = labels[: min(k, len(labels))]
+    dcg = sum(label / log2(index + 2) for index, label in enumerate(top))
+    ideal = sorted(labels, reverse=True)[: min(k, len(labels))]
+    idcg = sum(label / log2(index + 2) for index, label in enumerate(ideal))
+    return round(dcg / idcg, 4) if idcg else 0.0
+
+
+def _average_risk_score_by_proxy_class(
+    rows: Sequence[Mapping[str, Any]],
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+    strategy: str,
+) -> dict[str, float]:
+    grouped: dict[str, list[float]] = {}
+    for row in rows:
+        label = str((label_by_cve.get(str(row.get("cve_id", ""))) or {}).get(f"proxy_label_{strategy}", "unknown"))
+        grouped.setdefault(label, []).append(_safe_float(row.get("risk_score")))
+    return {label: round(mean(values), 4) if values else 0.0 for label, values in grouped.items()}
+
+
+def _risk_bucket_distribution_by_proxy_class(
+    rows: Sequence[Mapping[str, Any]],
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+    strategy: str,
+) -> dict[str, dict[str, int]]:
+    distribution: dict[str, dict[str, int]] = {}
+    for row in rows:
+        label = str((label_by_cve.get(str(row.get("cve_id", ""))) or {}).get(f"proxy_label_{strategy}", "unknown"))
+        bucket = str(row.get("risk_level") or _risk_bucket(_safe_float(row.get("risk_score"))))
+        distribution.setdefault(label, {})
+        distribution[label][bucket] = distribution[label].get(bucket, 0) + 1
+    return distribution
+
+
+def _confidence_distribution_by_proxy_class(
+    rows: Sequence[Mapping[str, Any]],
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+    strategy: str,
+) -> dict[str, Any]:
+    distribution: dict[str, dict[str, Any]] = {}
+    grouped: dict[str, list[float]] = {}
+    for row in rows:
+        label = str((label_by_cve.get(str(row.get("cve_id", ""))) or {}).get(f"proxy_label_{strategy}", "unknown"))
+        confidence = _safe_float(row.get("confidence"))
+        grouped.setdefault(label, []).append(confidence)
+        bucket = _confidence_bucket(confidence)
+        distribution.setdefault(label, {"low": 0, "medium": 0, "high": 0})
+        distribution[label][bucket] += 1
+    for label, values in grouped.items():
+        distribution.setdefault(label, {"low": 0, "medium": 0, "high": 0})
+        distribution[label]["average"] = round(mean(values), 4) if values else 0.0
+    return distribution
+
+
+def _risk_bucket(score: float) -> str:
+    if score >= 9.0:
+        return "CRITICAL"
+    if score >= 7.0:
+        return "HIGH"
+    if score >= 4.0:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _confidence_bucket(confidence: float) -> str:
+    if confidence >= 0.7:
+        return "high"
+    if confidence >= 0.4:
+        return "medium"
+    return "low"
+
+
+def _format_metric(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return str(value)
 
 
 def _strategy_a_label(row: Mapping[str, Any]) -> tuple[str, str]:
