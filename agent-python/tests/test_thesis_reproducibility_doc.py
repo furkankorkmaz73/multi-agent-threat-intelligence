@@ -105,6 +105,18 @@ def test_thesis_limitations_doc_contains_required_sections():
         assert required in text
 
 
+def test_scoring_docs_explain_bounded_additive_weight_semantics():
+    repo_root = Path(__file__).resolve().parents[2]
+    scoring_model = (repo_root / "docs" / "scoring_model.md").read_text(encoding="utf-8")
+    scoring_calibration = (repo_root / "docs" / "scoring_calibration.md").read_text(encoding="utf-8")
+
+    for text in (scoring_model, scoring_calibration):
+        assert "not probability mixture coefficients" in text
+        assert "not required to sum to 1.0" in text
+        assert "bounded additive priority contributions" in text
+    assert "A higher generic CVE risk score does not imply confirmed exploitation in the local environment." in scoring_model
+
+
 def test_thesis_claim_evidence_map_contains_required_claim_boundaries():
     repo_root = Path(__file__).resolve().parents[2]
     doc_path = repo_root / "docs" / "thesis_claim_evidence_map.md"

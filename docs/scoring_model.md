@@ -54,7 +54,9 @@ risk_raw = weighted_signal_score * 10
 risk_score = clamp(risk_raw, 0, 10)
 ```
 
-The weights are heuristic engineering choices, not learned parameters and not statistical calibration. Their purpose is to encode the thesis model's intended risk semantics: CVSS supplies severity, EPSS supplies likelihood, KEV supplies active exploitation evidence, and accepted correlation/graph/context signals refine operational prioritization.
+The weights are heuristic engineering choices, not learned parameters and not statistical calibration. They are not probability mixture coefficients and are not required to sum to 1.0. They are bounded additive priority contributions; the weighted sum is scaled and clamped to `[0, 10]`.
+
+Their purpose is to encode the thesis model's intended risk semantics: CVSS supplies severity, EPSS supplies likelihood, KEV supplies active exploitation evidence, and accepted correlation/graph/context signals refine operational prioritization. A higher generic CVE risk score does not imply confirmed exploitation in the local environment.
 
 ## Contribution Breakdown
 
