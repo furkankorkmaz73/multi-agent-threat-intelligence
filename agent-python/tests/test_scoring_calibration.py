@@ -178,6 +178,7 @@ def test_intrinsic_criticality_floor_lifts_recent_cvss10_high_context_without_ex
     assert result["evidence"]["related_urlhaus_count"] == 0
     assert result["evidence"]["related_dread_count"] == 0
     assert result["confidence"] < 0.8
+    assert result["confidence_breakdown"]["signals"]["confidence_cap_reason"] == "coverage_limited_without_external_support"
     assert "no_accepted_external_evidence" in result["confidence_breakdown"]["coverage_limitations"]
 
 

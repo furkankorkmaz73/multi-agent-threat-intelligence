@@ -219,6 +219,32 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
     assert not (tmp_path / "first" / "thesis_results_section_tr.md").exists()
 
 
+def test_thesis_manifest_uses_repo_root_relative_report_paths(tmp_path):
+    output_dir = tmp_path / "reports" / "thesis" / "deterministic"
+    output_dir.mkdir(parents=True)
+    report_path = output_dir / "thesis_scenario_report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "source_results": [],
+                "evaluation": {"metric_config": {"k_values": [1]}, "baselines": {}, "records": []},
+                "correlation_decisions": [],
+                "notable_cases": [],
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = generate_thesis_artifacts(scenario_report_path=report_path, output_dir=output_dir)
+
+    assert manifest["scenario_report_path"] == "reports/thesis/deterministic/thesis_scenario_report.json"
+    assert manifest["output_dir"] == "reports/thesis/deterministic"
+    for path in manifest["generated_files"].values():
+        assert not path.startswith("../")
+        assert path.startswith("reports/thesis/deterministic/")
+
+
 def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
     from integration.thesis_scenario import run_thesis_scenario
 

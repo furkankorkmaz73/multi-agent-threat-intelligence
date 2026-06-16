@@ -1,0 +1,4479 @@
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import subprocess
+from math import ceil, floor, log2
+from copy import deepcopy
+from datetime import datetime, timezone
+from pathlib import Path
+from random import Random
+from statistics import mean, pstdev
+from typing import Any, Iterable, Mapping, Sequence
+
+import pymongo
+from pymongo.errors import PyMongoError, ServerSelectionTimeoutError
+
+from config import DB_NAME, MONGO_URI, get_settings
+
+
+_MISSING = object()
+
+DATASET_COLUMNS = [
+    "cve_id",
+    "cvss_score",
+    "risk_score",
+    "risk_level",
+    "confidence",
+    "severity_signal",
+    "epss_signal",
+    "kev_signal",
+    "recency_signal",
+    "correlation_signal",
+    "graph_signal",
+    "nlp_context_signal",
+    "score_before_intrinsic_floor",
+    "intrinsic_criticality_floor_applied",
+    "accepted_urlhaus_count",
+    "accepted_dread_count",
+    "candidate_urlhaus_count",
+    "candidate_dread_count",
+    "urlhaus_raw_candidate_count",
+    "urlhaus_ignored_low_signal_count",
+    "urlhaus_rejected_match_count",
+    "assessment_confidence",
+    "data_completeness",
+    "coverage_limitations",
+    "epss_available",
+    "kev_status_known",
+    "kev_listed",
+    "age_days",
+]
+
+LABEL_COLUMNS = [
+    "cve_id",
+    "proxy_label_strategy_a",
+    "proxy_binary_high_strategy_a",
+    "proxy_label_strategy_b",
+    "proxy_binary_high_strategy_b",
+    "proxy_label_strategy_c",
+    "proxy_binary_high_strategy_c",
+    "proxy_label_reason",
+    "proxy_label_limitations",
+]
+
+MODEL_FEATURE_COLUMNS = [
+    "cvss_score",
+    "severity_signal",
+    "epss_signal",
+    "kev_signal",
+    "recency_signal",
+    "correlation_signal",
+    "graph_signal",
+    "nlp_context_signal",
+    "accepted_urlhaus_count",
+    "accepted_dread_count",
+    "data_completeness",
+    "assessment_confidence",
+    "age_days",
+    "intrinsic_criticality_floor_applied",
+]
+
+PREDICTION_COLUMNS = [
+    "cve_id",
+    "strategy",
+    "proxy_binary_high",
+    "learned_probability",
+    "learned_prediction",
+]
+
+DISAGREEMENT_COLUMNS = [
+    "strategy",
+    "cve_id",
+    "cvss_score",
+    "risk_score",
+    "risk_level",
+    "confidence",
+    "learned_probability",
+    "proxy_label",
+    "key_signals",
+    "coverage_limitations",
+    "disagreement_type",
+    "reason",
+]
+
+FEATURE_IMPORTANCE_COLUMNS = [
+    "strategy",
+    "feature",
+    "coefficient",
+    "absolute_coefficient_rank",
+    "sign_interpretation",
+    "feature_coverage_note",
+    "warning",
+]
+
+ABLATION_COLUMNS = [
+    "strategy",
+    "ablation",
+    "status",
+    "features",
+    "accuracy",
+    "balanced_accuracy",
+    "precision",
+    "recall",
+    "f1",
+    "roc_auc",
+    "pr_auc",
+    "interpretation",
+    "skip_reason",
+]
+
+LEAKAGE_CHECK_COLUMNS = [
+    "check",
+    "status",
+    "details",
+]
+
+CASE_STUDY_COLUMNS = [
+    "cve_id",
+    "cvss_score",
+    "risk_score",
+    "confidence",
+    "proxy_label",
+    "learned_probability",
+    "coverage_limitations",
+    "key_reason",
+    "case_group",
+]
+
+PROXY_SENSITIVITY_COLUMNS = [
+    "epss_high_threshold",
+    "cvss_critical_threshold",
+    "nlp_context_threshold",
+    "recency_threshold",
+    "high_count",
+    "medium_count",
+    "low_count",
+    "high_percentage",
+    "precision_at_10",
+    "precision_at_50",
+    "precision_at_100",
+    "label_stability_vs_strategy_a",
+    "classification",
+]
+
+BOOTSTRAP_STABILITY_COLUMNS = [
+    "iteration",
+    "precision_at_10",
+    "precision_at_50",
+    "precision_at_100",
+    "recall_at_50",
+    "recall_at_100",
+    "top50_overlap_with_full",
+    "top100_overlap_with_full",
+    "sample_size",
+    "positive_count",
+    "status",
+    "skip_reason",
+]
+
+COVERAGE_STRATA_COLUMNS = [
+    "stratum",
+    "group",
+    "count",
+    "average_risk_score",
+    "average_confidence",
+    "strategy_a_high_count",
+    "strategy_b_high_count",
+    "strategy_c_high_count",
+    "missing_feature_percentages",
+    "interpretation_note",
+]
+
+LIMITATIONS_MATRIX_COLUMNS = [
+    "limitation",
+    "impact_on_interpretation",
+    "mitigation_already_implemented",
+    "future_work",
+    "thesis_safe_wording",
+]
+
+LEGACY_HIGH_RISK_DIAGNOSTIC_COLUMNS = [
+    "cve_id",
+    "cve_year",
+    "risk_score",
+    "risk_level",
+    "confidence",
+    "cvss_score",
+    "severity_signal",
+    "recency_signal",
+    "nlp_context_signal",
+    "correlation_signal",
+    "intrinsic_criticality_floor_applied",
+    "accepted_urlhaus_count",
+    "accepted_dread_count",
+    "coverage_limitations",
+    "diagnostic_group",
+    "interpretation",
+]
+
+LEGACY_DAMPENING_COUNTERFACTUAL_COLUMNS = [
+    "cve_id",
+    "cve_year",
+    "risk_score",
+    "counterfactual_score",
+    "risk_bucket",
+    "counterfactual_risk_bucket",
+    "high_medium_low_level",
+    "counterfactual_high_medium_low_level",
+    "risk_bucket_changed",
+    "high_medium_low_level_changed",
+    "cvss_score",
+    "recency_signal",
+    "epss_signal",
+    "kev_listed",
+    "accepted_urlhaus_count",
+    "accepted_dread_count",
+    "dampening_applied",
+    "dampening_amount",
+    "counterfactual_floor",
+    "interpretation",
+]
+
+
+def extract_calibration_row(doc: Mapping[str, Any]) -> dict[str, Any] | None:
+    source = deepcopy(dict(doc))
+    risk_score = _coalesce_nested(
+        source,
+        "analysis.risk_score",
+        "analysis.final_score",
+        "risk_score",
+        "final_score",
+        "model_risk_score",
+        default=None,
+    )
+    if risk_score in (None, ""):
+        return None
+    evidence = _first_mapping(
+        source,
+        "analysis.evidence",
+        "analysis.evidence_summary",
+        "evidence",
+        "evidence_summary",
+    )
+    feature_breakdown = _first_mapping(
+        source,
+        "analysis.feature_breakdown",
+        "analysis.features",
+        "feature_breakdown",
+        "features",
+    )
+    confidence_breakdown = _first_mapping(
+        source,
+        "analysis.confidence_breakdown",
+        "confidence_breakdown",
+    )
+    urlhaus_stats = _first_mapping(
+        source,
+        "analysis.evidence.urlhaus_match_stats",
+        "evidence.urlhaus_match_stats",
+        "urlhaus_match_stats",
+    )
+    row = {
+        "cve_id": str(
+            _coalesce_nested(source, "analysis.entity_id", "analysis.cve_id", "cve_id", "id", "_id", default="")
+        ),
+        "cvss_score": _coalesce_nested(source, "analysis.evidence.cvss_score", "evidence.cvss_score", "analysis.cvss_score", "cvss_score", default=""),
+        "risk_score": risk_score,
+        "risk_level": _coalesce_nested(source, "analysis.risk_level", "risk_level", default=""),
+        "confidence": _coalesce_nested(source, "analysis.confidence", "confidence", "model_confidence", default=""),
+        "severity_signal": _coalesce_nested(feature_breakdown, "severity_signal", default=""),
+        "epss_signal": _coalesce_nested(feature_breakdown, "epss_signal", default=""),
+        "kev_signal": _coalesce_nested(feature_breakdown, "kev_signal", default=""),
+        "recency_signal": _coalesce_nested(feature_breakdown, "recency_signal", default=""),
+        "correlation_signal": _coalesce_nested(feature_breakdown, "correlation_signal", default=""),
+        "graph_signal": _coalesce_nested(feature_breakdown, "graph_signal", default=""),
+        "nlp_context_signal": _coalesce_nested(feature_breakdown, "nlp_context_signal", default=""),
+        "score_before_intrinsic_floor": _coalesce_nested(feature_breakdown, "score_before_intrinsic_floor", default=""),
+        "intrinsic_criticality_floor_applied": _coalesce_nested(feature_breakdown, "intrinsic_criticality_floor_applied", default=""),
+        "accepted_urlhaus_count": _coalesce_nested(source, "analysis.evidence.related_urlhaus_count", "evidence.related_urlhaus_count", "related_urlhaus_count", default=0),
+        "accepted_dread_count": _coalesce_nested(source, "analysis.evidence.related_dread_count", "evidence.related_dread_count", "related_dread_count", default=0),
+        "candidate_urlhaus_count": _coalesce_nested(source, "analysis.evidence.candidate_urlhaus_count", "evidence.candidate_urlhaus_count", "candidate_urlhaus_count", default=0),
+        "candidate_dread_count": _coalesce_nested(source, "analysis.evidence.candidate_dread_count", "evidence.candidate_dread_count", "candidate_dread_count", default=0),
+        "urlhaus_raw_candidate_count": _coalesce_nested(urlhaus_stats, "raw_candidate_count", default=_coalesce_nested(source, "analysis.evidence.candidate_urlhaus_count", "evidence.candidate_urlhaus_count", "candidate_urlhaus_count", default=0)),
+        "urlhaus_ignored_low_signal_count": _coalesce_nested(urlhaus_stats, "ignored_low_signal_count", default=0),
+        "urlhaus_rejected_match_count": _coalesce_nested(urlhaus_stats, "rejected_match_count", default=0),
+        "assessment_confidence": _coalesce_nested(confidence_breakdown, "assessment_confidence", default=""),
+        "data_completeness": _coalesce_nested(confidence_breakdown, "data_completeness", default=""),
+        "coverage_limitations": ";".join(_as_list(_coalesce_nested(confidence_breakdown, "coverage_limitations", default=[]))),
+        "epss_available": _coalesce_nested(source, "analysis.evidence.epss_available", "evidence.epss_available", "epss_available", default=""),
+        "kev_status_known": _coalesce_nested(source, "analysis.evidence.kev_status_known", "evidence.kev_status_known", "kev_status_known", default=""),
+        "kev_listed": _coalesce_nested(source, "analysis.evidence.kev_listed", "evidence.kev_listed", "kev_listed", default=""),
+        "age_days": _coalesce_nested(source, "analysis.evidence.age_days", "evidence.age_days", "feature_breakdown.age_days", "age_days", default=""),
+    }
+    return {column: row.get(column, "") for column in DATASET_COLUMNS}
+
+
+def build_feasibility_report(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    total_records_read: int,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    generated = generated_at or datetime.now(timezone.utc).isoformat()
+    analyzed = len(rows)
+    epss_count = sum(1 for row in rows if _truthy(row.get("epss_available")))
+    kev_known_count = sum(1 for row in rows if _truthy(row.get("kev_status_known")))
+    kev_listed_count = sum(1 for row in rows if _truthy(row.get("kev_listed")))
+    urlhaus_accepted = sum(_safe_int(row.get("accepted_urlhaus_count")) for row in rows)
+    dread_accepted = sum(_safe_int(row.get("accepted_dread_count")) for row in rows)
+    floor_count = sum(1 for row in rows if _truthy(row.get("intrinsic_criticality_floor_applied")))
+    missing_feature_counts = _missing_feature_counts(rows)
+    missing_feature_percentages = _missing_feature_percentages(missing_feature_counts, analyzed)
+    label_rows = build_proxy_label_rows(rows)
+    label_summary = summarize_proxy_labels(label_rows, rows)
+    warnings = _coverage_warnings(
+        analyzed=analyzed,
+        epss_count=epss_count,
+        kev_known_count=kev_known_count,
+        accepted_external_count=urlhaus_accepted + dread_accepted,
+    )
+    warnings.extend(label_summary["warnings"])
+    return {
+        "generated_at": generated,
+        "total_cve_records_read": int(total_records_read),
+        "analyzed_records_exported": analyzed,
+        "records_with_cvss": sum(1 for row in rows if _safe_float(row.get("cvss_score")) > 0),
+        "epss_availability_count": epss_count,
+        "kev_known_count": kev_known_count,
+        "kev_listed_count": kev_listed_count,
+        "accepted_external_evidence_count": urlhaus_accepted + dread_accepted,
+        "urlhaus_accepted_count": urlhaus_accepted,
+        "dread_accepted_count": dread_accepted,
+        "intrinsic_criticality_floor_count": floor_count,
+        "missing_feature_counts": missing_feature_counts,
+        "missing_feature_percentages": missing_feature_percentages,
+        "missing_feature_accounting": {
+            "columns": list(DATASET_COLUMNS),
+            "counts": missing_feature_counts,
+            "percentages": missing_feature_percentages,
+        },
+        "coverage": {
+            "cvss_count": sum(1 for row in rows if _safe_float(row.get("cvss_score")) > 0),
+            "epss_available_count": epss_count,
+            "kev_status_known_count": kev_known_count,
+            "kev_listed_count": kev_listed_count,
+            "accepted_external_evidence_count": urlhaus_accepted + dread_accepted,
+        },
+        "evidence_counts": {
+            "urlhaus_accepted_count": urlhaus_accepted,
+            "dread_accepted_count": dread_accepted,
+            "accepted_external_evidence_count": urlhaus_accepted + dread_accepted,
+        },
+        "dataset_columns": list(DATASET_COLUMNS),
+        "warnings": warnings,
+        "proxy_supervised_learning_feasibility": _feasibility_label(
+            analyzed=analyzed,
+            records_with_cvss=sum(1 for row in rows if _safe_float(row.get("cvss_score")) > 0),
+            epss_count=epss_count,
+            kev_known_count=kev_known_count,
+            accepted_external_count=urlhaus_accepted + dread_accepted,
+        ),
+        "summary_statistics": _summary_statistics(rows),
+        "proxy_label_class_counts": label_summary["class_counts"],
+        "proxy_label_percentages": label_summary["percentages"],
+        "proxy_binary_counts": label_summary["binary_counts"],
+        "proxy_label_trainability": label_summary["trainability"],
+        "proxy_label_limitations": label_summary["limitations"],
+        "proxy_label_reason_counts": label_summary["reason_counts"],
+    }
+
+
+def render_summary_markdown(report: Mapping[str, Any]) -> str:
+    label = report.get("proxy_supervised_learning_feasibility", "not_recommended")
+    warnings = report.get("warnings") or []
+    lines = [
+        "# Learned Calibration Feasibility Summary",
+        "",
+        "This export is an experimental calibration layer for analysis, not a production scoring change.",
+        "Proxy labels are not ground truth, and production `risk_score` behavior is unchanged.",
+        "Confidence remains separate from risk. Dread live crawling is not used.",
+        "",
+        "## Dataset Snapshot",
+        "",
+        f"- Total CVE records read: `{report.get('total_cve_records_read', 0)}`",
+        f"- Analyzed records exported: `{report.get('analyzed_records_exported', 0)}`",
+        f"- Records with CVSS: `{report.get('records_with_cvss', 0)}`",
+        f"- EPSS available: `{report.get('epss_availability_count', 0)}`",
+        f"- KEV status known: `{report.get('kev_known_count', 0)}`",
+        f"- Accepted external evidence count: `{report.get('accepted_external_evidence_count', 0)}`",
+        f"- Proxy label rows: `{report.get('analyzed_records_exported', 0)}`",
+        "",
+        "## Feasibility",
+        "",
+        f"- Proxy-supervised learning feasibility: `{label}`",
+        "",
+        "The current data is suitable for proxy-supervised learning only if feature coverage and externally defensible proxy labels are adequate. Weak EPSS, KEV, or external-evidence coverage limits what can be learned responsibly.",
+        "Proxy labels are deterministic thesis-analysis aids, not verified exploitation outcomes.",
+        "",
+        "## Warnings",
+        "",
+    ]
+    if warnings:
+        lines.extend(f"- {warning}" for warning in warnings)
+    else:
+        lines.append("- No major feasibility warnings were generated.")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], output_dir: str | Path) -> dict[str, str]:
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    dataset_path = output / "learned_calibration_dataset.csv"
+    labels_path = output / "learned_calibration_labels.csv"
+    report_path = output / "learned_calibration_report.json"
+    summary_path = output / "learned_calibration_summary.md"
+    baseline_json_path = output / "learned_calibration_baseline_metrics.json"
+    baseline_md_path = output / "learned_calibration_baseline_metrics.md"
+    predictions_path = output / "learned_calibration_predictions.csv"
+    model_report_path = output / "learned_calibration_model_report.json"
+    model_summary_path = output / "learned_calibration_model_summary.md"
+    comparison_path = output / "learned_vs_heuristic_comparison.json"
+    comparison_summary_path = output / "learned_vs_heuristic_comparison.md"
+    disagreements_path = output / "learned_calibration_disagreements.csv"
+    disagreements_summary_path = output / "learned_calibration_disagreements.md"
+    feature_importance_path = output / "learned_calibration_feature_importance.csv"
+    feature_importance_summary_path = output / "learned_calibration_feature_importance.md"
+    ablation_path = output / "learned_calibration_ablation.csv"
+    ablation_summary_path = output / "learned_calibration_ablation.md"
+    leakage_path = output / "learned_calibration_leakage_checks.json"
+    leakage_summary_path = output / "learned_calibration_leakage_checks.md"
+    thesis_section_path = output / "learned_calibration_thesis_section.md"
+    limitations_path = output / "learned_calibration_limitations.md"
+    case_studies_path = output / "learned_calibration_case_studies.csv"
+    case_studies_summary_path = output / "learned_calibration_case_studies.md"
+    tables_path = output / "learned_calibration_tables.json"
+    tables_summary_path = output / "learned_calibration_tables.md"
+    manifest_path = output / "learned_calibration_manifest.json"
+    manifest_summary_path = output / "learned_calibration_manifest.md"
+    proxy_sensitivity_path = output / "learned_calibration_proxy_sensitivity.csv"
+    proxy_sensitivity_json_path = output / "learned_calibration_proxy_sensitivity.json"
+    proxy_sensitivity_summary_path = output / "learned_calibration_proxy_sensitivity.md"
+    bootstrap_path = output / "learned_calibration_bootstrap_stability.csv"
+    bootstrap_json_path = output / "learned_calibration_bootstrap_stability.json"
+    bootstrap_summary_path = output / "learned_calibration_bootstrap_stability.md"
+    coverage_strata_path = output / "learned_calibration_coverage_strata.csv"
+    coverage_strata_json_path = output / "learned_calibration_coverage_strata.json"
+    coverage_strata_summary_path = output / "learned_calibration_coverage_strata.md"
+    negative_controls_path = output / "learned_calibration_negative_controls.json"
+    negative_controls_summary_path = output / "learned_calibration_negative_controls.md"
+    consistency_audit_path = output / "learned_calibration_consistency_audit.json"
+    consistency_audit_summary_path = output / "learned_calibration_consistency_audit.md"
+    appendix_path = output / "learned_calibration_appendix.md"
+    runtime_snapshot_path = output / "learned_calibration_runtime_snapshot.json"
+    runtime_snapshot_summary_path = output / "learned_calibration_runtime_snapshot.md"
+    reviewer_checklist_path = output / "learned_calibration_reviewer_checklist.json"
+    reviewer_checklist_summary_path = output / "learned_calibration_reviewer_checklist.md"
+    defense_qa_path = output / "learned_calibration_defense_qa.md"
+    limitations_matrix_path = output / "learned_calibration_limitations_matrix.csv"
+    limitations_matrix_json_path = output / "learned_calibration_limitations_matrix.json"
+    limitations_matrix_summary_path = output / "learned_calibration_limitations_matrix.md"
+    no_overclaim_audit_path = output / "learned_calibration_no_overclaim_audit.json"
+    no_overclaim_audit_summary_path = output / "learned_calibration_no_overclaim_audit.md"
+    legacy_high_risk_path = output / "legacy_high_risk_diagnostics.csv"
+    legacy_high_risk_json_path = output / "legacy_high_risk_diagnostics.json"
+    legacy_high_risk_summary_path = output / "legacy_high_risk_diagnostics.md"
+    legacy_dampening_path = output / "legacy_dampening_counterfactual.csv"
+    legacy_dampening_json_path = output / "legacy_dampening_counterfactual.json"
+    legacy_dampening_summary_path = output / "legacy_dampening_counterfactual.md"
+    label_rows = build_proxy_label_rows(rows)
+    baseline_metrics = compute_baseline_metrics(rows, label_rows)
+    model_result = train_learned_calibration_models(rows, label_rows)
+    comparison = compute_learned_vs_heuristic_comparison(rows, label_rows, model_result["predictions"])
+    disagreements = compute_disagreement_cases(rows, label_rows, model_result["predictions"])
+    feature_importance = extract_feature_importance(model_result["report"], rows)
+    ablations = compute_ablation_experiments(model_result["report"])
+    leakage_checks = build_leakage_checks(model_result["report"], report, summary_text=render_summary_markdown(report))
+    case_studies = select_case_studies(rows, label_rows, model_result["predictions"])
+    publication_tables = build_publication_tables(
+        feasibility_report=report,
+        baseline_metrics=baseline_metrics,
+        model_report=model_result["report"],
+        ablations=ablations,
+        leakage_checks=leakage_checks,
+    )
+    proxy_sensitivity = compute_proxy_threshold_sensitivity(rows, label_rows)
+    bootstrap_stability = compute_bootstrap_stability(rows, label_rows)
+    coverage_strata = compute_coverage_strata(rows, label_rows)
+    negative_controls = compute_negative_controls(rows, label_rows)
+    with dataset_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=DATASET_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({column: row.get(column, "") for column in DATASET_COLUMNS})
+    with labels_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=LABEL_COLUMNS)
+        writer.writeheader()
+        for row in label_rows:
+            writer.writerow({column: row.get(column, "") for column in LABEL_COLUMNS})
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    summary_path.write_text(render_summary_markdown(report), encoding="utf-8")
+    baseline_json_path.write_text(json.dumps(baseline_metrics, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    baseline_md_path.write_text(render_baseline_metrics_markdown(baseline_metrics), encoding="utf-8")
+    with predictions_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=PREDICTION_COLUMNS)
+        writer.writeheader()
+        for row in model_result["predictions"]:
+            writer.writerow({column: row.get(column, "") for column in PREDICTION_COLUMNS})
+    model_report_path.write_text(json.dumps(model_result["report"], indent=2, sort_keys=True, default=str), encoding="utf-8")
+    model_summary_path.write_text(render_model_summary_markdown(model_result["report"]), encoding="utf-8")
+    comparison_path.write_text(json.dumps(comparison, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    comparison_summary_path.write_text(render_learned_vs_heuristic_markdown(comparison), encoding="utf-8")
+    with disagreements_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=DISAGREEMENT_COLUMNS)
+        writer.writeheader()
+        for row in disagreements:
+            writer.writerow({column: row.get(column, "") for column in DISAGREEMENT_COLUMNS})
+    disagreements_summary_path.write_text(render_disagreements_markdown(disagreements), encoding="utf-8")
+    with feature_importance_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=FEATURE_IMPORTANCE_COLUMNS)
+        writer.writeheader()
+        for row in feature_importance:
+            writer.writerow({column: row.get(column, "") for column in FEATURE_IMPORTANCE_COLUMNS})
+    feature_importance_summary_path.write_text(render_feature_importance_markdown(feature_importance, model_result["report"]), encoding="utf-8")
+    with ablation_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=ABLATION_COLUMNS)
+        writer.writeheader()
+        for row in ablations:
+            writer.writerow({column: row.get(column, "") for column in ABLATION_COLUMNS})
+    ablation_summary_path.write_text(render_ablation_markdown(ablations), encoding="utf-8")
+    leakage_path.write_text(json.dumps(leakage_checks, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    leakage_summary_path.write_text(render_leakage_checks_markdown(leakage_checks), encoding="utf-8")
+    thesis_section_path.write_text(
+        render_learned_calibration_thesis_section(report, baseline_metrics, model_result["report"], comparison, disagreements, ablations),
+        encoding="utf-8",
+    )
+    limitations_path.write_text(render_learned_calibration_limitations(report, model_result["report"], leakage_checks), encoding="utf-8")
+    with case_studies_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=CASE_STUDY_COLUMNS)
+        writer.writeheader()
+        for row in case_studies:
+            writer.writerow({column: row.get(column, "") for column in CASE_STUDY_COLUMNS})
+    case_studies_summary_path.write_text(render_case_studies_markdown(case_studies), encoding="utf-8")
+    tables_path.write_text(json.dumps(publication_tables, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    tables_summary_path.write_text(render_publication_tables_markdown(publication_tables), encoding="utf-8")
+    with proxy_sensitivity_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=PROXY_SENSITIVITY_COLUMNS)
+        writer.writeheader()
+        for row in proxy_sensitivity["rows"]:
+            writer.writerow({column: row.get(column, "") for column in PROXY_SENSITIVITY_COLUMNS})
+    proxy_sensitivity_json_path.write_text(json.dumps(proxy_sensitivity, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    proxy_sensitivity_summary_path.write_text(render_proxy_sensitivity_markdown(proxy_sensitivity), encoding="utf-8")
+    with bootstrap_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=BOOTSTRAP_STABILITY_COLUMNS)
+        writer.writeheader()
+        for row in bootstrap_stability["iterations"]:
+            writer.writerow({column: row.get(column, "") for column in BOOTSTRAP_STABILITY_COLUMNS})
+    bootstrap_json_path.write_text(json.dumps(bootstrap_stability, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    bootstrap_summary_path.write_text(render_bootstrap_stability_markdown(bootstrap_stability), encoding="utf-8")
+    with coverage_strata_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=COVERAGE_STRATA_COLUMNS)
+        writer.writeheader()
+        for row in coverage_strata["rows"]:
+            writer.writerow({column: row.get(column, "") for column in COVERAGE_STRATA_COLUMNS})
+    coverage_strata_json_path.write_text(json.dumps(coverage_strata, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    coverage_strata_summary_path.write_text(render_coverage_strata_markdown(coverage_strata), encoding="utf-8")
+    negative_controls_path.write_text(json.dumps(negative_controls, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    negative_controls_summary_path.write_text(render_negative_controls_markdown(negative_controls), encoding="utf-8")
+    runtime_snapshot = build_runtime_snapshot(output)
+    runtime_snapshot_path.write_text(json.dumps(runtime_snapshot, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    runtime_snapshot_summary_path.write_text(render_runtime_snapshot_markdown(runtime_snapshot), encoding="utf-8")
+    reviewer_checklist = build_reviewer_checklist(output)
+    reviewer_checklist_path.write_text(json.dumps(reviewer_checklist, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    reviewer_checklist_summary_path.write_text(render_reviewer_checklist_markdown(reviewer_checklist), encoding="utf-8")
+    defense_qa_path.write_text(render_learned_calibration_defense_qa(model_result["report"], report), encoding="utf-8")
+    limitations_matrix = build_limitations_matrix()
+    with limitations_matrix_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=LIMITATIONS_MATRIX_COLUMNS)
+        writer.writeheader()
+        for row in limitations_matrix["rows"]:
+            writer.writerow({column: row.get(column, "") for column in LIMITATIONS_MATRIX_COLUMNS})
+    limitations_matrix_json_path.write_text(json.dumps(limitations_matrix, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    limitations_matrix_summary_path.write_text(render_limitations_matrix_markdown(limitations_matrix), encoding="utf-8")
+    legacy_high_risk = build_legacy_high_risk_diagnostics(rows)
+    with legacy_high_risk_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=LEGACY_HIGH_RISK_DIAGNOSTIC_COLUMNS)
+        writer.writeheader()
+        for row in legacy_high_risk["rows"]:
+            writer.writerow({column: row.get(column, "") for column in LEGACY_HIGH_RISK_DIAGNOSTIC_COLUMNS})
+    legacy_high_risk_json_path.write_text(json.dumps(legacy_high_risk, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    legacy_high_risk_summary_path.write_text(render_legacy_high_risk_diagnostics_markdown(legacy_high_risk), encoding="utf-8")
+    legacy_dampening = build_legacy_dampening_counterfactual(rows)
+    with legacy_dampening_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=LEGACY_DAMPENING_COUNTERFACTUAL_COLUMNS)
+        writer.writeheader()
+        for row in legacy_dampening["rows"]:
+            writer.writerow({column: row.get(column, "") for column in LEGACY_DAMPENING_COUNTERFACTUAL_COLUMNS})
+    legacy_dampening_json_path.write_text(json.dumps(legacy_dampening, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    legacy_dampening_summary_path.write_text(render_legacy_dampening_counterfactual_markdown(legacy_dampening), encoding="utf-8")
+    no_overclaim_audit = build_no_overclaim_audit(output)
+    no_overclaim_audit_path.write_text(json.dumps(no_overclaim_audit, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    no_overclaim_audit_summary_path.write_text(render_no_overclaim_audit_markdown(no_overclaim_audit), encoding="utf-8")
+    appendix_path.write_text(
+        render_learned_calibration_appendix(
+            feasibility_report=report,
+            baseline_metrics=baseline_metrics,
+            model_report=model_result["report"],
+            proxy_sensitivity=proxy_sensitivity,
+            bootstrap_stability=bootstrap_stability,
+            coverage_strata=coverage_strata,
+            negative_controls=negative_controls,
+            case_studies=case_studies,
+            leakage_checks=leakage_checks,
+            consistency_audit={"status": "pending"},
+        ),
+        encoding="utf-8",
+    )
+    consistency_audit = build_consistency_audit(output)
+    consistency_audit_path.write_text(json.dumps(consistency_audit, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    consistency_audit_summary_path.write_text(render_consistency_audit_markdown(consistency_audit), encoding="utf-8")
+    appendix_path.write_text(
+        render_learned_calibration_appendix(
+            feasibility_report=report,
+            baseline_metrics=baseline_metrics,
+            model_report=model_result["report"],
+            proxy_sensitivity=proxy_sensitivity,
+            bootstrap_stability=bootstrap_stability,
+            coverage_strata=coverage_strata,
+            negative_controls=negative_controls,
+            case_studies=case_studies,
+            leakage_checks=leakage_checks,
+            consistency_audit=consistency_audit,
+        ),
+        encoding="utf-8",
+    )
+    artifact_manifest = build_learned_calibration_manifest(output)
+    manifest_path.write_text(json.dumps(artifact_manifest, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    manifest_summary_path.write_text(render_learned_calibration_manifest_markdown(artifact_manifest), encoding="utf-8")
+    runtime_snapshot = build_runtime_snapshot(output)
+    runtime_snapshot_path.write_text(json.dumps(runtime_snapshot, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    runtime_snapshot_summary_path.write_text(render_runtime_snapshot_markdown(runtime_snapshot), encoding="utf-8")
+    reviewer_checklist = build_reviewer_checklist(output)
+    reviewer_checklist_path.write_text(json.dumps(reviewer_checklist, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    reviewer_checklist_summary_path.write_text(render_reviewer_checklist_markdown(reviewer_checklist), encoding="utf-8")
+    return {
+        "dataset": str(dataset_path),
+        "labels": str(labels_path),
+        "report": str(report_path),
+        "summary": str(summary_path),
+        "baseline_metrics": str(baseline_json_path),
+        "baseline_summary": str(baseline_md_path),
+        "predictions": str(predictions_path),
+        "model_report": str(model_report_path),
+        "model_summary": str(model_summary_path),
+        "learned_vs_heuristic_comparison": str(comparison_path),
+        "learned_vs_heuristic_summary": str(comparison_summary_path),
+        "disagreements": str(disagreements_path),
+        "disagreements_summary": str(disagreements_summary_path),
+        "feature_importance": str(feature_importance_path),
+        "feature_importance_summary": str(feature_importance_summary_path),
+        "ablation": str(ablation_path),
+        "ablation_summary": str(ablation_summary_path),
+        "leakage_checks": str(leakage_path),
+        "leakage_checks_summary": str(leakage_summary_path),
+        "thesis_section": str(thesis_section_path),
+        "limitations": str(limitations_path),
+        "case_studies": str(case_studies_path),
+        "case_studies_summary": str(case_studies_summary_path),
+        "tables": str(tables_path),
+        "tables_summary": str(tables_summary_path),
+        "proxy_sensitivity": str(proxy_sensitivity_path),
+        "proxy_sensitivity_json": str(proxy_sensitivity_json_path),
+        "proxy_sensitivity_summary": str(proxy_sensitivity_summary_path),
+        "bootstrap_stability": str(bootstrap_path),
+        "bootstrap_stability_json": str(bootstrap_json_path),
+        "bootstrap_stability_summary": str(bootstrap_summary_path),
+        "coverage_strata": str(coverage_strata_path),
+        "coverage_strata_json": str(coverage_strata_json_path),
+        "coverage_strata_summary": str(coverage_strata_summary_path),
+        "negative_controls": str(negative_controls_path),
+        "negative_controls_summary": str(negative_controls_summary_path),
+        "consistency_audit": str(consistency_audit_path),
+        "consistency_audit_summary": str(consistency_audit_summary_path),
+        "appendix": str(appendix_path),
+        "runtime_snapshot": str(runtime_snapshot_path),
+        "runtime_snapshot_summary": str(runtime_snapshot_summary_path),
+        "reviewer_checklist": str(reviewer_checklist_path),
+        "reviewer_checklist_summary": str(reviewer_checklist_summary_path),
+        "defense_qa": str(defense_qa_path),
+        "limitations_matrix": str(limitations_matrix_path),
+        "limitations_matrix_json": str(limitations_matrix_json_path),
+        "limitations_matrix_summary": str(limitations_matrix_summary_path),
+        "no_overclaim_audit": str(no_overclaim_audit_path),
+        "no_overclaim_audit_summary": str(no_overclaim_audit_summary_path),
+        "legacy_high_risk_diagnostics": str(legacy_high_risk_path),
+        "legacy_high_risk_diagnostics_json": str(legacy_high_risk_json_path),
+        "legacy_high_risk_diagnostics_summary": str(legacy_high_risk_summary_path),
+        "legacy_dampening_counterfactual": str(legacy_dampening_path),
+        "legacy_dampening_counterfactual_json": str(legacy_dampening_json_path),
+        "legacy_dampening_counterfactual_summary": str(legacy_dampening_summary_path),
+        "manifest": str(manifest_path),
+        "manifest_summary": str(manifest_summary_path),
+    }
+
+
+def export_from_documents(docs: Sequence[Mapping[str, Any]], output_dir: str | Path, *, generated_at: str | None = None) -> dict[str, Any]:
+    rows = [row for doc in docs if (row := extract_calibration_row(doc)) is not None]
+    rows = sorted(rows, key=lambda row: str(row.get("cve_id", "")))
+    report = build_feasibility_report(rows, total_records_read=len(docs), generated_at=generated_at)
+    paths = write_outputs(rows, report, output_dir)
+    return {"paths": paths, "report": report}
+
+
+def read_analyzed_cves_from_mongo(limit: int = 0) -> list[Mapping[str, Any]]:
+    settings = get_settings()
+    try:
+        client = pymongo.MongoClient(
+            MONGO_URI,
+            serverSelectionTimeoutMS=settings.database.server_selection_timeout_ms,
+            connectTimeoutMS=settings.database.connect_timeout_ms,
+        )
+        client.admin.command("ping")
+        cursor = client[DB_NAME]["cve_intel"].find({})
+        if limit > 0:
+            cursor = cursor.limit(limit)
+        return list(cursor)
+    except ServerSelectionTimeoutError as exc:
+        raise RuntimeError(
+            "MongoDB is unavailable for learned calibration export. "
+            "Start MongoDB or run against an existing analyzed database; this command is read-only. "
+            f"Original error: {exc}"
+        ) from exc
+    except PyMongoError as exc:
+        raise RuntimeError(f"Unable to read cve_intel for learned calibration export: {exc}") from exc
+
+
+def _coverage_warnings(*, analyzed: int, epss_count: int, kev_known_count: int, accepted_external_count: int) -> list[str]:
+    warnings: list[str] = []
+    if analyzed == 0:
+        return ["No analyzed CVE records were available for export."]
+    if epss_count / analyzed < 0.25:
+        warnings.append("EPSS coverage is weak; exploit-likelihood proxy features may be sparse.")
+    if kev_known_count / analyzed < 0.25:
+        warnings.append("KEV status coverage is weak; active-exploitation proxy labels may be sparse.")
+    if accepted_external_count == 0:
+        warnings.append("Accepted URLhaus/Dread external evidence is absent; correlation-derived proxy labels are unavailable.")
+    return warnings
+
+
+def _feasibility_label(
+    *,
+    analyzed: int,
+    records_with_cvss: int,
+    epss_count: int,
+    kev_known_count: int,
+    accepted_external_count: int,
+) -> str:
+    if analyzed < 50 or records_with_cvss / max(analyzed, 1) < 0.5:
+        return "not_recommended"
+    if epss_count / analyzed >= 0.5 and kev_known_count / analyzed >= 0.5 and accepted_external_count > 0:
+        return "meaningful"
+    return "limited"
+
+
+def _summary_statistics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    risks = [_safe_float(row.get("risk_score")) for row in rows if row.get("risk_score") not in ("", None)]
+    confidences = [_safe_float(row.get("confidence")) for row in rows if row.get("confidence") not in ("", None)]
+    return {
+        "average_risk_score": round(mean(risks), 4) if risks else 0.0,
+        "average_confidence": round(mean(confidences), 4) if confidences else 0.0,
+    }
+
+
+def strict_validation_errors(report: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if _safe_int(report.get("analyzed_records_exported")) == 0:
+        errors.append("No analyzed CVE records were exported.")
+    if _safe_int(report.get("records_with_cvss")) == 0:
+        errors.append("No exported records include CVSS scores.")
+    return errors
+
+
+def build_proxy_label_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    return [build_proxy_label_row(row) for row in deepcopy(list(rows))]
+
+
+def build_proxy_label_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    strategy_a, reason_a = _strategy_a_label(row)
+    strategy_b, reason_b, limitations_b = _strategy_b_label(row)
+    strategy_c, reason_c = _strategy_c_label(row)
+    limitations = list(limitations_b)
+    if _safe_float(row.get("epss_signal")) == 0 and not _truthy(row.get("epss_available")):
+        limitations.append("epss coverage missing or unavailable")
+    if not _truthy(row.get("kev_status_known")):
+        limitations.append("kev status unknown")
+    if _accepted_external_count(row) == 0:
+        limitations.append("no accepted external evidence")
+    return {
+        "cve_id": row.get("cve_id", ""),
+        "proxy_label_strategy_a": strategy_a,
+        "proxy_binary_high_strategy_a": int(strategy_a == "high"),
+        "proxy_label_strategy_b": strategy_b,
+        "proxy_binary_high_strategy_b": int(strategy_b == "high"),
+        "proxy_label_strategy_c": strategy_c,
+        "proxy_binary_high_strategy_c": int(strategy_c == "high"),
+        "proxy_label_reason": f"strategy_a:{reason_a}; strategy_b:{reason_b}; strategy_c:{reason_c}",
+        "proxy_label_limitations": "; ".join(dict.fromkeys(limitations)),
+    }
+
+
+def summarize_proxy_labels(
+    label_rows: Sequence[Mapping[str, Any]],
+    feature_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    strategies = ("strategy_a", "strategy_b", "strategy_c")
+    class_counts = {
+        strategy: _label_counts(label_rows, f"proxy_label_{strategy}")
+        for strategy in strategies
+    }
+    percentages = {
+        strategy: _label_percentages(counts, len(label_rows))
+        for strategy, counts in class_counts.items()
+    }
+    binary_counts = {
+        strategy: {
+            "high": sum(_safe_int(row.get(f"proxy_binary_high_{strategy}")) for row in label_rows),
+            "not_high": len(label_rows) - sum(_safe_int(row.get(f"proxy_binary_high_{strategy}")) for row in label_rows),
+        }
+        for strategy in strategies
+    }
+    reason_counts = _proxy_reason_counts(label_rows)
+    limitations = {
+        "strategy_a": ["Uses intrinsic technical severity when external evidence is sparse."],
+        "strategy_b": _strategy_b_limitations(feature_rows),
+        "strategy_c": ["Conservative binary proxy; non-high cases are not negative ground truth."],
+    }
+    trainability = {
+        strategy: _trainability_decision(
+            total=len(label_rows),
+            high_count=binary_counts[strategy]["high"],
+            limitations=limitations[strategy],
+        )
+        for strategy in strategies
+    }
+    warnings = _proxy_label_warnings(label_rows, feature_rows, reason_counts)
+    return {
+        "class_counts": class_counts,
+        "percentages": percentages,
+        "binary_counts": binary_counts,
+        "trainability": trainability,
+        "limitations": limitations,
+        "reason_counts": reason_counts,
+        "warnings": warnings,
+    }
+
+
+def compute_baseline_metrics(
+    rows: Sequence[Mapping[str, Any]],
+    label_rows: Sequence[Mapping[str, Any]],
+    *,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    label_by_cve = {str(row.get("cve_id", "")): row for row in label_rows}
+    ranked_rows = sorted(
+        rows,
+        key=lambda row: (-_safe_float(row.get("risk_score")), str(row.get("cve_id", ""))),
+    )
+    generated = generated_at or datetime.now(timezone.utc).isoformat()
+    return {
+        "generated_at": generated,
+        "ranking_method": "heuristic_risk_score",
+        "notes": [
+            "Metrics compare existing heuristic risk_score ranking against deterministic proxy labels.",
+            "Proxy labels are not ground truth and should not be interpreted as real-world exploitation labels.",
+            "No model training is performed in this baseline task.",
+        ],
+        "strategies": {
+            strategy: _baseline_metrics_for_strategy(ranked_rows, label_by_cve, strategy)
+            for strategy in ("strategy_a", "strategy_b", "strategy_c")
+        },
+    }
+
+
+def render_baseline_metrics_markdown(metrics: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration Baseline Metrics",
+        "",
+        "This artifact evaluates the existing heuristic `risk_score` ranking against deterministic proxy labels.",
+        "It does not train a model and does not change production scoring behavior.",
+        "",
+        "| Strategy | Status | Positives | Precision@10 | Recall@50 | nDCG@50 | High-label Coverage |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for strategy, payload in (metrics.get("strategies") or {}).items():
+        lines.append(
+            "| {strategy} | {status} | {positives} | {p10} | {r50} | {n50} | {coverage} |".format(
+                strategy=strategy,
+                status=payload.get("status", ""),
+                positives=payload.get("positive_count", 0),
+                p10=_format_metric((payload.get("precision_at_k") or {}).get("10")),
+                r50=_format_metric((payload.get("recall_at_k") or {}).get("50")),
+                n50=_format_metric((payload.get("ndcg_at_k") or {}).get("50")),
+                coverage=_format_metric(payload.get("high_label_coverage")),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "No-positive and tiny-positive strategies are retained in the report so limitations remain visible.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def train_learned_calibration_models(
+    rows: Sequence[Mapping[str, Any]],
+    label_rows: Sequence[Mapping[str, Any]],
+    *,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    generated = generated_at or datetime.now(timezone.utc).isoformat()
+    sklearn_bundle = _load_sklearn()
+    if sklearn_bundle is None:
+        return {
+            "predictions": [],
+            "report": _skipped_model_report(
+                generated_at=generated,
+                reason="scikit-learn is not installed in the current Python environment",
+            ),
+        }
+    label_by_cve = {str(row.get("cve_id", "")): row for row in label_rows}
+    predictions: list[dict[str, Any]] = []
+    strategies: dict[str, Any] = {}
+    for strategy in ("strategy_a", "strategy_b", "strategy_c"):
+        strategy_result = _train_strategy_model(rows, label_by_cve, strategy, sklearn_bundle)
+        strategies[strategy] = strategy_result["report"]
+        predictions.extend(strategy_result["predictions"])
+    return {
+        "predictions": sorted(predictions, key=lambda row: (row["strategy"], row["cve_id"])),
+        "report": {
+            "generated_at": generated,
+            "status": "completed",
+            "model_type": "LogisticRegression",
+            "random_seed": 42,
+            "features": list(MODEL_FEATURE_COLUMNS),
+            "leakage_guard": {
+                "risk_score_used_as_feature": "risk_score" in MODEL_FEATURE_COLUMNS,
+                "proxy_label_fields_used_as_features": [],
+            },
+            "model_registry": model_registry(sklearn_bundle),
+            "strategies": strategies,
+            "interpretation": _model_interpretation(strategies),
+        },
+    }
+
+
+def render_model_summary_markdown(report: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration Model Summary",
+        "",
+        "This artifact is experimental and does not change production scoring behavior.",
+        f"- Status: `{report.get('status', '')}`",
+        f"- Model type: `{report.get('model_type', 'skipped')}`",
+        f"- Random seed: `{report.get('random_seed', 'n/a')}`",
+        "",
+        "| Strategy | Status | Accuracy | Balanced Accuracy | Precision | Recall | F1 | ROC-AUC | PR-AUC |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for strategy, payload in (report.get("strategies") or {}).items():
+        metrics = payload.get("metrics") or {}
+        lines.append(
+            "| {strategy} | {status} | {accuracy} | {balanced} | {precision} | {recall} | {f1} | {roc} | {pr} |".format(
+                strategy=strategy,
+                status=payload.get("status", ""),
+                accuracy=_format_metric(metrics.get("accuracy")),
+                balanced=_format_metric(metrics.get("balanced_accuracy")),
+                precision=_format_metric(metrics.get("precision")),
+                recall=_format_metric(metrics.get("recall")),
+                f1=_format_metric(metrics.get("f1")),
+                roc=_format_metric(metrics.get("roc_auc")),
+                pr=_format_metric(metrics.get("pr_auc")),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "The model is meaningful only when proxy labels have enough class diversity and supporting evidence coverage.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def compute_learned_vs_heuristic_comparison(
+    rows: Sequence[Mapping[str, Any]],
+    label_rows: Sequence[Mapping[str, Any]],
+    prediction_rows: Sequence[Mapping[str, Any]],
+    *,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    generated = generated_at or datetime.now(timezone.utc).isoformat()
+    rows_by_cve = {str(row.get("cve_id", "")): row for row in rows}
+    label_by_cve = {str(row.get("cve_id", "")): row for row in label_rows}
+    predictions_by_strategy: dict[str, list[Mapping[str, Any]]] = {strategy: [] for strategy in ("strategy_a", "strategy_b", "strategy_c")}
+    for prediction in prediction_rows:
+        strategy = str(prediction.get("strategy", ""))
+        if strategy in predictions_by_strategy:
+            predictions_by_strategy[strategy].append(prediction)
+    strategies = {
+        strategy: _comparison_for_strategy(rows_by_cve, label_by_cve, predictions, strategy)
+        for strategy, predictions in predictions_by_strategy.items()
+    }
+    return {
+        "generated_at": generated,
+        "status": "completed" if any(payload["status"] != "skipped" for payload in strategies.values()) else "skipped",
+        "notes": [
+            "Comparison uses experimental learned probabilities when available.",
+            "The heuristic ranking is the existing production risk_score ordering; it is not changed by this artifact.",
+            "Proxy labels are deterministic thesis-analysis labels, not ground truth.",
+        ],
+        "strategies": strategies,
+    }
+
+
+def render_learned_vs_heuristic_markdown(comparison: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned vs Heuristic Ranking Comparison",
+        "",
+        "This artifact compares experimental learned probability rankings with the existing heuristic `risk_score` ranking.",
+        "It is skipped when no learned predictions are available.",
+        "",
+        "| Strategy | Status | Top-10 Overlap | Learned Precision@10 | Heuristic Precision@10 | Rank Correlation | Interpretation |",
+        "| --- | --- | ---: | ---: | ---: | ---: | --- |",
+    ]
+    for strategy, payload in (comparison.get("strategies") or {}).items():
+        overlap = (payload.get("top_k_overlap") or {}).get("10", {})
+        learned_precision = ((payload.get("learned_metrics") or {}).get("precision_at_k") or {}).get("10")
+        heuristic_precision = ((payload.get("heuristic_metrics") or {}).get("precision_at_k") or {}).get("10")
+        lines.append(
+            "| {strategy} | {status} | {overlap} | {lp} | {hp} | {corr} | {interpretation} |".format(
+                strategy=strategy,
+                status=payload.get("status", ""),
+                overlap=_format_metric(overlap.get("count")),
+                lp=_format_metric(learned_precision),
+                hp=_format_metric(heuristic_precision),
+                corr=_format_metric(payload.get("spearman_like_rank_correlation")),
+                interpretation=payload.get("interpretation", ""),
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def compute_disagreement_cases(
+    rows: Sequence[Mapping[str, Any]],
+    label_rows: Sequence[Mapping[str, Any]],
+    prediction_rows: Sequence[Mapping[str, Any]],
+    *,
+    max_examples_per_category: int = 5,
+) -> list[dict[str, Any]]:
+    rows_by_cve = {str(row.get("cve_id", "")): row for row in rows}
+    label_by_cve = {str(row.get("cve_id", "")): row for row in label_rows}
+    by_category: dict[str, list[dict[str, Any]]] = {}
+    predictions_by_strategy: dict[str, list[Mapping[str, Any]]] = {}
+    for prediction in prediction_rows:
+        predictions_by_strategy.setdefault(str(prediction.get("strategy", "")), []).append(prediction)
+    for strategy, predictions in predictions_by_strategy.items():
+        learned_ranks = {
+            str(prediction.get("cve_id", "")): rank
+            for rank, prediction in enumerate(
+                sorted(
+                    predictions,
+                    key=lambda row: (-_safe_float(row.get("learned_probability")), str(row.get("cve_id", ""))),
+                ),
+                start=1,
+            )
+        }
+        heuristic_ranks = {
+            cve_id: rank
+            for rank, (cve_id, _row) in enumerate(
+                sorted(rows_by_cve.items(), key=lambda item: (-_safe_float(item[1].get("risk_score")), item[0])),
+                start=1,
+            )
+        }
+        for prediction in predictions:
+            cve_id = str(prediction.get("cve_id", ""))
+            row = rows_by_cve.get(cve_id)
+            if row is None:
+                continue
+            probability = _safe_float(prediction.get("learned_probability"))
+            categories = _disagreement_categories(
+                row,
+                probability=probability,
+                learned_rank=learned_ranks.get(cve_id, 999999),
+                heuristic_rank=heuristic_ranks.get(cve_id, 999999),
+                proxy_label=str((label_by_cve.get(cve_id) or {}).get(f"proxy_label_{strategy}", "")),
+            )
+            for category, reason in categories:
+                by_category.setdefault(category, []).append(
+                    _disagreement_row(row, label_by_cve.get(cve_id) or {}, strategy, probability, category, reason)
+                )
+    output: list[dict[str, Any]] = []
+    for category in sorted(by_category):
+        output.extend(by_category[category][:max_examples_per_category])
+    return output
+
+
+def render_disagreements_markdown(rows: Sequence[Mapping[str, Any]]) -> str:
+    lines = [
+        "# Learned Calibration Disagreement Cases",
+        "",
+        "This artifact lists thesis-useful disagreements between experimental learned probabilities and heuristic risk scoring.",
+        "It is empty when learned predictions are unavailable.",
+        "",
+    ]
+    if not rows:
+        lines.extend(["No disagreement cases were exported because learned predictions are unavailable.", ""])
+        return "\n".join(lines)
+    counts: dict[str, int] = {}
+    for row in rows:
+        category = str(row.get("disagreement_type", ""))
+        counts[category] = counts.get(category, 0) + 1
+    lines.extend(f"- `{category}`: {count}" for category, count in sorted(counts.items()))
+    lines.append("")
+    return "\n".join(lines)
+
+
+def extract_feature_importance(
+    model_report: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for strategy, payload in (model_report.get("strategies") or {}).items():
+        coefficients = payload.get("coefficients") or {}
+        if not coefficients:
+            continue
+        ranked = sorted(coefficients.items(), key=lambda item: (-abs(_safe_float(item[1])), item[0]))
+        for rank, (feature, coefficient) in enumerate(ranked, start=1):
+            warning = ""
+            if feature in {"cvss_score", "severity_signal"} and rank <= 2:
+                warning = "model may be dominated by CVSS/severity"
+            output.append(
+                {
+                    "strategy": strategy,
+                    "feature": feature,
+                    "coefficient": coefficient,
+                    "absolute_coefficient_rank": rank,
+                    "sign_interpretation": _coefficient_sign_interpretation(_safe_float(coefficient)),
+                    "feature_coverage_note": _feature_coverage_note(feature, rows),
+                    "warning": warning,
+                }
+            )
+    return output
+
+
+def render_feature_importance_markdown(
+    rows: Sequence[Mapping[str, Any]],
+    model_report: Mapping[str, Any],
+) -> str:
+    lines = [
+        "# Learned Calibration Feature Importance",
+        "",
+        "This artifact exports interpretable LogisticRegression coefficients when a model is trained.",
+        "It is skipped when model training is unavailable or no strategy produces coefficients.",
+        "",
+    ]
+    if not rows:
+        reason = model_report.get("skip_reason") or "no trained model coefficients are available"
+        lines.extend([f"Skipped: {reason}.", ""])
+        return "\n".join(lines)
+    lines.extend(
+        [
+            "| Strategy | Feature | Coefficient | Abs Rank | Interpretation | Warning |",
+            "| --- | --- | ---: | ---: | --- | --- |",
+        ]
+    )
+    for row in rows:
+        lines.append(
+            "| {strategy} | {feature} | {coefficient} | {rank} | {interpretation} | {warning} |".format(
+                strategy=row.get("strategy", ""),
+                feature=row.get("feature", ""),
+                coefficient=row.get("coefficient", ""),
+                rank=row.get("absolute_coefficient_rank", ""),
+                interpretation=row.get("sign_interpretation", ""),
+                warning=row.get("warning", ""),
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def ablation_plan() -> list[dict[str, Any]]:
+    return [
+        {"name": "all_features", "features": list(MODEL_FEATURE_COLUMNS)},
+        {"name": "no_cvss_severity", "features": [feature for feature in MODEL_FEATURE_COLUMNS if feature not in {"cvss_score", "severity_signal"}]},
+        {"name": "no_recency", "features": [feature for feature in MODEL_FEATURE_COLUMNS if feature != "recency_signal"]},
+        {"name": "no_nlp_context", "features": [feature for feature in MODEL_FEATURE_COLUMNS if feature != "nlp_context_signal"]},
+        {"name": "no_confidence_data_completeness", "features": [feature for feature in MODEL_FEATURE_COLUMNS if feature not in {"assessment_confidence", "data_completeness"}]},
+        {"name": "no_intrinsic_floor_flag", "features": [feature for feature in MODEL_FEATURE_COLUMNS if feature != "intrinsic_criticality_floor_applied"]},
+        {"name": "evidence_only", "features": ["epss_signal", "kev_signal", "correlation_signal", "graph_signal", "accepted_urlhaus_count", "accepted_dread_count"]},
+        {"name": "signals_only", "features": ["severity_signal", "epss_signal", "kev_signal", "recency_signal", "correlation_signal", "graph_signal", "nlp_context_signal"]},
+        {"name": "metadata_context_only", "features": ["cvss_score", "recency_signal", "nlp_context_signal", "age_days", "assessment_confidence", "data_completeness", "intrinsic_criticality_floor_applied"]},
+    ]
+
+
+def compute_ablation_experiments(model_report: Mapping[str, Any]) -> list[dict[str, Any]]:
+    strategies = model_report.get("strategies") or {}
+    if model_report.get("status") != "completed":
+        reason = model_report.get("skip_reason") or "model training was not completed"
+        return [
+            _skipped_ablation_row(strategy, item["name"], item["features"], reason)
+            for strategy in ("strategy_a", "strategy_b", "strategy_c")
+            for item in ablation_plan()
+        ]
+    rows: list[dict[str, Any]] = []
+    for strategy, payload in strategies.items():
+        if payload.get("status") == "skipped":
+            reason = payload.get("skip_reason") or "strategy model was skipped"
+            rows.extend(_skipped_ablation_row(strategy, item["name"], item["features"], reason) for item in ablation_plan())
+            continue
+        metrics = payload.get("metrics") or {}
+        for item in ablation_plan():
+            rows.append(
+                {
+                    "strategy": strategy,
+                    "ablation": item["name"],
+                    "status": "baseline_only",
+                    "features": ";".join(item["features"]),
+                    "accuracy": metrics.get("accuracy", ""),
+                    "balanced_accuracy": metrics.get("balanced_accuracy", ""),
+                    "precision": metrics.get("precision", ""),
+                    "recall": metrics.get("recall", ""),
+                    "f1": metrics.get("f1", ""),
+                    "roc_auc": metrics.get("roc_auc", ""),
+                    "pr_auc": metrics.get("pr_auc", ""),
+                    "interpretation": _ablation_interpretation(item["name"]),
+                    "skip_reason": "ablation retraining is not run unless a trainable sklearn environment and usable labels are available",
+                }
+            )
+    return rows
+
+
+def render_ablation_markdown(rows: Sequence[Mapping[str, Any]]) -> str:
+    lines = [
+        "# Learned Calibration Ablation Experiments",
+        "",
+        "This artifact defines deterministic feature ablations for the experimental learned calibration model.",
+        "Rows are skipped when model training is unavailable or labels are untrainable.",
+        "",
+        "| Strategy | Ablation | Status | Balanced Accuracy | F1 | Interpretation |",
+        "| --- | --- | --- | ---: | ---: | --- |",
+    ]
+    for row in rows:
+        lines.append(
+            "| {strategy} | {ablation} | {status} | {balanced} | {f1} | {interpretation} |".format(
+                strategy=row.get("strategy", ""),
+                ablation=row.get("ablation", ""),
+                status=row.get("status", ""),
+                balanced=_format_metric(row.get("balanced_accuracy")),
+                f1=_format_metric(row.get("f1")),
+                interpretation=row.get("interpretation", ""),
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def build_leakage_checks(
+    model_report: Mapping[str, Any],
+    feasibility_report: Mapping[str, Any],
+    *,
+    summary_text: str = "",
+) -> dict[str, Any]:
+    checks = [
+        _leakage_check(
+            "final_risk_score_not_model_input",
+            "passed" if "risk_score" not in MODEL_FEATURE_COLUMNS else "failed",
+            "MODEL_FEATURE_COLUMNS excludes production risk_score.",
+        ),
+        _leakage_check(
+            "proxy_label_fields_not_model_inputs",
+            "passed" if all(not feature.startswith("proxy_") for feature in MODEL_FEATURE_COLUMNS) else "failed",
+            "MODEL_FEATURE_COLUMNS excludes proxy-label fields.",
+        ),
+        _leakage_check(
+            "learned_outputs_not_written_to_mongodb",
+            "passed",
+            "Exporter writes local reports only and does not call MongoDB update APIs.",
+        ),
+        _leakage_check(
+            "dread_live_crawling_not_used",
+            "passed",
+            "Learned calibration reads existing analyzed CVE records only.",
+        ),
+        _leakage_check(
+            "evidence_gates_unchanged",
+            "passed",
+            "This module consumes existing accepted evidence counts and does not modify URLhaus/Dread gates.",
+        ),
+        _leakage_check(
+            "confidence_not_recalibrated",
+            "passed",
+            "Learned model artifacts do not write confidence values back to analysis records.",
+        ),
+        _leakage_check(
+            "proxy_label_limitations_text_present",
+            "passed" if "Proxy labels are not ground truth" in summary_text else "failed",
+            "Generated summary contains proxy-label limitation text.",
+        ),
+        _leakage_check(
+            "model_report_leakage_guard_present",
+            "passed" if (model_report.get("leakage_guard") or {}).get("risk_score_used_as_feature") is False else "failed",
+            "Model report records explicit leakage guard fields.",
+        ),
+    ]
+    status = "passed" if all(check["status"] == "passed" for check in checks) else "failed"
+    return {
+        "status": status,
+        "checks": checks,
+        "notes": [
+            "These checks validate the experimental learned-calibration artifacts, not production scoring behavior.",
+            "Production risk, confidence, and evidence-gating code are not modified by this exporter.",
+        ],
+        "proxy_feasibility": feasibility_report.get("proxy_supervised_learning_feasibility", ""),
+    }
+
+
+def render_leakage_checks_markdown(report: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration Leakage and Robustness Checks",
+        "",
+        f"- Overall status: `{report.get('status', '')}`",
+        "",
+        "| Check | Status | Details |",
+        "| --- | --- | --- |",
+    ]
+    for check in report.get("checks") or []:
+        lines.append(f"| {check.get('check', '')} | {check.get('status', '')} | {check.get('details', '')} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_learned_calibration_thesis_section(
+    feasibility_report: Mapping[str, Any],
+    baseline_metrics: Mapping[str, Any],
+    model_report: Mapping[str, Any],
+    comparison: Mapping[str, Any],
+    disagreements: Sequence[Mapping[str, Any]],
+    ablations: Sequence[Mapping[str, Any]],
+) -> str:
+    lines = [
+        "# Learned Calibration Experiment",
+        "",
+        "This section summarizes an experimental learned-calibration layer built around the existing deterministic risk engine.",
+        "The purpose is diagnostic: to examine whether proxy-supervised models could reproduce or challenge the heuristic ranking without replacing production `risk_score`.",
+        "",
+        "## Proxy Labels",
+        "",
+        "Proxy labels are constructed from intrinsic severity/context, EPSS/KEV signals when available, and accepted external evidence counts.",
+        "They are not ground truth exploitation outcomes and do not support real-world supervised exploitation-prediction claims.",
+        f"The exported dataset contains `{feasibility_report.get('analyzed_records_exported', 0)}` analyzed CVE rows.",
+        "",
+        "## Feature Set",
+        "",
+        "The experimental feature set includes CVSS, normalized scoring signals, accepted evidence counts, confidence/data-completeness fields, age, and the intrinsic-criticality floor flag.",
+        "Production `risk_score` and proxy-label fields are excluded from model inputs.",
+        "",
+        "## Baseline Comparison",
+        "",
+        "The baseline artifacts compare the existing heuristic `risk_score` ranking against each proxy strategy.",
+        f"Baseline strategy statuses: `{_strategy_status_summary(baseline_metrics)}`.",
+        "",
+        "## Model Metrics",
+        "",
+        f"Model artifact status: `{model_report.get('status', '')}`.",
+        "When scikit-learn or usable class diversity is unavailable, model metrics are explicitly skipped rather than fabricated.",
+        "",
+        "## Ablation Interpretation",
+        "",
+        f"Ablation rows exported: `{len(ablations)}`.",
+        "Ablations are designed to test CVSS/severity dominance, recency, NLP context, confidence/data completeness, sparse evidence, normalized signals, and metadata/context views.",
+        "",
+        "## Disagreement Analysis",
+        "",
+        f"Disagreement rows exported: `{len(disagreements)}`.",
+        "These rows are intended as thesis examples when learned predictions are available; otherwise the artifact remains empty with an explicit explanation.",
+        "",
+        "## Production Risk Score",
+        "",
+        "The production risk score remains heuristic, deterministic, and explainable.",
+        "The learned-calibration artifacts do not write predictions back into MongoDB, do not recalibrate confidence, and do not change URLhaus/Dread evidence gates.",
+        "",
+        "## Interpretation",
+        "",
+        "The current experiment supports discussion of feasibility, proxy-label limitations, feature leakage controls, and evidence sparsity.",
+        "It does not establish statistical significance, production readiness, or real-world exploitation-prediction performance.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def render_learned_calibration_limitations(
+    feasibility_report: Mapping[str, Any],
+    model_report: Mapping[str, Any],
+    leakage_checks: Mapping[str, Any],
+) -> str:
+    lines = [
+        "# Learned Calibration Limitations",
+        "",
+        "## Scope",
+        "",
+        "Learned calibration is an experimental thesis artifact. It does not replace the deterministic scoring engine.",
+        "",
+        "## Proxy Labels Are Not Ground Truth",
+        "",
+        "The labels are deterministic proxies derived from available signals. They are not verified exploitation labels and should not be used to claim real-world predictive validity.",
+        "",
+        "## Evidence Coverage",
+        "",
+        f"EPSS available count: `{feasibility_report.get('epss_availability_count', 0)}`.",
+        f"KEV known count: `{feasibility_report.get('kev_known_count', 0)}`.",
+        f"Accepted external evidence count: `{feasibility_report.get('accepted_external_evidence_count', 0)}`.",
+        "Sparse EPSS/KEV or accepted external evidence limits what a learned model can responsibly learn.",
+        "",
+        "## Model Availability",
+        "",
+        f"Model status: `{model_report.get('status', '')}`.",
+        "If scikit-learn is unavailable or labels lack class diversity, training is skipped with explicit status fields.",
+        "",
+        "## Leakage Controls",
+        "",
+        f"Leakage check status: `{leakage_checks.get('status', '')}`.",
+        "The experiment excludes production `risk_score` and proxy-label fields from model inputs and writes only local artifacts.",
+        "",
+        "## Production Use",
+        "",
+        "The learned-calibration outputs are diagnostic and thesis-facing. Production scoring remains heuristic, auditable, and evidence-gated.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _strategy_status_summary(metrics: Mapping[str, Any]) -> str:
+    return ", ".join(
+        f"{strategy}={payload.get('status', '')}"
+        for strategy, payload in (metrics.get("strategies") or {}).items()
+    )
+
+
+def select_case_studies(
+    rows: Sequence[Mapping[str, Any]],
+    label_rows: Sequence[Mapping[str, Any]],
+    prediction_rows: Sequence[Mapping[str, Any]],
+    *,
+    max_per_group: int = 5,
+) -> list[dict[str, Any]]:
+    label_by_cve = {str(row.get("cve_id", "")): row for row in label_rows}
+    probability_by_cve = _best_probability_by_cve(prediction_rows)
+    groups: dict[str, list[dict[str, Any]]] = {
+        "high_heuristic_risk_and_high_learned_probability": [],
+        "high_heuristic_risk_but_low_learned_probability": [],
+        "low_medium_heuristic_risk_but_high_learned_probability": [],
+        "intrinsic_floor_applied": [],
+        "missing_epss_kev_high_intrinsic_severity": [],
+        "no_accepted_external_evidence_high_proxy_label": [],
+        "rejected_ignored_urlhaus_heavy": [],
+        "low_confidence_but_high_risk": [],
+    }
+    for row in sorted(rows, key=lambda item: (-_safe_float(item.get("risk_score")), str(item.get("cve_id", "")))):
+        cve_id = str(row.get("cve_id", ""))
+        label = str((label_by_cve.get(cve_id) or {}).get("proxy_label_strategy_a", ""))
+        probability = probability_by_cve.get(cve_id)
+        if _safe_float(row.get("risk_score")) >= 7.0 and probability is not None and probability >= 0.7:
+            groups["high_heuristic_risk_and_high_learned_probability"].append(_case_study_row(row, label, probability, "high_heuristic_risk_and_high_learned_probability", "high heuristic risk and high learned probability"))
+        if _safe_float(row.get("risk_score")) >= 7.0 and probability is not None and probability < 0.4:
+            groups["high_heuristic_risk_but_low_learned_probability"].append(_case_study_row(row, label, probability, "high_heuristic_risk_but_low_learned_probability", "high heuristic risk but low learned probability"))
+        if _safe_float(row.get("risk_score")) < 7.0 and probability is not None and probability >= 0.7:
+            groups["low_medium_heuristic_risk_but_high_learned_probability"].append(_case_study_row(row, label, probability, "low_medium_heuristic_risk_but_high_learned_probability", "low or medium heuristic risk but high learned probability"))
+        if _truthy(row.get("intrinsic_criticality_floor_applied")):
+            groups["intrinsic_floor_applied"].append(_case_study_row(row, label, probability, "intrinsic_floor_applied", "intrinsic criticality floor was applied"))
+        if _safe_float(row.get("cvss_score")) >= 9.8 and not _truthy(row.get("epss_available")) and not _truthy(row.get("kev_status_known")):
+            groups["missing_epss_kev_high_intrinsic_severity"].append(_case_study_row(row, label, probability, "missing_epss_kev_high_intrinsic_severity", "high intrinsic severity with missing EPSS/KEV coverage"))
+        if _accepted_external_count(row) == 0 and label == "high":
+            groups["no_accepted_external_evidence_high_proxy_label"].append(_case_study_row(row, label, probability, "no_accepted_external_evidence_high_proxy_label", "high proxy label without accepted external evidence"))
+        if _safe_int(row.get("urlhaus_ignored_low_signal_count")) + _safe_int(row.get("urlhaus_rejected_match_count")) >= 5:
+            groups["rejected_ignored_urlhaus_heavy"].append(_case_study_row(row, label, probability, "rejected_ignored_urlhaus_heavy", "many URLhaus candidates were ignored or rejected"))
+        if _safe_float(row.get("confidence")) < 0.4 and _safe_float(row.get("risk_score")) >= 7.0:
+            groups["low_confidence_but_high_risk"].append(_case_study_row(row, label, probability, "low_confidence_but_high_risk", "high risk with low confidence"))
+    output: list[dict[str, Any]] = []
+    for group in groups.values():
+        output.extend(group[:max_per_group])
+    return output
+
+
+def render_case_studies_markdown(rows: Sequence[Mapping[str, Any]]) -> str:
+    lines = [
+        "# Learned Calibration Case Studies",
+        "",
+        "These case studies are selected for thesis discussion from deterministic learned-calibration artifacts.",
+        "They do not claim ground truth exploitation; they illustrate proxy-label and ranking behavior.",
+        "",
+    ]
+    if not rows:
+        lines.extend(["No case studies matched the configured groups.", ""])
+        return "\n".join(lines)
+    counts: dict[str, int] = {}
+    for row in rows:
+        group = str(row.get("case_group", ""))
+        counts[group] = counts.get(group, 0) + 1
+    lines.append("## Case Groups")
+    lines.append("")
+    for group, count in sorted(counts.items()):
+        lines.append(f"- `{group}`: {count}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def build_publication_tables(
+    *,
+    feasibility_report: Mapping[str, Any],
+    baseline_metrics: Mapping[str, Any],
+    model_report: Mapping[str, Any],
+    ablations: Sequence[Mapping[str, Any]],
+    leakage_checks: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "dataset_coverage_summary": [
+            {"metric": "analyzed_records", "value": feasibility_report.get("analyzed_records_exported", 0)},
+            {"metric": "records_with_cvss", "value": feasibility_report.get("records_with_cvss", 0)},
+            {"metric": "epss_available", "value": feasibility_report.get("epss_availability_count", 0)},
+            {"metric": "kev_known", "value": feasibility_report.get("kev_known_count", 0)},
+            {"metric": "accepted_external_evidence", "value": feasibility_report.get("accepted_external_evidence_count", 0)},
+        ],
+        "proxy_label_class_distribution": _table_proxy_label_distribution(feasibility_report),
+        "heuristic_baseline_metrics": _table_baseline_metrics(baseline_metrics),
+        "learned_model_metrics": _table_model_metrics(model_report),
+        "ablation_summary": _table_ablation_summary(ablations),
+        "leakage_robustness_checks": list(leakage_checks.get("checks") or []),
+        "artifact_inventory": [
+            {"artifact": "learned_calibration_dataset.csv", "usage": "feature export"},
+            {"artifact": "learned_calibration_labels.csv", "usage": "proxy labels"},
+            {"artifact": "learned_calibration_baseline_metrics.json", "usage": "heuristic baseline"},
+            {"artifact": "learned_calibration_model_report.json", "usage": "optional model metrics"},
+            {"artifact": "learned_calibration_leakage_checks.json", "usage": "leakage controls"},
+            {"artifact": "learned_calibration_case_studies.csv", "usage": "case studies"},
+        ],
+    }
+
+
+def render_publication_tables_markdown(tables: Mapping[str, Any]) -> str:
+    lines = ["# Learned Calibration Publication Tables", ""]
+    lines.extend(_markdown_table("Dataset Coverage Summary", ["metric", "value"], tables.get("dataset_coverage_summary") or []))
+    lines.extend(_markdown_table("Proxy Label Class Distribution", ["strategy", "label", "count"], tables.get("proxy_label_class_distribution") or []))
+    lines.extend(_markdown_table("Heuristic Baseline Metrics", ["strategy", "status", "precision_at_10", "recall_at_50", "ndcg_at_50"], tables.get("heuristic_baseline_metrics") or []))
+    lines.extend(_markdown_table("Learned Model Metrics", ["strategy", "status", "balanced_accuracy", "f1"], tables.get("learned_model_metrics") or []))
+    lines.extend(_markdown_table("Ablation Summary", ["ablation", "status", "interpretation"], tables.get("ablation_summary") or []))
+    lines.extend(_markdown_table("Leakage and Robustness Checks", ["check", "status", "details"], tables.get("leakage_robustness_checks") or []))
+    lines.extend(_markdown_table("Artifact Inventory", ["artifact", "usage"], tables.get("artifact_inventory") or []))
+    return "\n".join(lines)
+
+
+def build_learned_calibration_manifest(output_dir: str | Path) -> dict[str, Any]:
+    output = Path(output_dir)
+    artifacts = []
+    for spec in _learned_calibration_artifact_specs():
+        path = output / spec["filename"]
+        artifacts.append(
+            {
+                "group": spec["group"],
+                "path": str(path),
+                "exists": path.exists(),
+                "size_bytes": path.stat().st_size if path.exists() else 0,
+                "description": spec["description"],
+                "producer": "evaluation.learned_calibration",
+                "thesis_usage_note": spec["usage"],
+            }
+        )
+    return {
+        "artifact_count": len(artifacts),
+        "artifacts": artifacts,
+        "status": "complete" if all(item["exists"] for item in artifacts) else "incomplete",
+    }
+
+
+def proxy_threshold_grid() -> list[dict[str, float]]:
+    return [
+        {
+            "epss_high_threshold": epss,
+            "cvss_critical_threshold": cvss,
+            "nlp_context_threshold": nlp,
+            "recency_threshold": recency,
+        }
+        for epss in (0.5, 0.6, 0.7, 0.8, 0.9)
+        for cvss in (9.0, 9.5, 9.8, 10.0)
+        for nlp in (0.6, 0.7, 0.8, 0.9)
+        for recency in (0.3, 0.5, 0.7, 0.9)
+    ]
+
+
+def compute_proxy_threshold_sensitivity(
+    rows: Sequence[Mapping[str, Any]],
+    label_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    default_labels = {
+        str(row.get("cve_id", "")): str(row.get("proxy_label_strategy_a", ""))
+        for row in label_rows
+    }
+    ranked_rows = sorted(rows, key=lambda row: (-_safe_float(row.get("risk_score")), str(row.get("cve_id", ""))))
+    output_rows = []
+    for thresholds in proxy_threshold_grid():
+        labels = [_threshold_label(row, thresholds) for row in ranked_rows]
+        high_count = sum(1 for label in labels if label == "high")
+        medium_count = sum(1 for label in labels if label == "medium")
+        low_count = sum(1 for label in labels if label == "low")
+        stability = _label_stability(ranked_rows, labels, default_labels)
+        output_rows.append(
+            {
+                **thresholds,
+                "high_count": high_count,
+                "medium_count": medium_count,
+                "low_count": low_count,
+                "high_percentage": round(high_count / max(len(labels), 1), 4),
+                "precision_at_10": _precision_at_k([int(label == "high") for label in labels], 10),
+                "precision_at_50": _precision_at_k([int(label == "high") for label in labels], 50),
+                "precision_at_100": _precision_at_k([int(label == "high") for label in labels], 100),
+                "label_stability_vs_strategy_a": stability,
+                "classification": _threshold_configuration_classification(high_count, len(labels)),
+            }
+        )
+    return {
+        "grid_size": len(output_rows),
+        "rows": output_rows,
+        "notes": [
+            "Proxy sensitivity evaluates alternate label thresholds only.",
+            "Default proxy labels and production risk scoring are unchanged.",
+            "No ML training is performed.",
+        ],
+    }
+
+
+def render_proxy_sensitivity_markdown(payload: Mapping[str, Any]) -> str:
+    rows = list(payload.get("rows") or [])
+    summary: dict[str, int] = {}
+    for row in rows:
+        label = str(row.get("classification", ""))
+        summary[label] = summary.get(label, 0) + 1
+    lines = [
+        "# Learned Calibration Proxy Threshold Sensitivity",
+        "",
+        "This artifact evaluates alternate proxy-label thresholds without changing default labels, production scoring, or evidence gates.",
+        f"- Grid size: `{payload.get('grid_size', 0)}`",
+        "",
+        "## Classification Summary",
+        "",
+    ]
+    lines.extend(f"- `{name}`: {count}" for name, count in sorted(summary.items()))
+    lines.extend(["", "## First 10 Grid Rows", "", "| EPSS | CVSS | NLP | Recency | High | Medium | Low | Stability | Class |", "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"])
+    for row in rows[:10]:
+        lines.append(
+            "| {epss} | {cvss} | {nlp} | {recency} | {high} | {medium} | {low} | {stability} | {classification} |".format(
+                epss=row.get("epss_high_threshold"),
+                cvss=row.get("cvss_critical_threshold"),
+                nlp=row.get("nlp_context_threshold"),
+                recency=row.get("recency_threshold"),
+                high=row.get("high_count"),
+                medium=row.get("medium_count"),
+                low=row.get("low_count"),
+                stability=row.get("label_stability_vs_strategy_a"),
+                classification=row.get("classification"),
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def bootstrap_sample_indices(size: int, *, seed: int = 42, iteration: int = 0) -> list[int]:
+    if size <= 0:
+        return []
+    rng = Random(seed + iteration)
+    return [rng.randrange(size) for _ in range(size)]
+
+
+def compute_bootstrap_stability(
+    rows: Sequence[Mapping[str, Any]],
+    label_rows: Sequence[Mapping[str, Any]],
+    *,
+    iterations: int = 100,
+    seed: int = 42,
+) -> dict[str, Any]:
+    label_by_cve = {str(row.get("cve_id", "")): _safe_int(row.get("proxy_binary_high_strategy_a")) for row in label_rows}
+    ranked_rows = sorted(rows, key=lambda row: (-_safe_float(row.get("risk_score")), str(row.get("cve_id", ""))))
+    ranked_ids = [str(row.get("cve_id", "")) for row in ranked_rows]
+    full_labels = [label_by_cve.get(cve_id, 0) for cve_id in ranked_ids]
+    positive_count = sum(full_labels)
+    if len(ranked_rows) < 10:
+        return _skipped_bootstrap_stability(rows, seed, iterations, "fewer than 10 exported rows")
+    if positive_count <= 0:
+        return _skipped_bootstrap_stability(rows, seed, iterations, "strategy_a has no positive proxy labels")
+    full_top50 = set(ranked_ids[:50])
+    full_top100 = set(ranked_ids[:100])
+    iterations_out: list[dict[str, Any]] = []
+    for iteration in range(iterations):
+        sample_indices = bootstrap_sample_indices(len(ranked_rows), seed=seed, iteration=iteration)
+        counts: dict[str, int] = {}
+        for index in sample_indices:
+            cve_id = str(rows[index].get("cve_id", ""))
+            counts[cve_id] = counts.get(cve_id, 0) + 1
+        sample_ranked_ids: list[str] = []
+        for cve_id in ranked_ids:
+            sample_ranked_ids.extend([cve_id] * counts.get(cve_id, 0))
+        sample_labels = [label_by_cve.get(cve_id, 0) for cve_id in sample_ranked_ids]
+        sample_positive_count = sum(sample_labels)
+        top50 = set(sample_ranked_ids[:50])
+        top100 = set(sample_ranked_ids[:100])
+        iterations_out.append(
+            {
+                "iteration": iteration,
+                "precision_at_10": _precision_at_k(sample_labels, 10),
+                "precision_at_50": _precision_at_k(sample_labels, 50),
+                "precision_at_100": _precision_at_k(sample_labels, 100),
+                "recall_at_50": _recall_at_k(sample_labels, 50),
+                "recall_at_100": _recall_at_k(sample_labels, 100),
+                "top50_overlap_with_full": _set_overlap(top50, full_top50),
+                "top100_overlap_with_full": _set_overlap(top100, full_top100),
+                "sample_size": len(sample_ranked_ids),
+                "positive_count": sample_positive_count,
+                "status": "evaluated",
+                "skip_reason": "",
+            }
+        )
+    return {
+        "status": "evaluated",
+        "seed": seed,
+        "iteration_count": iterations,
+        "record_count": len(ranked_rows),
+        "positive_count": positive_count,
+        "ranking_method": "heuristic_risk_score",
+        "proxy_label_strategy": "strategy_a",
+        "summary": summarize_bootstrap_metrics(iterations_out),
+        "iterations": iterations_out,
+        "notes": [
+            "Bootstrap stability resamples exported rows with replacement using fixed seed 42.",
+            "Metrics compare the unchanged heuristic risk_score ranking against Strategy A proxy labels.",
+            "This is a deterministic robustness check, not statistical calibration or real-world validation.",
+        ],
+    }
+
+
+def summarize_bootstrap_metrics(iteration_rows: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, float]]:
+    metric_names = [
+        "precision_at_10",
+        "precision_at_50",
+        "precision_at_100",
+        "recall_at_50",
+        "recall_at_100",
+        "top50_overlap_with_full",
+        "top100_overlap_with_full",
+    ]
+    return {
+        metric: _summarize_numeric_values([_safe_float(row.get(metric)) for row in iteration_rows])
+        for metric in metric_names
+    }
+
+
+def render_bootstrap_stability_markdown(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration Bootstrap Ranking Stability",
+        "",
+        "This artifact evaluates deterministic bootstrap stability for the unchanged heuristic `risk_score` ranking.",
+        "It uses Strategy A proxy labels and does not train a model or change production scoring.",
+        "",
+        f"- Status: `{payload.get('status', '')}`",
+        f"- Seed: `{payload.get('seed', '')}`",
+        f"- Iterations: `{payload.get('iteration_count', 0)}`",
+        f"- Records: `{payload.get('record_count', 0)}`",
+        f"- Strategy A positives: `{payload.get('positive_count', 0)}`",
+        "",
+    ]
+    if payload.get("status") == "skipped":
+        lines.extend(
+            [
+                "## Skipped",
+                "",
+                f"Reason: {payload.get('skip_reason', '')}",
+                "",
+            ]
+        )
+        return "\n".join(lines)
+    lines.extend(
+        [
+            "## Summary Statistics",
+            "",
+            "| Metric | Mean | Stddev | Min | Max | P05 | P95 |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for metric, stats in (payload.get("summary") or {}).items():
+        lines.append(
+            "| {metric} | {mean} | {stddev} | {minimum} | {maximum} | {p05} | {p95} |".format(
+                metric=metric,
+                mean=_format_metric(stats.get("mean")),
+                stddev=_format_metric(stats.get("stddev")),
+                minimum=_format_metric(stats.get("min")),
+                maximum=_format_metric(stats.get("max")),
+                p05=_format_metric(stats.get("p05")),
+                p95=_format_metric(stats.get("p95")),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "Stable top-K overlap suggests the ranking is not dominated by a single sampled row, while low overlap would be reported as a limitation.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _skipped_bootstrap_stability(
+    rows: Sequence[Mapping[str, Any]],
+    seed: int,
+    iterations: int,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "status": "skipped",
+        "seed": seed,
+        "iteration_count": iterations,
+        "record_count": len(rows),
+        "positive_count": 0,
+        "ranking_method": "heuristic_risk_score",
+        "proxy_label_strategy": "strategy_a",
+        "skip_reason": reason,
+        "summary": {},
+        "iterations": [],
+        "notes": [
+            "Bootstrap stability requires enough exported rows and at least one positive Strategy A proxy label.",
+            "Skipped artifacts are explicit so thesis limitations remain visible.",
+        ],
+    }
+
+
+def _summarize_numeric_values(values: Sequence[float]) -> dict[str, float]:
+    cleaned = [float(value) for value in values]
+    if not cleaned:
+        return {"mean": 0.0, "stddev": 0.0, "min": 0.0, "max": 0.0, "p05": 0.0, "p95": 0.0}
+    return {
+        "mean": round(mean(cleaned), 4),
+        "stddev": round(pstdev(cleaned), 4),
+        "min": round(min(cleaned), 4),
+        "max": round(max(cleaned), 4),
+        "p05": round(_percentile(cleaned, 0.05), 4),
+        "p95": round(_percentile(cleaned, 0.95), 4),
+    }
+
+
+def _percentile(values: Sequence[float], quantile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * quantile
+    lower = floor(position)
+    upper = ceil(position)
+    if lower == upper:
+        return ordered[int(position)]
+    weight = position - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+def _set_overlap(sample: set[str], baseline: set[str]) -> float:
+    if not baseline:
+        return 0.0
+    return round(len(sample & baseline) / len(baseline), 4)
+
+
+def compute_coverage_strata(
+    rows: Sequence[Mapping[str, Any]],
+    label_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    label_by_cve = {str(row.get("cve_id", "")): row for row in label_rows}
+    output_rows: list[dict[str, Any]] = []
+    for stratum, grouper in _coverage_stratum_groupers():
+        grouped: dict[str, list[Mapping[str, Any]]] = {}
+        for row in rows:
+            grouped.setdefault(grouper(row), []).append(row)
+        for group in sorted(grouped):
+            members = grouped[group]
+            output_rows.append(_coverage_stratum_row(stratum, group, members, label_by_cve))
+    return {
+        "status": "evaluated" if rows else "skipped",
+        "record_count": len(rows),
+        "strata_count": len(output_rows),
+        "rows": output_rows,
+        "notes": [
+            "Coverage strata are computed from exported dataset rows and deterministic proxy labels.",
+            "The analysis does not train a model, mutate MongoDB, or change production scoring.",
+            "Missing feature percentages are calculated over learned-calibration model feature columns.",
+        ],
+    }
+
+
+def render_coverage_strata_markdown(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration Coverage-Limitation Strata",
+        "",
+        "This artifact groups exported CVE rows by coverage and score-context limitations.",
+        "It uses deterministic proxy labels and does not train a model or change production scoring.",
+        "",
+        f"- Status: `{payload.get('status', '')}`",
+        f"- Records: `{payload.get('record_count', 0)}`",
+        f"- Strata rows: `{payload.get('strata_count', 0)}`",
+        "",
+        "## Strata Summary",
+        "",
+        "| Stratum | Group | Count | Avg Risk | Avg Confidence | A High | B High | C High | Interpretation |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+    ]
+    for row in payload.get("rows") or []:
+        lines.append(
+            "| {stratum} | {group} | {count} | {risk} | {confidence} | {a} | {b} | {c} | {note} |".format(
+                stratum=row.get("stratum", ""),
+                group=row.get("group", ""),
+                count=row.get("count", 0),
+                risk=_format_metric(row.get("average_risk_score")),
+                confidence=_format_metric(row.get("average_confidence")),
+                a=row.get("strategy_a_high_count", 0),
+                b=row.get("strategy_b_high_count", 0),
+                c=row.get("strategy_c_high_count", 0),
+                note=row.get("interpretation_note", ""),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "Missing-feature percentages are available in the CSV and JSON artifacts for each stratum.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _coverage_stratum_groupers() -> list[tuple[str, Any]]:
+    return [
+        ("epss_availability", lambda row: "epss_available" if _truthy(row.get("epss_available")) else "epss_unavailable"),
+        ("kev_status", lambda row: "kev_known" if _truthy(row.get("kev_status_known")) else "kev_unknown"),
+        ("kev_listing", lambda row: "kev_listed" if _truthy(row.get("kev_listed")) else "kev_not_listed_or_unknown"),
+        ("accepted_external_evidence", _accepted_external_evidence_group),
+        ("intrinsic_floor", lambda row: "intrinsic_floor_applied" if _truthy(row.get("intrinsic_criticality_floor_applied")) else "intrinsic_floor_not_applied"),
+        ("confidence_bucket", lambda row: _confidence_bucket(_safe_float(row.get("confidence")))),
+        ("risk_bucket", lambda row: _risk_bucket(_safe_float(row.get("risk_score")))),
+        ("ignored_urlhaus_candidate_bucket", lambda row: _count_bucket(_safe_int(row.get("urlhaus_ignored_low_signal_count")))),
+        ("rejected_urlhaus_candidate_bucket", lambda row: _count_bucket(_safe_int(row.get("urlhaus_rejected_match_count")))),
+    ]
+
+
+def _coverage_stratum_row(
+    stratum: str,
+    group: str,
+    rows: Sequence[Mapping[str, Any]],
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "stratum": stratum,
+        "group": group,
+        "count": len(rows),
+        "average_risk_score": round(mean([_safe_float(row.get("risk_score")) for row in rows]), 4) if rows else 0.0,
+        "average_confidence": round(mean([_safe_float(row.get("confidence")) for row in rows]), 4) if rows else 0.0,
+        "strategy_a_high_count": _strategy_high_count(rows, label_by_cve, "strategy_a"),
+        "strategy_b_high_count": _strategy_high_count(rows, label_by_cve, "strategy_b"),
+        "strategy_c_high_count": _strategy_high_count(rows, label_by_cve, "strategy_c"),
+        "missing_feature_percentages": json.dumps(_strata_missing_feature_percentages(rows), sort_keys=True),
+        "interpretation_note": _coverage_interpretation(stratum, group),
+    }
+
+
+def _accepted_external_evidence_group(row: Mapping[str, Any]) -> str:
+    accepted = _safe_int(row.get("accepted_urlhaus_count")) + _safe_int(row.get("accepted_dread_count"))
+    return "accepted_external_evidence_present" if accepted > 0 else "accepted_external_evidence_absent"
+
+
+def _count_bucket(count: int) -> str:
+    if count <= 0:
+        return "none"
+    if count < 10:
+        return "low_1_to_9"
+    if count < 100:
+        return "medium_10_to_99"
+    return "high_100_plus"
+
+
+def _strategy_high_count(
+    rows: Sequence[Mapping[str, Any]],
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+    strategy: str,
+) -> int:
+    return sum(
+        _safe_int((label_by_cve.get(str(row.get("cve_id", ""))) or {}).get(f"proxy_binary_high_{strategy}"))
+        for row in rows
+    )
+
+
+def _strata_missing_feature_percentages(rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
+    if not rows:
+        return {feature: 0.0 for feature in MODEL_FEATURE_COLUMNS}
+    missing: dict[str, int] = {feature: 0 for feature in MODEL_FEATURE_COLUMNS}
+    for row in rows:
+        for feature in MODEL_FEATURE_COLUMNS:
+            if row.get(feature) in (None, ""):
+                missing[feature] += 1
+    return {feature: round(count / len(rows), 4) for feature, count in missing.items()}
+
+
+def _coverage_interpretation(stratum: str, group: str) -> str:
+    if stratum == "epss_availability":
+        return "EPSS coverage supports exploit-likelihood context." if group == "epss_available" else "Missing EPSS should be treated as a coverage limitation."
+    if stratum == "kev_status":
+        return "Known KEV status improves evidence coverage." if group == "kev_known" else "Unknown KEV status limits confidence interpretation."
+    if stratum == "kev_listing":
+        return "KEV-listed records have direct active-exploitation evidence." if group == "kev_listed" else "Not listed or unknown KEV status is not proof of no exploitation."
+    if stratum == "accepted_external_evidence":
+        return "Accepted external evidence can support risk and confidence." if group.endswith("present") else "Absent accepted evidence should limit confidence, not zero risk."
+    if stratum == "intrinsic_floor":
+        return "Intrinsic criticality floor indicates high technical severity context." if group == "intrinsic_floor_applied" else "No intrinsic floor was needed for this group."
+    if stratum == "confidence_bucket":
+        return "Confidence bucket summarizes reliability of available assessment inputs."
+    if stratum == "risk_bucket":
+        return "Risk bucket summarizes current heuristic prioritization."
+    if stratum == "ignored_urlhaus_candidate_bucket":
+        return "Ignored URLhaus candidates are retrieval noise and are not rejected evidence."
+    if stratum == "rejected_urlhaus_candidate_bucket":
+        return "Rejected URLhaus candidates are signal-bearing but insufficient for accepted evidence."
+    return "Coverage stratum for learned-calibration feasibility discussion."
+
+
+def build_negative_control_rankings(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    seed: int = 42,
+) -> dict[str, list[Mapping[str, Any]]]:
+    base_rows = sorted(rows, key=lambda row: str(row.get("cve_id", "")))
+    random_rows = list(base_rows)
+    Random(seed).shuffle(random_rows)
+    return {
+        "heuristic_risk_score": sorted(base_rows, key=lambda row: (-_safe_float(row.get("risk_score")), str(row.get("cve_id", "")))),
+        "random_seed_42": random_rows,
+        "reverse_risk_score": sorted(base_rows, key=lambda row: (_safe_float(row.get("risk_score")), str(row.get("cve_id", "")))),
+        "cvss_only": sorted(base_rows, key=lambda row: (-_safe_float(row.get("cvss_score")), str(row.get("cve_id", "")))),
+        "recency_only": sorted(base_rows, key=lambda row: (-_safe_float(row.get("recency_signal")), str(row.get("cve_id", "")))),
+        "nlp_context_only": sorted(base_rows, key=lambda row: (-_safe_float(row.get("nlp_context_signal")), str(row.get("cve_id", "")))),
+        "confidence_only": sorted(base_rows, key=lambda row: (-_safe_float(row.get("confidence")), str(row.get("cve_id", "")))),
+    }
+
+
+def compute_negative_controls(
+    rows: Sequence[Mapping[str, Any]],
+    label_rows: Sequence[Mapping[str, Any]],
+    *,
+    seed: int = 42,
+) -> dict[str, Any]:
+    label_by_cve = {str(row.get("cve_id", "")): row for row in label_rows}
+    rankings = build_negative_control_rankings(rows, seed=seed)
+    heuristic_ids = [str(row.get("cve_id", "")) for row in rankings["heuristic_risk_score"]]
+    control_rows = [
+        _negative_control_metrics(name, ranked, label_by_cve, heuristic_ids)
+        for name, ranked in rankings.items()
+    ]
+    heuristic = next(row for row in control_rows if row["control"] == "heuristic_risk_score")
+    random_control = next(row for row in control_rows if row["control"] == "random_seed_42")
+    cvss_control = next(row for row in control_rows if row["control"] == "cvss_only")
+    interpretation = _negative_control_interpretation(heuristic, random_control, cvss_control)
+    return {
+        "status": "evaluated" if rows else "skipped",
+        "seed": seed,
+        "record_count": len(rows),
+        "proxy_label_strategy": "strategy_a",
+        "controls": control_rows,
+        "interpretation": interpretation,
+        "notes": [
+            "Negative controls compare alternate deterministic rankings against Strategy A proxy labels.",
+            "The analysis does not train a model and does not change production scoring.",
+            "CVSS-only may be close to heuristic ranking when proxy labels are driven by intrinsic severity.",
+        ],
+    }
+
+
+def render_negative_controls_markdown(payload: Mapping[str, Any]) -> str:
+    interpretation = payload.get("interpretation") or {}
+    lines = [
+        "# Learned Calibration Negative Controls",
+        "",
+        "This artifact compares the unchanged heuristic `risk_score` ranking with deterministic weak or single-feature rankings.",
+        "It uses Strategy A proxy labels and does not train a model or change production scoring.",
+        "",
+        f"- Status: `{payload.get('status', '')}`",
+        f"- Seed: `{payload.get('seed', '')}`",
+        f"- Records: `{payload.get('record_count', 0)}`",
+        f"- Heuristic outperforms random control: `{interpretation.get('heuristic_outperforms_random', False)}`",
+        f"- CVSS-only close to heuristic: `{interpretation.get('cvss_only_close_to_heuristic', False)}`",
+        "",
+        "## Metric Comparison",
+        "",
+        "| Control | Precision@10 | Precision@50 | Precision@100 | Recall@50 | Recall@100 | Top50 Overlap | Top100 Overlap |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in payload.get("controls") or []:
+        lines.append(
+            "| {control} | {p10} | {p50} | {p100} | {r50} | {r100} | {o50} | {o100} |".format(
+                control=row.get("control", ""),
+                p10=_format_metric(row.get("precision_at_10")),
+                p50=_format_metric(row.get("precision_at_50")),
+                p100=_format_metric(row.get("precision_at_100")),
+                r50=_format_metric(row.get("recall_at_50")),
+                r100=_format_metric(row.get("recall_at_100")),
+                o50=_format_metric(row.get("top50_overlap_with_heuristic")),
+                o100=_format_metric(row.get("top100_overlap_with_heuristic")),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Interpretation",
+            "",
+            str(interpretation.get("summary", "")),
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _negative_control_metrics(
+    control: str,
+    ranked_rows: Sequence[Mapping[str, Any]],
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+    heuristic_ids: Sequence[str],
+) -> dict[str, Any]:
+    labels = [
+        _safe_int((label_by_cve.get(str(row.get("cve_id", ""))) or {}).get("proxy_binary_high_strategy_a"))
+        for row in ranked_rows
+    ]
+    positives = sum(labels)
+    return {
+        "control": control,
+        "status": "evaluated" if positives else "no_positive_labels",
+        "positive_count": positives,
+        "precision_at_10": _precision_at_k(labels, 10) if positives else None,
+        "precision_at_50": _precision_at_k(labels, 50) if positives else None,
+        "precision_at_100": _precision_at_k(labels, 100) if positives else None,
+        "recall_at_50": _recall_at_k(labels, 50) if positives else None,
+        "recall_at_100": _recall_at_k(labels, 100) if positives else None,
+        "top10_overlap_with_heuristic": _ordered_top_overlap(ranked_rows, heuristic_ids, 10),
+        "top50_overlap_with_heuristic": _ordered_top_overlap(ranked_rows, heuristic_ids, 50),
+        "top100_overlap_with_heuristic": _ordered_top_overlap(ranked_rows, heuristic_ids, 100),
+    }
+
+
+def _negative_control_interpretation(
+    heuristic: Mapping[str, Any],
+    random_control: Mapping[str, Any],
+    cvss_control: Mapping[str, Any],
+) -> dict[str, Any]:
+    heuristic_p50 = _safe_float(heuristic.get("precision_at_50"))
+    random_p50 = _safe_float(random_control.get("precision_at_50"))
+    cvss_p50 = _safe_float(cvss_control.get("precision_at_50"))
+    outperforms_random = heuristic_p50 > random_p50
+    cvss_close = abs(heuristic_p50 - cvss_p50) <= 0.05
+    if outperforms_random and cvss_close:
+        summary = (
+            "The heuristic ranking outperforms the fixed-seed random control under Strategy A proxy labels. "
+            "CVSS-only is close to the heuristic, which is expected because Strategy A includes intrinsic severity."
+        )
+    elif outperforms_random:
+        summary = "The heuristic ranking outperforms the fixed-seed random control under Strategy A proxy labels."
+    elif cvss_close:
+        summary = (
+            "The heuristic ranking does not clearly outperform the fixed-seed random control under Strategy A proxy labels. "
+            "CVSS-only is close to the heuristic, which is expected because Strategy A includes intrinsic severity."
+        )
+    else:
+        summary = "The heuristic ranking does not clearly outperform the fixed-seed random control under Strategy A proxy labels."
+    return {
+        "heuristic_outperforms_random": outperforms_random,
+        "cvss_only_close_to_heuristic": cvss_close,
+        "summary": summary,
+    }
+
+
+def _ordered_top_overlap(
+    ranked_rows: Sequence[Mapping[str, Any]],
+    heuristic_ids: Sequence[str],
+    k: int,
+) -> float:
+    if k <= 0:
+        return 0.0
+    heuristic_top = set(heuristic_ids[: min(k, len(heuristic_ids))])
+    if not heuristic_top:
+        return 0.0
+    ranked_top = {str(row.get("cve_id", "")) for row in ranked_rows[: min(k, len(ranked_rows))]}
+    return round(len(ranked_top & heuristic_top) / len(heuristic_top), 4)
+
+
+def build_consistency_audit(artifact_dir: str | Path) -> dict[str, Any]:
+    root = Path(artifact_dir)
+    checks: list[dict[str, Any]] = []
+    dataset_rows = _read_csv_rows(root / "learned_calibration_dataset.csv")
+    label_rows = _read_csv_rows(root / "learned_calibration_labels.csv")
+    dataset_ids = [row.get("cve_id", "") for row in dataset_rows]
+    label_ids = [row.get("cve_id", "") for row in label_rows]
+    checks.append(_audit_check("dataset_label_row_count_match", len(dataset_rows) == len(label_rows), f"dataset={len(dataset_rows)} labels={len(label_rows)}"))
+    checks.append(_audit_check("dataset_cve_ids_unique", len(dataset_ids) == len(set(dataset_ids)), f"unique={len(set(dataset_ids))} total={len(dataset_ids)}"))
+    checks.append(_audit_check("label_ids_match_dataset_ids", set(label_ids) == set(dataset_ids), f"dataset_only={len(set(dataset_ids) - set(label_ids))} labels_only={len(set(label_ids) - set(dataset_ids))}"))
+    prediction_rows = _read_csv_rows(root / "learned_calibration_predictions.csv")
+    prediction_ids = {row.get("cve_id", "") for row in prediction_rows if row.get("cve_id")}
+    checks.append(_audit_check("prediction_ids_subset_dataset_ids", prediction_ids.issubset(set(dataset_ids)), f"prediction_ids={len(prediction_ids)}"))
+    for filename in _learned_calibration_json_filenames_for_audit():
+        checks.append(_audit_check(f"json_parseable:{filename}", _json_file_parseable(root / filename), filename))
+    for filename in _learned_calibration_csv_filenames_for_audit():
+        checks.append(_audit_check(f"csv_no_duplicate_headers:{filename}", not _csv_has_duplicate_headers(root / filename), filename))
+    for filename in _learned_calibration_markdown_filenames_for_audit():
+        checks.append(_audit_check(f"markdown_limitation_language:{filename}", _markdown_has_limitation_language(root / filename), filename))
+    checks.append(_audit_check("sklearn_unavailable_model_report_skipped", _sklearn_skip_consistent(root / "learned_calibration_model_report.json"), "model report status matches sklearn availability"))
+    checks.append(_audit_check("no_ground_truth_exploitation_prediction_claim", not _contains_unsafe_exploitation_prediction_claim(root), "artifact text avoids ground-truth exploitation prediction claims"))
+    status = "passed" if all(check["status"] == "passed" for check in checks) else "failed"
+    return {
+        "status": status,
+        "artifact_dir": str(root),
+        "dataset_row_count": len(dataset_rows),
+        "label_row_count": len(label_rows),
+        "check_count": len(checks),
+        "checks": checks,
+        "notes": [
+            "Consistency audit validates learned-calibration artifact structure and limitation language.",
+            "It does not validate proxy labels as ground truth and does not change production scoring.",
+        ],
+    }
+
+
+def render_consistency_audit_markdown(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration Artifact Consistency Audit",
+        "",
+        "This artifact checks structural consistency across learned-calibration outputs.",
+        "It does not validate proxy labels as ground truth and does not change production scoring.",
+        "",
+        f"- Status: `{payload.get('status', '')}`",
+        f"- Dataset rows: `{payload.get('dataset_row_count', 0)}`",
+        f"- Label rows: `{payload.get('label_row_count', 0)}`",
+        f"- Checks: `{payload.get('check_count', 0)}`",
+        "",
+        "| Check | Status | Details |",
+        "| --- | --- | --- |",
+    ]
+    for check in payload.get("checks") or []:
+        lines.append(f"| {check.get('check', '')} | {check.get('status', '')} | {check.get('details', '')} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_learned_calibration_appendix(
+    *,
+    feasibility_report: Mapping[str, Any],
+    baseline_metrics: Mapping[str, Any],
+    model_report: Mapping[str, Any],
+    proxy_sensitivity: Mapping[str, Any],
+    bootstrap_stability: Mapping[str, Any],
+    coverage_strata: Mapping[str, Any],
+    negative_controls: Mapping[str, Any],
+    case_studies: Sequence[Mapping[str, Any]],
+    leakage_checks: Mapping[str, Any],
+    consistency_audit: Mapping[str, Any],
+) -> str:
+    strategy_a = (baseline_metrics.get("strategies") or {}).get("strategy_a") or {}
+    model_status = str(model_report.get("status", "unavailable"))
+    bootstrap_summary = bootstrap_stability.get("summary") or {}
+    bootstrap_p10 = (bootstrap_summary.get("precision_at_10") or {}).get("mean")
+    negative_interpretation = (negative_controls.get("interpretation") or {}).get("summary", "Unavailable.")
+    lines = [
+        "# Learned Calibration Appendix Draft",
+        "",
+        "This appendix draft summarizes the learned-calibration feasibility artifacts in conservative academic language. Proxy labels are not ground truth exploitation outcomes, and this appendix does not change production scoring.",
+        "",
+        "## 1. Purpose of the Learned Calibration Experiment",
+        "",
+        "The learned-calibration experiment evaluates whether the existing deterministic signal export could support a future supervised calibration layer. It is diagnostic thesis material only: it does not replace the heuristic risk engine, does not write learned outputs back to MongoDB, and does not weaken URLhaus or Dread evidence gates.",
+        "",
+        "## 2. Dataset Construction",
+        "",
+        f"The export contains `{feasibility_report.get('analyzed_records_exported', 0)}` analyzed CVE rows from the existing analysis collection. `{feasibility_report.get('records_with_cvss', 0)}` rows include CVSS values, `{feasibility_report.get('epss_availability_count', 0)}` rows report EPSS availability, and `{feasibility_report.get('kev_known_count', 0)}` rows have known KEV status. Accepted external-evidence count is `{feasibility_report.get('accepted_external_evidence_count', 0)}`.",
+        "",
+        "## 3. Feature Schema",
+        "",
+        "The feature schema exports CVSS/severity, EPSS, KEV, recency, correlation, graph, NLP context, accepted evidence counts, confidence/data-completeness fields, age, and intrinsic criticality indicators. Production `risk_score` is excluded from learned-model feature columns to avoid leakage.",
+        "",
+        "## 4. Proxy-Label Design",
+        "",
+        "Strategy A combines intrinsic severity patterns with known evidence, Strategy B emphasizes KEV/EPSS/accepted external evidence, and Strategy C is a conservative high-vs-rest proxy. These labels are deterministic proxies for feasibility analysis, not real-world exploitation labels.",
+        "",
+        "## 5. Coverage Limitations",
+        "",
+        f"Coverage remains limited: EPSS availability is `{feasibility_report.get('epss_availability_count', 0)}` and KEV-known count is `{feasibility_report.get('kev_known_count', 0)}` in the exported dataset. Missing EPSS, KEV, or accepted external evidence should be interpreted as coverage limitations rather than proof that a CVE is unimportant.",
+        "Legacy high-risk diagnostics distinguish modern intrinsic criticality floor cases, old high-CVSS retained-severity cases, and high-risk cases with no accepted external evidence. These diagnostics are not a production scoring change. Preserving old CVSS 10 severity can be defensible for intrinsic technical severity, but lack of EPSS, KEV, or accepted external evidence limits operational interpretation.",
+        "",
+        "## 6. Baseline Ranking Metrics",
+        "",
+        f"For Strategy A, heuristic precision@10 is `{_format_metric((strategy_a.get('precision_at_k') or {}).get('10'))}`, recall@50 is `{_format_metric((strategy_a.get('recall_at_k') or {}).get('50'))}`, and nDCG@50 is `{_format_metric((strategy_a.get('ndcg_at_k') or {}).get('50'))}`. These metrics compare the unchanged heuristic ranking with proxy labels only.",
+        "",
+        "## 7. Model Training Status and Dependency Limitations",
+        "",
+        f"Model training status is `{model_status}`. If scikit-learn is unavailable or proxy labels lack class diversity, model artifacts are explicitly skipped instead of fabricating learned results.",
+        "",
+        "## 8. Sensitivity Analysis",
+        "",
+        f"The proxy-threshold sensitivity grid contains `{proxy_sensitivity.get('grid_size', 0)}` deterministic configurations. This probes threshold robustness for proxy-label definitions and does not alter default labels or production scoring.",
+        "",
+        "## 9. Bootstrap Stability",
+        "",
+        f"Bootstrap stability status is `{bootstrap_stability.get('status', 'unavailable')}` with `{bootstrap_stability.get('iteration_count', 0)}` fixed-seed iterations. Mean precision@10 is `{_format_metric(bootstrap_p10)}` when available. This is a deterministic robustness check, not statistical calibration.",
+        "",
+        "## 10. Coverage-Stratified Analysis",
+        "",
+        f"The coverage-strata artifact reports `{coverage_strata.get('strata_count', 0)}` strata rows across EPSS, KEV, evidence, intrinsic-floor, confidence, risk, and URLhaus candidate-accounting groups. It helps separate ranking behavior from evidence-coverage limitations.",
+        "",
+        "## 11. Negative Controls",
+        "",
+        str(negative_interpretation),
+        "",
+        "## 12. Disagreement/Case-Study Interpretation",
+        "",
+        f"The case-study export contains `{len(case_studies)}` selected rows when examples are available. These cases are intended for qualitative discussion of proxy behavior, sparse evidence, intrinsic criticality, ignored URLhaus volume, and low-confidence high-risk records.",
+        "",
+        "## 13. Leakage and Robustness Checks",
+        "",
+        f"Leakage-check status is `{leakage_checks.get('status', 'unavailable')}`. The checks document that production `risk_score` is excluded from learned features, proxy-label fields are not model inputs, evidence gates are unchanged, and Dread live crawling is not used.",
+        "",
+        "## 14. Why Production Risk Scoring Remains Heuristic",
+        "",
+        "The current thesis implementation keeps production risk scoring heuristic and explainable because proxy labels are not ground truth, external evidence coverage is sparse, and learned models may be unavailable or untrainable in the local environment. Learned calibration remains a future extension candidate.",
+        "",
+        "## 15. Threats to Validity",
+        "",
+        "The main threats are proxy-label circularity, sparse EPSS/KEV and accepted external evidence, limited positive labels, dependency availability, and lack of external ground-truth outcomes. The artifacts support feasibility and robustness discussion, not claims of real-world predictive performance.",
+        "",
+        "## 16. Recommended Future Work",
+        "",
+        f"Future work should add defensible external labels, improve EPSS/KEV and asset-context coverage, evaluate train/test separation on curated datasets, and repeat consistency checks. Future age-aware dampening should be evaluated only with stronger labels or asset context. Current consistency-audit status is `{consistency_audit.get('status', 'unavailable')}`.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def build_runtime_snapshot(
+    artifact_dir: str | Path,
+    *,
+    generated_at: str | None = None,
+    git_metadata: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    root = Path(artifact_dir)
+    generated = generated_at or datetime.now(timezone.utc).isoformat()
+    git_info = dict(git_metadata or _current_git_metadata())
+    core_files = [
+        "learned_calibration_dataset.csv",
+        "learned_calibration_labels.csv",
+        "learned_calibration_report.json",
+        "learned_calibration_model_report.json",
+        "learned_calibration_manifest.json",
+        "learned_calibration_consistency_audit.json",
+        "learned_calibration_appendix.md",
+    ]
+    row_count_files = [
+        "learned_calibration_dataset.csv",
+        "learned_calibration_labels.csv",
+        "learned_calibration_predictions.csv",
+        "learned_calibration_case_studies.csv",
+        "learned_calibration_proxy_sensitivity.csv",
+        "learned_calibration_bootstrap_stability.csv",
+        "learned_calibration_coverage_strata.csv",
+    ]
+    status_files = [
+        "learned_calibration_report.json",
+        "learned_calibration_model_report.json",
+        "learned_calibration_leakage_checks.json",
+        "learned_calibration_bootstrap_stability.json",
+        "learned_calibration_coverage_strata.json",
+        "learned_calibration_negative_controls.json",
+        "learned_calibration_consistency_audit.json",
+        "learned_calibration_manifest.json",
+    ]
+    core_existence = {filename: (root / filename).exists() for filename in core_files}
+    row_counts = {filename: _csv_row_count(root / filename) for filename in row_count_files}
+    status_values = {filename: _json_status(root / filename) for filename in status_files}
+    model_report = _read_json_mapping(root / "learned_calibration_model_report.json")
+    warnings = _runtime_snapshot_warnings(root, row_counts)
+    return {
+        "status": "available" if all(core_existence.values()) else "incomplete",
+        "generated_at": generated,
+        "git": {
+            "branch": git_info.get("branch", "unknown"),
+            "head_commit": git_info.get("head_commit", "unknown"),
+        },
+        "artifact_dir": str(root),
+        "core_artifact_existence": core_existence,
+        "row_counts": row_counts,
+        "json_status_values": status_values,
+        "model_training_status": model_report.get("status", "unavailable"),
+        "model_skip_reason": model_report.get("skip_reason", ""),
+        "sklearn_available": _load_sklearn() is not None,
+        "final_test_commands": [
+            "make test-python",
+            "make thesis-artifacts",
+            "make thesis-artifact-quality",
+            "make thesis-learned-calibration",
+            "make thesis-learned-calibration-quality",
+        ],
+        "warnings": warnings,
+        "notes": [
+            "Runtime snapshot uses local files and git metadata only.",
+            "It does not run full analysis, mutate MongoDB, train a model, or push commits.",
+        ],
+    }
+
+
+def render_runtime_snapshot_markdown(snapshot: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration Runtime Snapshot",
+        "",
+        "This snapshot summarizes local learned-calibration artifact health from files and git metadata only.",
+        "It does not run full analysis, mutate MongoDB, train a model, or push commits.",
+        "",
+        f"- Status: `{snapshot.get('status', '')}`",
+        f"- Generated at: `{snapshot.get('generated_at', '')}`",
+        f"- Branch: `{(snapshot.get('git') or {}).get('branch', '')}`",
+        f"- HEAD: `{(snapshot.get('git') or {}).get('head_commit', '')}`",
+        f"- Model status: `{snapshot.get('model_training_status', '')}`",
+        f"- scikit-learn available: `{snapshot.get('sklearn_available', False)}`",
+        "",
+        "## Core Artifacts",
+        "",
+        "| Artifact | Exists |",
+        "| --- | --- |",
+    ]
+    for filename, exists in (snapshot.get("core_artifact_existence") or {}).items():
+        lines.append(f"| {filename} | {exists} |")
+    lines.extend(["", "## Row Counts", "", "| CSV | Rows |", "| --- | ---: |"])
+    for filename, count in (snapshot.get("row_counts") or {}).items():
+        lines.append(f"| {filename} | {count} |")
+    lines.extend(["", "## JSON Status Values", "", "| JSON | Status |", "| --- | --- |"])
+    for filename, status in (snapshot.get("json_status_values") or {}).items():
+        lines.append(f"| {filename} | {status} |")
+    lines.extend(["", "## Known Validation Commands", ""])
+    lines.extend(f"- `{command}`" for command in snapshot.get("final_test_commands") or [])
+    lines.extend(["", "## Warnings", ""])
+    warnings = list(snapshot.get("warnings") or [])
+    lines.extend(f"- {warning}" for warning in warnings) if warnings else lines.append("- None.")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def build_reviewer_checklist(artifact_dir: str | Path) -> dict[str, Any]:
+    root = Path(artifact_dir)
+    model = _read_json_mapping(root / "learned_calibration_model_report.json")
+    consistency = _read_json_mapping(root / "learned_calibration_consistency_audit.json")
+    leakage = _read_json_mapping(root / "learned_calibration_leakage_checks.json")
+    baseline = _read_json_mapping(root / "learned_calibration_baseline_metrics.json")
+    runtime = _read_json_mapping(root / "learned_calibration_runtime_snapshot.json")
+    sections = [
+        ("reproducibility checks", [
+            _checklist_item("repro-commands", _exists(root / "learned_calibration_runtime_snapshot.json"), "learned_calibration_runtime_snapshot.json", "Runtime snapshot records known validation commands and git metadata."),
+            _checklist_item("repro-manifest", _exists(root / "learned_calibration_manifest.json"), "learned_calibration_manifest.json", "Manifest should list generated learned-calibration artifacts."),
+        ]),
+        ("artifact checks", [
+            _checklist_item("artifact-consistency", consistency.get("status") == "passed", "learned_calibration_consistency_audit.json", "Consistency audit should pass before using artifacts."),
+            _checklist_item("artifact-runtime-status", runtime.get("status") == "available", "learned_calibration_runtime_snapshot.json", "Runtime snapshot should report available core artifacts."),
+        ]),
+        ("proxy-label validity checks", [
+            _manual_item("proxy-label-review", "learned_calibration_labels.csv", "Review Strategy A/B/C proxy definitions; proxy labels are not ground truth."),
+            _checklist_item("proxy-baseline-present", bool((baseline.get("strategies") or {}).get("strategy_a")), "learned_calibration_baseline_metrics.json", "Strategy A baseline metrics should be present."),
+        ]),
+        ("leakage checks", [
+            _checklist_item("leakage-status", leakage.get("status") == "passed", "learned_calibration_leakage_checks.json", "Leakage checks should pass."),
+            _checklist_item("risk-score-excluded", "final_risk_score_not_model_input" in json.dumps(leakage), "learned_calibration_leakage_checks.json", "Leakage artifact should document production risk_score exclusion."),
+        ]),
+        ("model-training checks", [
+            _status_item("model-status", _model_training_check_status(model), "learned_calibration_model_report.json", _model_training_note(model)),
+            _manual_item("model-dependency-review", "learned_calibration_model_report.json", "If model training is skipped, decide whether an approved scikit-learn environment is allowed."),
+        ]),
+        ("ranking metric checks", [
+            _checklist_item("baseline-metrics-present", bool((baseline.get("strategies") or {}).get("strategy_a")), "learned_calibration_baseline_metrics.json", "Heuristic baseline metrics should be available."),
+            _checklist_item("negative-controls-present", _exists(root / "learned_calibration_negative_controls.json"), "learned_calibration_negative_controls.json", "Negative controls should be generated for sanity checking."),
+        ]),
+        ("limitations checks", [
+            _checklist_item("limitations-present", _exists(root / "learned_calibration_limitations.md"), "learned_calibration_limitations.md", "Limitations artifact should be available."),
+            _manual_item("limitations-review", "learned_calibration_appendix.md", "Confirm thesis text states proxy labels are not ground truth and learned calibration is experimental."),
+        ]),
+        ("no-overclaim checks", [
+            _checklist_item("no-ground-truth-claim", consistency.get("status") == "passed", "learned_calibration_consistency_audit.json", "Audit should reject ground-truth exploitation prediction claims."),
+            _manual_item("claim-review", "learned_calibration_appendix.md", "Avoid claims of real-world predictive performance or production replacement."),
+        ]),
+        ("defense-readiness checks", [
+            _checklist_item("appendix-present", _exists(root / "learned_calibration_appendix.md"), "learned_calibration_appendix.md", "Appendix draft should be available for thesis review."),
+            _manual_item("defense-review", "learned_calibration_runtime_snapshot.md", "Review skipped model status, sparse evidence coverage, and manual thesis talking points."),
+        ]),
+        ("manual review items for the thesis author", [
+            _manual_item("external-label-plan", "learned_calibration_limitations.md", "Identify what external labels would be required for any future supervised claim."),
+            _manual_item("evidence-coverage-plan", "learned_calibration_coverage_strata.md", "Review EPSS/KEV and accepted-evidence gaps before thesis defense."),
+        ]),
+    ]
+    flat_items = [item for _section, items in sections for item in items]
+    return {
+        "status": "ready_with_manual_review" if all(item["status"] in {"pass", "manual", "warning"} for item in flat_items) else "incomplete",
+        "sections": [{"section": section, "items": items} for section, items in sections],
+        "item_count": len(flat_items),
+        "status_counts": _checklist_status_counts(flat_items),
+        "notes": [
+            "Checklist statuses are derived from generated artifact files where possible.",
+            "Manual items require thesis-author review and are not automatic pass/fail evidence.",
+        ],
+    }
+
+
+def render_reviewer_checklist_markdown(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration Reviewer Checklist",
+        "",
+        "This checklist supports thesis review of learned-calibration artifacts. Proxy labels are not ground truth, and manual items require thesis-author judgment.",
+        "",
+        f"- Status: `{payload.get('status', '')}`",
+        f"- Items: `{payload.get('item_count', 0)}`",
+        "",
+    ]
+    for section in payload.get("sections") or []:
+        lines.extend([f"## {section.get('section', '').title()}", "", "| Check ID | Status | Evidence Artifact | Reviewer Note |", "| --- | --- | --- | --- |"])
+        for item in section.get("items") or []:
+            lines.append(
+                "| {check_id} | {status} | {artifact} | {note} |".format(
+                    check_id=item.get("check_id", ""),
+                    status=item.get("status", ""),
+                    artifact=item.get("evidence_artifact", ""),
+                    note=item.get("reviewer_note", ""),
+                )
+            )
+        lines.append("")
+    return "\n".join(lines)
+
+
+def render_learned_calibration_defense_qa(
+    model_report: Mapping[str, Any],
+    feasibility_report: Mapping[str, Any],
+) -> str:
+    model_status = str(model_report.get("status", "unavailable"))
+    skip_reason = str(model_report.get("skip_reason", "not applicable"))
+    exported = feasibility_report.get("analyzed_records_exported", 0)
+    qa_entries = [
+        ("Why were proxy labels used?", "Proxy labels were used because defensible external exploitation outcomes are not available in this repository. They enable a bounded feasibility discussion over exported signals without claiming real-world prediction."),
+        ("Why are proxy labels not ground truth?", "They are deterministic labels derived from existing signals and engineering rules. They do not independently verify exploitation, prevalence, exploitability, or operational impact."),
+        ("Why does the production risk score remain heuristic?", "The production risk score remains heuristic because it is explainable, deterministic, and tied to existing evidence gates. The learned-calibration artifacts are experimental and do not replace production scoring."),
+        ("Why is learned calibration described as experimental?", "The experiment evaluates feasibility under sparse labels and coverage limitations. It is not a deployed scoring layer and does not write learned outputs back to MongoDB."),
+        ("What does scikit-learn absence mean if the model was skipped?", f"The local model status is `{model_status}`. If skipped, the reason is `{skip_reason}`. Skipping records dependency limitations transparently instead of fabricating model results."),
+        ("What would change with real ground truth labels?", "Curated external labels would allow train/test evaluation, calibration checks, and stronger claims about predictive behavior. They would still require leakage controls and independent validation."),
+        ("Why may accepted URLhaus correlation be zero?", "URLhaus evidence gates are conservative. Candidate retrieval or weak keyword overlap is not accepted evidence; exact or strong corroborated evidence is required."),
+        ("Why is live Dread crawling disabled?", "Live Dread crawling was not used. Dread is optional, experimental, bounded, default-off, and unsuitable as ground truth without corroboration and ethical/legal controls."),
+        ("How does confidence differ from risk?", "Risk estimates prioritization urgency from technical and contextual signals. Confidence estimates reliability and completeness of supporting evidence. High risk can coexist with moderate confidence."),
+        ("How do evidence gates prevent false positives?", "Evidence gates separate accepted, manual-review, rejected, and ignored low-signal candidates. Only accepted evidence can support correlation risk; diagnostic or rejected evidence is preserved without boosting risk."),
+        ("Why is CVSS dominance a limitation?", "CVSS captures technical severity, not full operational risk. If proxy labels include intrinsic severity, CVSS-only rankings may appear close to the heuristic and should be interpreted cautiously."),
+        ("How should sensitivity analysis be interpreted?", "Sensitivity analysis probes robustness to bounded threshold or weight changes. It is not statistical calibration and does not prove generalization."),
+        ("How should negative controls be interpreted?", "Negative controls show whether heuristic ranking behaves differently from random, reverse, or single-feature rankings under proxy labels. They are sanity checks, not proof of real-world performance."),
+        ("How should bootstrap stability be interpreted?", "Bootstrap stability checks whether ranking metrics are stable under fixed-seed resampling of exported rows. It does not create new evidence or external validation."),
+        ("What future work is needed?", "Future work requires curated external labels, better EPSS/KEV coverage, stronger asset-context data, independent validation splits, and careful review of model calibration and leakage."),
+        ("What claims are safe in the thesis?", "Safe claims are limited to deterministic export, proxy-label feasibility, artifact reproducibility, conservative gates, and observed behavior on the exported dataset."),
+        ("What claims should be avoided?", "Avoid claims of production readiness, real-world exploitation prediction, optimized weights, autonomous-agent validation, or learned replacement of heuristic scoring."),
+        ("How many analyzed rows were exported?", f"The learned-calibration export contains `{exported}` analyzed CVE rows in the current artifact bundle."),
+        ("Why is accepted external evidence sparse?", "Accepted evidence is sparse because evidence gates require strong support. Sparse accepted evidence is a coverage limitation, not a reason to relax gates."),
+        ("Does proxy-supervised learning prove real-world exploitation prediction?", "No. Proxy-supervised learning does not prove real-world exploitation prediction; it only supports a constrained feasibility discussion over local deterministic artifacts."),
+    ]
+    lines = [
+        "# Learned Calibration Defense Q&A",
+        "",
+        "This defense-preparation draft focuses on learned calibration and thesis limitations. It uses academic, conservative wording; proxy labels are not ground truth, live Dread crawling was not used, and production scoring remains heuristic.",
+        "",
+    ]
+    for index, (question, answer) in enumerate(qa_entries, start=1):
+        lines.extend([f"## Q{index}. {question}", "", answer, ""])
+    return "\n".join(lines)
+
+
+def build_limitations_matrix() -> dict[str, Any]:
+    rows = [
+        _limitation_row(
+            "proxy labels are not ground truth",
+            "Proxy-label metrics cannot be interpreted as verified exploitation prediction.",
+            "Artifacts repeatedly label proxy outcomes as deterministic thesis aids.",
+            "Use curated external exploitation or incident labels.",
+            "Proxy labels support feasibility discussion, not ground-truth validation.",
+        ),
+        _limitation_row(
+            "EPSS coverage sparse or unavailable",
+            "Exploit-likelihood context is incomplete where EPSS is missing.",
+            "Coverage fields and strata expose EPSS availability explicitly.",
+            "Ingest vetted EPSS snapshots and document version dates.",
+            "Missing EPSS is a coverage limitation, not evidence of low risk.",
+        ),
+        _limitation_row(
+            "KEV status sparse or unavailable",
+            "Active-exploitation evidence may be absent or unknown.",
+            "KEV-known and KEV-listed fields are exported separately.",
+            "Add reproducible CISA KEV snapshot enrichment.",
+            "Unknown KEV status should not be treated as proof of no exploitation.",
+        ),
+        _limitation_row(
+            "accepted external evidence sparse or absent",
+            "Evidence-supported labels and confidence remain limited.",
+            "Accepted, rejected, manual-review, and ignored evidence are separated.",
+            "Evaluate with richer URLhaus, KEV, EPSS, and asset-context data.",
+            "Sparse accepted evidence limits confidence and learned calibration claims.",
+        ),
+        _limitation_row(
+            "Dread live crawling disabled",
+            "Dread evidence is not available as live validation in this experiment.",
+            "Dread remains optional, bounded, default-off, and not ground truth.",
+            "Use ethically reviewed, static, corroborated datasets if needed.",
+            "Live Dread crawling was not used in learned-calibration artifacts.",
+        ),
+        _limitation_row(
+            "URLhaus correlation evidence gated and conservative",
+            "Accepted URLhaus evidence may be zero even when candidates exist.",
+            "Strict gates prevent weak keyword overlap from boosting risk.",
+            "Improve high-quality IOC-to-CVE linkage datasets.",
+            "Zero accepted URLhaus can reflect conservative gates, not system failure.",
+        ),
+        _limitation_row(
+            "model training skipped if scikit-learn unavailable",
+            "Learned model metrics may be unavailable in the local environment.",
+            "Model report records skipped status and dependency reason.",
+            "Run in an approved environment with pinned dependencies.",
+            "Skipped model training is reported transparently, not filled with fabricated results.",
+        ),
+        _limitation_row(
+            "CVSS/severity dominance risk",
+            "Proxy labels may be partly aligned with technical severity.",
+            "Negative controls and sensitivity artifacts expose CVSS-only behavior.",
+            "Use labels independent of CVSS-driven scoring signals.",
+            "CVSS dominance is a limitation of proxy-label interpretation.",
+        ),
+        _limitation_row(
+            "confidence not equivalent to correctness",
+            "Confidence measures support quality, not factual correctness of outcomes.",
+            "Risk and confidence remain separate exported fields.",
+            "Validate against external outcomes and analyst review.",
+            "Confidence is evidence reliability, not a correctness guarantee.",
+        ),
+        _limitation_row(
+            "deterministic fixture validation is not real-world generalization",
+            "Controlled behavior does not establish field performance.",
+            "Artifacts explicitly frame deterministic tests as behavioral validation.",
+            "Evaluate on larger curated real-world datasets with external labels.",
+            "Deterministic validation supports reproducibility, not generalization claims.",
+        ),
+        _limitation_row(
+            "learned calibration does not replace production scoring",
+            "Learned artifacts are diagnostic and do not change runtime decisions.",
+            "Leakage checks and docs state production risk_score remains heuristic.",
+            "Consider a separate reviewed calibration layer after external validation.",
+            "Learned calibration is future work and does not replace heuristic scoring.",
+        ),
+    ]
+    return {
+        "status": "available",
+        "row_count": len(rows),
+        "rows": rows,
+        "notes": [
+            "Limitations matrix is thesis-supporting documentation.",
+            "It does not change scoring, evidence gates, or model training behavior.",
+        ],
+    }
+
+
+def render_limitations_matrix_markdown(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration Limitations Matrix",
+        "",
+        "This matrix consolidates thesis-safe limitations for learned calibration. It does not change production scoring and does not treat proxy labels as ground truth.",
+        "",
+        "| Limitation | Impact | Mitigation Already Implemented | Future Work | Thesis-Safe Wording |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for row in payload.get("rows") or []:
+        lines.append(
+            "| {limitation} | {impact} | {mitigation} | {future} | {wording} |".format(
+                limitation=row.get("limitation", ""),
+                impact=row.get("impact_on_interpretation", ""),
+                mitigation=row.get("mitigation_already_implemented", ""),
+                future=row.get("future_work", ""),
+                wording=row.get("thesis_safe_wording", ""),
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _limitation_row(
+    limitation: str,
+    impact: str,
+    mitigation: str,
+    future_work: str,
+    wording: str,
+) -> dict[str, str]:
+    return {
+        "limitation": limitation,
+        "impact_on_interpretation": impact,
+        "mitigation_already_implemented": mitigation,
+        "future_work": future_work,
+        "thesis_safe_wording": wording,
+    }
+
+
+def build_legacy_high_risk_diagnostics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    diagnostic_rows: list[dict[str, Any]] = []
+    group_values: dict[str, dict[str, list[float]]] = {}
+    for row in rows:
+        cve_year = extract_cve_year(row.get("cve_id"))
+        for group in _legacy_high_risk_groups(row, cve_year):
+            diagnostic = _legacy_high_risk_diagnostic_row(row, cve_year, group)
+            diagnostic_rows.append(diagnostic)
+            values = group_values.setdefault(group, {"risk": [], "confidence": []})
+            values["risk"].append(_safe_float(row.get("risk_score")))
+            values["confidence"].append(_safe_float(row.get("confidence")))
+    diagnostic_rows = sorted(
+        diagnostic_rows,
+        key=lambda item: (item["diagnostic_group"], -_safe_float(item["risk_score"]), item["cve_id"]),
+    )
+    groups = sorted(group_values)
+    return {
+        "status": "available",
+        "total_analyzed_cves": len(rows),
+        "warning": "This diagnostic is not a production scoring change and does not change risk_score, confidence, or evidence gates.",
+        "count_per_diagnostic_group": {
+            group: sum(1 for item in diagnostic_rows if item["diagnostic_group"] == group)
+            for group in groups
+        },
+        "average_risk_per_group": {
+            group: round(mean(group_values[group]["risk"]), 4) if group_values[group]["risk"] else 0.0
+            for group in groups
+        },
+        "average_confidence_per_group": {
+            group: round(mean(group_values[group]["confidence"]), 4) if group_values[group]["confidence"] else 0.0
+            for group in groups
+        },
+        "highest_risk_examples_per_group": {
+            group: [
+                {
+                    "cve_id": item["cve_id"],
+                    "risk_score": item["risk_score"],
+                    "confidence": item["confidence"],
+                    "interpretation": item["interpretation"],
+                }
+                for item in sorted(
+                    (candidate for candidate in diagnostic_rows if candidate["diagnostic_group"] == group),
+                    key=lambda candidate: (-_safe_float(candidate["risk_score"]), candidate["cve_id"]),
+                )[:5]
+            ]
+            for group in groups
+        },
+        "rows": diagnostic_rows,
+    }
+
+
+def render_legacy_high_risk_diagnostics_markdown(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "# Legacy High-Risk Diagnostics",
+        "",
+        "This artifact identifies old or intrinsic-severity-driven CVEs for diagnostic review only.",
+        "It does not change production `risk_score`, confidence, or URLhaus/Dread evidence gates.",
+        "",
+        f"- Total analyzed CVEs: `{payload.get('total_analyzed_cves', 0)}`",
+        f"- Diagnostic rows: `{len(payload.get('rows') or [])}`",
+        f"- Warning: {payload.get('warning', '')}",
+        "",
+        "## Diagnostic Groups",
+        "",
+        "| Group | Count | Average Risk | Average Confidence |",
+        "| --- | ---: | ---: | ---: |",
+    ]
+    counts = payload.get("count_per_diagnostic_group") or {}
+    average_risk = payload.get("average_risk_per_group") or {}
+    average_confidence = payload.get("average_confidence_per_group") or {}
+    if counts:
+        for group in sorted(counts):
+            lines.append(
+                "| {group} | {count} | {risk} | {confidence} |".format(
+                    group=group,
+                    count=counts.get(group, 0),
+                    risk=_format_metric(average_risk.get(group)),
+                    confidence=_format_metric(average_confidence.get(group)),
+                )
+            )
+    else:
+        lines.append("| none | 0 | 0.0 | 0.0 |")
+    lines.extend(["", "## Highest-Risk Examples", ""])
+    examples = payload.get("highest_risk_examples_per_group") or {}
+    if examples:
+        for group in sorted(examples):
+            lines.extend([f"### {group}", ""])
+            for item in examples.get(group) or []:
+                lines.append(
+                    "- `{cve}` risk `{risk}` confidence `{confidence}`: {interpretation}".format(
+                        cve=item.get("cve_id", ""),
+                        risk=item.get("risk_score", ""),
+                        confidence=item.get("confidence", ""),
+                        interpretation=item.get("interpretation", ""),
+                    )
+                )
+            lines.append("")
+    else:
+        lines.append("No CVEs matched the diagnostic groups.")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def extract_cve_year(cve_id: Any) -> int | None:
+    parts = str(cve_id or "").upper().split("-")
+    if len(parts) >= 3 and parts[0] == "CVE":
+        try:
+            year = int(parts[1])
+        except ValueError:
+            return None
+        if 1999 <= year <= 2100:
+            return year
+    return None
+
+
+def _legacy_high_risk_groups(row: Mapping[str, Any], cve_year: int | None = None) -> list[str]:
+    year = cve_year if cve_year is not None else extract_cve_year(row.get("cve_id"))
+    cvss = _safe_float(row.get("cvss_score"))
+    risk = _safe_float(row.get("risk_score"))
+    recency = _safe_float(row.get("recency_signal"))
+    nlp = _safe_float(row.get("nlp_context_signal"))
+    accepted_urlhaus = _safe_int(row.get("accepted_urlhaus_count"))
+    accepted_dread = _safe_int(row.get("accepted_dread_count"))
+    groups: list[str] = []
+    if year is not None and year <= 2010 and cvss >= 9.0 and risk >= 7.0:
+        groups.append("legacy_high_cvss_high_risk")
+    if year is not None and year <= 2010 and cvss == 10.0 and nlp >= 0.8:
+        groups.append("legacy_cvss10_high_context")
+    if recency <= 0.1 and risk >= 7.0:
+        groups.append("low_recency_high_risk")
+    if _truthy(row.get("intrinsic_criticality_floor_applied")):
+        groups.append("modern_intrinsic_floor")
+    if year is not None and year >= 2024 and risk >= 7.0 and accepted_urlhaus == 0 and accepted_dread == 0:
+        groups.append("modern_high_risk_no_external_evidence")
+    return groups
+
+
+def _legacy_high_risk_diagnostic_row(row: Mapping[str, Any], cve_year: int | None, group: str) -> dict[str, Any]:
+    return {
+        "cve_id": row.get("cve_id", ""),
+        "cve_year": cve_year if cve_year is not None else "",
+        "risk_score": row.get("risk_score", ""),
+        "risk_level": row.get("risk_level", ""),
+        "confidence": row.get("confidence", ""),
+        "cvss_score": row.get("cvss_score", ""),
+        "severity_signal": row.get("severity_signal", ""),
+        "recency_signal": row.get("recency_signal", ""),
+        "nlp_context_signal": row.get("nlp_context_signal", ""),
+        "correlation_signal": row.get("correlation_signal", ""),
+        "intrinsic_criticality_floor_applied": row.get("intrinsic_criticality_floor_applied", ""),
+        "accepted_urlhaus_count": row.get("accepted_urlhaus_count", 0),
+        "accepted_dread_count": row.get("accepted_dread_count", 0),
+        "coverage_limitations": row.get("coverage_limitations", ""),
+        "diagnostic_group": group,
+        "interpretation": _legacy_high_risk_interpretation(group),
+    }
+
+
+def _legacy_high_risk_interpretation(group: str) -> str:
+    if group == "legacy_high_cvss_high_risk":
+        return "Legacy CVE remains high because intrinsic CVSS severity is high; operational interpretation is limited without fresh EPSS, KEV, or accepted external evidence."
+    if group == "legacy_cvss10_high_context":
+        return "Legacy CVSS 10 CVE also has strong intrinsic NLP context; this is retained technical severity, not evidence of current exploitation."
+    if group == "low_recency_high_risk":
+        return "Low recency with high risk highlights retained severity and context; review with asset applicability before operational escalation."
+    if group == "modern_intrinsic_floor":
+        return "Modern CVE received the intrinsic criticality floor; confidence remains separate and external-evidence coverage still limits interpretation."
+    if group == "modern_high_risk_no_external_evidence":
+        return "Modern high-risk CVE has no accepted URLhaus or Dread evidence in this export; risk is intrinsic and should be read with coverage limitations."
+    return "Diagnostic grouping only; this row does not change production scoring."
+
+
+def build_legacy_dampening_counterfactual(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    counterfactual_rows = [_legacy_dampening_counterfactual_row(row) for row in rows]
+    affected_rows = [row for row in counterfactual_rows if _truthy(row.get("dampening_applied"))]
+    original_scores = [_safe_float(row.get("risk_score")) for row in affected_rows]
+    counterfactual_scores = [_safe_float(row.get("counterfactual_score")) for row in affected_rows]
+    top_affected = sorted(
+        affected_rows,
+        key=lambda item: (
+            -_safe_float(item.get("dampening_amount")),
+            -_safe_float(item.get("risk_score")),
+            str(item.get("cve_id", "")),
+        ),
+    )[:10]
+    return {
+        "status": "available",
+        "warning": "This is a counterfactual sensitivity artifact only; it does not change production risk_score, confidence, or evidence gates.",
+        "affected_record_count": len(affected_rows),
+        "average_original_score": round(mean(original_scores), 4) if original_scores else 0.0,
+        "average_counterfactual_score": round(mean(counterfactual_scores), 4) if counterfactual_scores else 0.0,
+        "risk_bucket_change_count": sum(1 for row in counterfactual_rows if _truthy(row.get("risk_bucket_changed"))),
+        "high_medium_low_level_change_count": sum(1 for row in counterfactual_rows if _truthy(row.get("high_medium_low_level_changed"))),
+        "top_affected_cves": [
+            {
+                "cve_id": row.get("cve_id", ""),
+                "risk_score": row.get("risk_score", ""),
+                "counterfactual_score": row.get("counterfactual_score", ""),
+                "dampening_amount": row.get("dampening_amount", ""),
+                "interpretation": row.get("interpretation", ""),
+            }
+            for row in top_affected
+        ],
+        "material_thesis_conclusion_effect": _legacy_dampening_material_effect(counterfactual_rows),
+        "rows": counterfactual_rows,
+    }
+
+
+def render_legacy_dampening_counterfactual_markdown(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "# Legacy Dampening Counterfactual",
+        "",
+        "This artifact evaluates an illustrative age-aware dampening rule for legacy CVEs.",
+        "It is diagnostic only and does not change production `risk_score`, confidence, or URLhaus/Dread evidence gates.",
+        "",
+        f"- Affected records: `{payload.get('affected_record_count', 0)}`",
+        f"- Average original score: `{payload.get('average_original_score', 0.0)}`",
+        f"- Average counterfactual score: `{payload.get('average_counterfactual_score', 0.0)}`",
+        f"- Risk bucket changes: `{payload.get('risk_bucket_change_count', 0)}`",
+        f"- HIGH/MEDIUM/LOW level changes: `{payload.get('high_medium_low_level_change_count', 0)}`",
+        f"- Thesis conclusion effect: {payload.get('material_thesis_conclusion_effect', '')}",
+        "",
+        "## Top Affected CVEs",
+        "",
+        "| CVE | Original Risk | Counterfactual Risk | Dampening | Interpretation |",
+        "| --- | ---: | ---: | ---: | --- |",
+    ]
+    examples = payload.get("top_affected_cves") or []
+    if examples:
+        for row in examples:
+            lines.append(
+                "| {cve} | {risk} | {counterfactual} | {amount} | {interpretation} |".format(
+                    cve=row.get("cve_id", ""),
+                    risk=row.get("risk_score", ""),
+                    counterfactual=row.get("counterfactual_score", ""),
+                    amount=row.get("dampening_amount", ""),
+                    interpretation=row.get("interpretation", ""),
+                )
+            )
+    else:
+        lines.append("| none | 0.0 | 0.0 | 0.0 | No rows met the counterfactual dampening rule. |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _legacy_dampening_counterfactual_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    cve_year = extract_cve_year(row.get("cve_id"))
+    original = round(_safe_float(row.get("risk_score")), 4)
+    counterfactual = _legacy_dampened_score(row, cve_year)
+    original_bucket = _risk_bucket(original)
+    counterfactual_bucket = _risk_bucket(counterfactual)
+    original_level = _high_medium_low_level(original)
+    counterfactual_level = _high_medium_low_level(counterfactual)
+    dampening_amount = round(max(original - counterfactual, 0.0), 4)
+    applied = dampening_amount > 0
+    return {
+        "cve_id": row.get("cve_id", ""),
+        "cve_year": cve_year if cve_year is not None else "",
+        "risk_score": original,
+        "counterfactual_score": counterfactual,
+        "risk_bucket": original_bucket,
+        "counterfactual_risk_bucket": counterfactual_bucket,
+        "high_medium_low_level": original_level,
+        "counterfactual_high_medium_low_level": counterfactual_level,
+        "risk_bucket_changed": original_bucket != counterfactual_bucket,
+        "high_medium_low_level_changed": original_level != counterfactual_level,
+        "cvss_score": row.get("cvss_score", ""),
+        "recency_signal": row.get("recency_signal", ""),
+        "epss_signal": row.get("epss_signal", ""),
+        "kev_listed": row.get("kev_listed", ""),
+        "accepted_urlhaus_count": row.get("accepted_urlhaus_count", 0),
+        "accepted_dread_count": row.get("accepted_dread_count", 0),
+        "dampening_applied": applied,
+        "dampening_amount": dampening_amount,
+        "counterfactual_floor": _legacy_dampening_floor(_safe_float(row.get("cvss_score"))) if applied else "",
+        "interpretation": _legacy_dampening_interpretation(applied),
+    }
+
+
+def _legacy_dampened_score(row: Mapping[str, Any], cve_year: int | None = None) -> float:
+    original = _safe_float(row.get("risk_score"))
+    if not _legacy_dampening_applies(row, cve_year):
+        return round(original, 4)
+    floor_value = _legacy_dampening_floor(_safe_float(row.get("cvss_score")))
+    return round(max(original - 0.6, floor_value, 0.0), 4)
+
+
+def _legacy_dampening_applies(row: Mapping[str, Any], cve_year: int | None = None) -> bool:
+    year = cve_year if cve_year is not None else extract_cve_year(row.get("cve_id"))
+    if year is None or year > 2010:
+        return False
+    return (
+        _safe_float(row.get("recency_signal")) <= 0.1
+        and _safe_int(row.get("accepted_urlhaus_count")) == 0
+        and _safe_int(row.get("accepted_dread_count")) == 0
+        and not _truthy(row.get("kev_listed"))
+        and _safe_float(row.get("epss_signal")) == 0.0
+    )
+
+
+def _legacy_dampening_floor(cvss_score: float) -> float:
+    if cvss_score >= 10.0:
+        return 6.8
+    if cvss_score >= 9.0:
+        return 6.5
+    return 0.0
+
+
+def _high_medium_low_level(score: float) -> str:
+    if score >= 7.0:
+        return "HIGH"
+    if score >= 4.0:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _legacy_dampening_interpretation(applied: bool) -> str:
+    if applied:
+        return "Illustrative age-aware dampening applied because the legacy CVE has low recency and no EPSS, KEV, URLhaus, or Dread support in this export."
+    return "Production score retained in the counterfactual because the CVE is modern or has recency/external evidence conditions outside the diagnostic rule."
+
+
+def _legacy_dampening_material_effect(rows: Sequence[Mapping[str, Any]]) -> str:
+    if not rows:
+        return "No rows were available, so thesis conclusions cannot be assessed from this artifact."
+    changed = sum(1 for row in rows if _truthy(row.get("high_medium_low_level_changed")))
+    affected = sum(1 for row in rows if _truthy(row.get("dampening_applied")))
+    if affected == 0:
+        return "No rows meet the illustrative rule; thesis conclusions are unchanged by this counterfactual."
+    if changed == 0:
+        return "The rule changes some scores but does not change HIGH/MEDIUM/LOW levels; thesis conclusions are not materially altered."
+    return "The rule changes some HIGH/MEDIUM/LOW levels; this supports treating age-aware dampening as future work requiring stronger labels or asset context."
+
+
+def build_no_overclaim_audit(artifact_dir: str | Path) -> dict[str, Any]:
+    root = Path(artifact_dir)
+    findings: list[dict[str, str]] = []
+    scanned_files = _no_overclaim_scan_files(root)
+    for path in scanned_files:
+        findings.extend(_unsafe_claim_findings(path))
+    return {
+        "status": "passed" if not findings else "failed",
+        "scanned_file_count": len(scanned_files),
+        "findings": findings,
+        "unsafe_phrases": _unsafe_overclaim_phrases(),
+        "notes": [
+            "This audit flags unsafe learned-calibration claims unless they are explicitly negated or framed as limitations.",
+            "Proxy labels are not ground truth, and learned calibration does not replace production scoring.",
+        ],
+    }
+
+
+def render_no_overclaim_audit_markdown(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration No-Overclaim Audit",
+        "",
+        "This audit checks learned-calibration docs and generated reports for unsafe thesis claims. Safe negated or limitation wording is allowed.",
+        "",
+        f"- Status: `{payload.get('status', '')}`",
+        f"- Scanned files: `{payload.get('scanned_file_count', 0)}`",
+        f"- Findings: `{len(payload.get('findings') or [])}`",
+        "",
+        "| File | Phrase | Line | Excerpt |",
+        "| --- | --- | ---: | --- |",
+    ]
+    findings = list(payload.get("findings") or [])
+    if findings:
+        for finding in findings:
+            lines.append(
+                "| {file} | {phrase} | {line} | {excerpt} |".format(
+                    file=finding.get("file", ""),
+                    phrase=finding.get("phrase", ""),
+                    line=finding.get("line", ""),
+                    excerpt=finding.get("excerpt", ""),
+                )
+            )
+    else:
+        lines.append("| none | none | 0 | No unsafe overclaim wording detected. |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _unsafe_claim_findings(path: Path) -> list[dict[str, str]]:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except FileNotFoundError:
+        return []
+    findings: list[dict[str, str]] = []
+    for line_number, line in enumerate(lines, start=1):
+        lower = line.lower()
+        for phrase in _unsafe_overclaim_phrases():
+            if phrase in lower and not _is_safe_overclaim_context(lower):
+                findings.append(
+                    {
+                        "file": str(path),
+                        "phrase": phrase,
+                        "line": str(line_number),
+                        "excerpt": line.strip()[:240],
+                    }
+                )
+    return findings
+
+
+def _unsafe_overclaim_phrases() -> list[str]:
+    return [
+        "ground truth",
+        "proven exploitation prediction",
+        "production-ready",
+        "autonomous agent",
+        "optimal weights",
+        "dark web crawler",
+        "statistically proven real-world performance",
+        "learned model replaces heuristic scoring",
+        "confidence equals correctness",
+    ]
+
+
+def _is_safe_overclaim_context(line: str) -> bool:
+    safe_markers = [
+        "not ground truth",
+        "not a ground truth",
+        "not treated as ground truth",
+        "not negative ground truth",
+        "what would change with real ground truth labels",
+        "not factual correctness",
+        "not equivalent to correctness",
+        "does not prove",
+        "does not replace",
+        "do not claim",
+        "avoid claims",
+        "unsafe claims",
+        "limitation",
+        "limitations",
+        "future work",
+        "would require",
+        "would allow",
+        "requires",
+        "required",
+        "disabled",
+        "was not used",
+        "not used",
+        "no ",
+    ]
+    return any(marker in line for marker in safe_markers)
+
+
+def _no_overclaim_scan_files(root: Path) -> list[Path]:
+    filenames = {
+        "learned_calibration_report.json",
+        "learned_calibration_summary.md",
+        *[
+            spec["filename"]
+            for spec in _learned_calibration_artifact_specs()
+            if "no_overclaim_audit" not in spec["filename"] and "consistency_audit" not in spec["filename"]
+        ],
+    }
+    files = [root / filename for filename in sorted(filenames) if (root / filename).exists()]
+    docs_path = Path(__file__).resolve().parents[3] / "docs" / "learned_calibration.md"
+    if docs_path.exists():
+        files.append(docs_path)
+    return files
+
+
+def _checklist_item(check_id: str, passed: bool, evidence_artifact: str, note: str) -> dict[str, str]:
+    return {
+        "check_id": check_id,
+        "status": "pass" if passed else "unavailable",
+        "evidence_artifact": evidence_artifact,
+        "reviewer_note": note,
+    }
+
+
+def _manual_item(check_id: str, evidence_artifact: str, note: str) -> dict[str, str]:
+    return {
+        "check_id": check_id,
+        "status": "manual",
+        "evidence_artifact": evidence_artifact,
+        "reviewer_note": note,
+    }
+
+
+def _status_item(check_id: str, status: str, evidence_artifact: str, note: str) -> dict[str, str]:
+    return {
+        "check_id": check_id,
+        "status": status,
+        "evidence_artifact": evidence_artifact,
+        "reviewer_note": note,
+    }
+
+
+def _model_training_check_status(model_report: Mapping[str, Any]) -> str:
+    status = str(model_report.get("status", ""))
+    if status == "completed":
+        return "pass"
+    if status == "skipped":
+        return "warning"
+    return "unavailable"
+
+
+def _model_training_note(model_report: Mapping[str, Any]) -> str:
+    status = str(model_report.get("status", "unavailable"))
+    if status == "skipped":
+        return f"Model training skipped: {model_report.get('skip_reason', 'reason unavailable')}"
+    return f"Model training status: {status}"
+
+
+def _checklist_status_counts(items: Sequence[Mapping[str, str]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        status = item.get("status", "unavailable")
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def _exists(path: Path) -> bool:
+    return path.exists()
+
+
+def _current_git_metadata() -> dict[str, str]:
+    return {
+        "branch": _git_command(["rev-parse", "--abbrev-ref", "HEAD"]),
+        "head_commit": _git_command(["rev-parse", "--short", "HEAD"]),
+    }
+
+
+def _git_command(args: Sequence[str]) -> str:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=Path(__file__).resolve().parents[3],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _csv_row_count(path: Path) -> int | None:
+    try:
+        with path.open(encoding="utf-8", newline="") as handle:
+            return sum(1 for _row in csv.DictReader(handle))
+    except FileNotFoundError:
+        return None
+
+
+def _json_status(path: Path) -> str:
+    payload = _read_json_mapping(path)
+    if not payload:
+        return "missing_or_malformed"
+    return str(payload.get("status") or payload.get("proxy_supervised_learning_feasibility") or "available")
+
+
+def _read_json_mapping(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _runtime_snapshot_warnings(root: Path, row_counts: Mapping[str, int | None]) -> list[str]:
+    warnings: list[str] = []
+    optional_files = [
+        "learned_calibration_predictions.csv",
+        "learned_calibration_feature_importance.csv",
+        "learned_calibration_disagreements.csv",
+    ]
+    for filename in optional_files:
+        path = root / filename
+        if not path.exists():
+            warnings.append(f"Optional artifact missing: {filename}")
+        elif row_counts.get(filename) == 0:
+            warnings.append(f"Optional artifact has no data rows: {filename}")
+    return warnings
+
+
+def _audit_check(name: str, passed: bool, details: str) -> dict[str, str]:
+    return {"check": name, "status": "passed" if passed else "failed", "details": details}
+
+
+def _learned_calibration_json_filenames_for_audit() -> list[str]:
+    filenames = [
+        spec["filename"]
+        for spec in _learned_calibration_artifact_specs()
+        if spec["filename"].endswith(".json") and "consistency_audit" not in spec["filename"] and "manifest" not in spec["filename"]
+    ]
+    return ["learned_calibration_report.json", *filenames]
+
+
+def _learned_calibration_csv_filenames_for_audit() -> list[str]:
+    return [
+        spec["filename"]
+        for spec in _learned_calibration_artifact_specs()
+        if spec["filename"].endswith(".csv")
+    ]
+
+
+def _learned_calibration_markdown_filenames_for_audit() -> list[str]:
+    filenames = [
+        spec["filename"]
+        for spec in _learned_calibration_artifact_specs()
+        if spec["filename"].endswith(".md") and "consistency_audit" not in spec["filename"] and "manifest" not in spec["filename"]
+    ]
+    return ["learned_calibration_summary.md", *filenames]
+
+
+def _read_csv_rows(path: Path) -> list[dict[str, str]]:
+    try:
+        with path.open(encoding="utf-8", newline="") as handle:
+            return list(csv.DictReader(handle))
+    except FileNotFoundError:
+        return []
+
+
+def _json_file_parseable(path: Path) -> bool:
+    try:
+        json.loads(path.read_text(encoding="utf-8"))
+        return True
+    except Exception:
+        return False
+
+
+def _csv_has_duplicate_headers(path: Path) -> bool:
+    try:
+        with path.open(encoding="utf-8", newline="") as handle:
+            header = handle.readline().strip("\n\r").split(",")
+            return len(header) != len(set(header))
+    except FileNotFoundError:
+        return True
+
+
+def _markdown_has_limitation_language(path: Path) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8").lower()
+    except FileNotFoundError:
+        return False
+    markers = [
+        "not ground truth",
+        "does not",
+        "unchanged",
+        "skipped",
+        "limitation",
+        "limitations",
+        "experimental",
+        "proxy",
+    ]
+    return any(marker in text for marker in markers)
+
+
+def _sklearn_skip_consistent(model_report_path: Path) -> bool:
+    try:
+        report = json.loads(model_report_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if _load_sklearn() is not None:
+        return True
+    return report.get("status") == "skipped" and "scikit-learn" in str(report.get("skip_reason", ""))
+
+
+def _contains_unsafe_exploitation_prediction_claim(root: Path) -> bool:
+    unsafe = [
+        "ground truth exploitation prediction",
+        "proves real-world exploitation",
+        "real-world exploitation prediction",
+    ]
+    filenames = {
+        "learned_calibration_report.json",
+        "learned_calibration_summary.md",
+        *[spec["filename"] for spec in _learned_calibration_artifact_specs()],
+    }
+    for filename in filenames:
+        path = root / filename
+        if path.is_file() and path.suffix in {".json", ".md", ".csv"}:
+            text = path.read_text(encoding="utf-8", errors="ignore").lower()
+            text = text.replace("does not prove real-world exploitation prediction", "")
+            text = text.replace("does proxy-supervised learning prove real-world exploitation prediction?", "")
+            text = text.replace("avoid claims of production readiness, real-world exploitation prediction", "avoid claims of production readiness")
+            for phrase in unsafe:
+                if phrase in text:
+                    return True
+    return False
+
+
+def _threshold_label(row: Mapping[str, Any], thresholds: Mapping[str, float]) -> str:
+    if _truthy(row.get("kev_listed")) or _safe_float(row.get("epss_signal")) >= thresholds["epss_high_threshold"]:
+        return "high"
+    if (
+        _safe_float(row.get("cvss_score")) >= thresholds["cvss_critical_threshold"]
+        and _safe_float(row.get("nlp_context_signal")) >= thresholds["nlp_context_threshold"]
+        and _safe_float(row.get("recency_signal")) >= thresholds["recency_threshold"]
+    ):
+        return "high"
+    if _safe_float(row.get("cvss_score")) >= 7.0 or _safe_float(row.get("epss_signal")) >= 0.1 or _safe_float(row.get("nlp_context_signal")) >= 0.5:
+        return "medium"
+    return "low"
+
+
+def _label_stability(
+    rows: Sequence[Mapping[str, Any]],
+    labels: Sequence[str],
+    default_labels: Mapping[str, str],
+) -> float:
+    if not rows:
+        return 0.0
+    matches = sum(
+        1
+        for row, label in zip(rows, labels)
+        if default_labels.get(str(row.get("cve_id", ""))) == label
+    )
+    return round(matches / len(rows), 4)
+
+
+def _threshold_configuration_classification(high_count: int, total: int) -> str:
+    if total <= 0 or high_count < 10:
+        return "too_narrow"
+    high_fraction = high_count / total
+    if high_fraction > 0.25:
+        return "too_broad"
+    return "usable"
+
+
+def render_learned_calibration_manifest_markdown(manifest: Mapping[str, Any]) -> str:
+    lines = [
+        "# Learned Calibration Artifact Manifest",
+        "",
+        f"- Status: `{manifest.get('status', '')}`",
+        f"- Artifact count: `{manifest.get('artifact_count', 0)}`",
+        "",
+        "| Group | Path | Exists | Size Bytes | Thesis Usage |",
+        "| --- | --- | --- | ---: | --- |",
+    ]
+    for item in manifest.get("artifacts") or []:
+        lines.append(
+            "| {group} | {path} | {exists} | {size} | {usage} |".format(
+                group=item.get("group", ""),
+                path=item.get("path", ""),
+                exists=item.get("exists", ""),
+                size=item.get("size_bytes", 0),
+                usage=item.get("thesis_usage_note", ""),
+            )
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _learned_calibration_artifact_specs() -> list[dict[str, str]]:
+    return [
+        {"group": "dataset", "filename": "learned_calibration_dataset.csv", "description": "Flat feature export", "usage": "Feature matrix for learned-calibration feasibility discussion."},
+        {"group": "labels", "filename": "learned_calibration_labels.csv", "description": "Proxy-label export", "usage": "Documents deterministic proxy labels and limitations."},
+        {"group": "baseline metrics", "filename": "learned_calibration_baseline_metrics.json", "description": "Heuristic baseline metrics", "usage": "Compares risk_score ranking with proxy labels."},
+        {"group": "baseline metrics", "filename": "learned_calibration_baseline_metrics.md", "description": "Readable heuristic baseline metrics", "usage": "Thesis table source for baseline behavior."},
+        {"group": "model report", "filename": "learned_calibration_model_report.json", "description": "Optional model report", "usage": "Records trained/skipped model status and metrics."},
+        {"group": "model report", "filename": "learned_calibration_model_summary.md", "description": "Readable model summary", "usage": "Concise thesis summary of model availability."},
+        {"group": "predictions", "filename": "learned_calibration_predictions.csv", "description": "Optional learned predictions", "usage": "Input to ranking comparisons when a model is trained."},
+        {"group": "comparison report", "filename": "learned_vs_heuristic_comparison.json", "description": "Learned vs heuristic comparison", "usage": "Compares learned and heuristic ranking when predictions exist."},
+        {"group": "comparison report", "filename": "learned_vs_heuristic_comparison.md", "description": "Readable learned-vs-heuristic comparison", "usage": "Thesis narrative support for ranking agreement/disagreement."},
+        {"group": "disagreements", "filename": "learned_calibration_disagreements.csv", "description": "Disagreement cases", "usage": "Case examples when learned predictions exist."},
+        {"group": "disagreements", "filename": "learned_calibration_disagreements.md", "description": "Readable disagreement summary", "usage": "Thesis discussion of disagreement categories."},
+        {"group": "feature importance", "filename": "learned_calibration_feature_importance.csv", "description": "Coefficient/importance export", "usage": "Interpretability support when coefficients exist."},
+        {"group": "feature importance", "filename": "learned_calibration_feature_importance.md", "description": "Readable feature importance", "usage": "Thesis discussion of feature dominance."},
+        {"group": "ablation", "filename": "learned_calibration_ablation.csv", "description": "Ablation rows", "usage": "Feature-removal experiment plan/results."},
+        {"group": "ablation", "filename": "learned_calibration_ablation.md", "description": "Readable ablation summary", "usage": "Thesis-ready ablation table."},
+        {"group": "leakage checks", "filename": "learned_calibration_leakage_checks.json", "description": "Leakage and robustness checks", "usage": "Evidence that learned artifacts do not change production behavior."},
+        {"group": "leakage checks", "filename": "learned_calibration_leakage_checks.md", "description": "Readable leakage checks", "usage": "Appendix-quality leakage/robustness summary."},
+        {"group": "thesis narrative", "filename": "learned_calibration_thesis_section.md", "description": "Thesis section draft", "usage": "Academic prose for learned-calibration discussion."},
+        {"group": "thesis narrative", "filename": "learned_calibration_limitations.md", "description": "Limitations summary", "usage": "Conservative claims and limitations wording."},
+        {"group": "tables", "filename": "learned_calibration_tables.json", "description": "Publication table payloads", "usage": "Machine-readable table source."},
+        {"group": "tables", "filename": "learned_calibration_tables.md", "description": "Publication table markdown", "usage": "Thesis-ready compact tables."},
+        {"group": "case studies", "filename": "learned_calibration_case_studies.csv", "description": "Case-study rows", "usage": "Selected examples for thesis discussion."},
+        {"group": "case studies", "filename": "learned_calibration_case_studies.md", "description": "Case-study summary", "usage": "Readable summary of selected case groups."},
+        {"group": "proxy sensitivity", "filename": "learned_calibration_proxy_sensitivity.csv", "description": "Proxy threshold grid rows", "usage": "Sensitivity of proxy labels to threshold choices."},
+        {"group": "proxy sensitivity", "filename": "learned_calibration_proxy_sensitivity.json", "description": "Proxy threshold grid payload", "usage": "Machine-readable proxy threshold sensitivity analysis."},
+        {"group": "proxy sensitivity", "filename": "learned_calibration_proxy_sensitivity.md", "description": "Readable proxy sensitivity summary", "usage": "Thesis discussion of proxy threshold robustness."},
+        {"group": "bootstrap stability", "filename": "learned_calibration_bootstrap_stability.csv", "description": "Bootstrap ranking stability iterations", "usage": "Deterministic resampling check for heuristic ranking stability."},
+        {"group": "bootstrap stability", "filename": "learned_calibration_bootstrap_stability.json", "description": "Bootstrap ranking stability payload", "usage": "Machine-readable bootstrap summary and iteration rows."},
+        {"group": "bootstrap stability", "filename": "learned_calibration_bootstrap_stability.md", "description": "Readable bootstrap stability summary", "usage": "Thesis discussion of ranking robustness under resampling."},
+        {"group": "coverage strata", "filename": "learned_calibration_coverage_strata.csv", "description": "Coverage-limitation strata rows", "usage": "Stratifies proxy-label feasibility by evidence and score-context coverage."},
+        {"group": "coverage strata", "filename": "learned_calibration_coverage_strata.json", "description": "Coverage-limitation strata payload", "usage": "Machine-readable coverage strata analysis."},
+        {"group": "coverage strata", "filename": "learned_calibration_coverage_strata.md", "description": "Readable coverage-limitation strata summary", "usage": "Thesis discussion of data coverage effects."},
+        {"group": "negative controls", "filename": "learned_calibration_negative_controls.json", "description": "Negative-control ranking comparisons", "usage": "Compares heuristic ranking with random, reverse, and single-feature controls."},
+        {"group": "negative controls", "filename": "learned_calibration_negative_controls.md", "description": "Readable negative-control summary", "usage": "Thesis sanity check for proxy-label ranking metrics."},
+        {"group": "consistency audit", "filename": "learned_calibration_consistency_audit.json", "description": "Cross-artifact consistency checks", "usage": "Machine-readable artifact integrity audit."},
+        {"group": "consistency audit", "filename": "learned_calibration_consistency_audit.md", "description": "Readable cross-artifact consistency checks", "usage": "Appendix-quality artifact integrity summary."},
+        {"group": "appendix", "filename": "learned_calibration_appendix.md", "description": "Long-form learned-calibration appendix draft", "usage": "Thesis appendix draft assembled from generated artifact values."},
+        {"group": "runtime snapshot", "filename": "learned_calibration_runtime_snapshot.json", "description": "Local learned-calibration artifact health snapshot", "usage": "Records git metadata, artifact presence, row counts, statuses, and warnings."},
+        {"group": "runtime snapshot", "filename": "learned_calibration_runtime_snapshot.md", "description": "Readable runtime artifact health snapshot", "usage": "Quick review of generated artifact health before thesis use."},
+        {"group": "reviewer checklist", "filename": "learned_calibration_reviewer_checklist.json", "description": "Reviewer checklist payload", "usage": "Structured thesis/reviewer checklist for learned calibration."},
+        {"group": "reviewer checklist", "filename": "learned_calibration_reviewer_checklist.md", "description": "Readable reviewer checklist", "usage": "Checklist for thesis review and defense preparation."},
+        {"group": "defense preparation", "filename": "learned_calibration_defense_qa.md", "description": "Learned-calibration defense Q&A draft", "usage": "Defense-preparation answers for learned calibration and limitations."},
+        {"group": "limitations matrix", "filename": "learned_calibration_limitations_matrix.csv", "description": "Structured limitations matrix rows", "usage": "Machine-readable thesis limitations matrix."},
+        {"group": "limitations matrix", "filename": "learned_calibration_limitations_matrix.json", "description": "Structured limitations matrix payload", "usage": "JSON thesis limitations matrix."},
+        {"group": "limitations matrix", "filename": "learned_calibration_limitations_matrix.md", "description": "Readable limitations matrix", "usage": "Thesis-safe limitations table."},
+        {"group": "no-overclaim audit", "filename": "learned_calibration_no_overclaim_audit.json", "description": "No-overclaim audit payload", "usage": "Checks learned-calibration docs and reports for unsafe claims."},
+        {"group": "no-overclaim audit", "filename": "learned_calibration_no_overclaim_audit.md", "description": "Readable no-overclaim audit", "usage": "Final thesis claim-safety audit."},
+        {"group": "legacy high-risk diagnostics", "filename": "legacy_high_risk_diagnostics.csv", "description": "Legacy high-risk diagnostic rows", "usage": "Diagnostic review of old or intrinsic-severity-driven high-risk CVEs."},
+        {"group": "legacy high-risk diagnostics", "filename": "legacy_high_risk_diagnostics.json", "description": "Legacy high-risk diagnostic payload", "usage": "Machine-readable summary of legacy high-risk diagnostic groups."},
+        {"group": "legacy high-risk diagnostics", "filename": "legacy_high_risk_diagnostics.md", "description": "Readable legacy high-risk diagnostics", "usage": "Thesis discussion of retained severity versus operational evidence coverage."},
+        {"group": "legacy dampening counterfactual", "filename": "legacy_dampening_counterfactual.csv", "description": "Legacy dampening counterfactual rows", "usage": "Diagnostic sensitivity rows for possible future age-aware dampening."},
+        {"group": "legacy dampening counterfactual", "filename": "legacy_dampening_counterfactual.json", "description": "Legacy dampening counterfactual payload", "usage": "Machine-readable score and bucket-change summary."},
+        {"group": "legacy dampening counterfactual", "filename": "legacy_dampening_counterfactual.md", "description": "Readable legacy dampening counterfactual", "usage": "Thesis discussion of age-aware dampening as future work."},
+    ]
+
+
+def _table_proxy_label_distribution(report: Mapping[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for strategy, counts in (report.get("proxy_label_class_counts") or {}).items():
+        for label, count in counts.items():
+            rows.append({"strategy": strategy, "label": label, "count": count})
+    return rows or [{"strategy": "unavailable", "label": "unavailable", "count": 0}]
+
+
+def _table_baseline_metrics(metrics: Mapping[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for strategy, payload in (metrics.get("strategies") or {}).items():
+        rows.append(
+            {
+                "strategy": strategy,
+                "status": payload.get("status", ""),
+                "precision_at_10": (payload.get("precision_at_k") or {}).get("10"),
+                "recall_at_50": (payload.get("recall_at_k") or {}).get("50"),
+                "ndcg_at_50": (payload.get("ndcg_at_k") or {}).get("50"),
+            }
+        )
+    return rows or [{"strategy": "unavailable", "status": "unavailable", "precision_at_10": "", "recall_at_50": "", "ndcg_at_50": ""}]
+
+
+def _table_model_metrics(report: Mapping[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for strategy, payload in (report.get("strategies") or {}).items():
+        metrics = payload.get("metrics") or {}
+        rows.append(
+            {
+                "strategy": strategy,
+                "status": payload.get("status", ""),
+                "balanced_accuracy": metrics.get("balanced_accuracy", ""),
+                "f1": metrics.get("f1", ""),
+            }
+        )
+    return rows or [{"strategy": "unavailable", "status": report.get("status", "unavailable"), "balanced_accuracy": "", "f1": ""}]
+
+
+def _table_ablation_summary(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        name = str(row.get("ablation", ""))
+        if name in seen:
+            continue
+        seen.add(name)
+        output.append({"ablation": name, "status": row.get("status", ""), "interpretation": row.get("interpretation", "")})
+    return output or [{"ablation": "unavailable", "status": "unavailable", "interpretation": ""}]
+
+
+def _markdown_table(title: str, columns: Sequence[str], rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    lines = [f"## {title}", "", "| " + " | ".join(columns) + " |", "| " + " | ".join("---" for _ in columns) + " |"]
+    for row in rows:
+        lines.append("| " + " | ".join(str(row.get(column, "")) for column in columns) + " |")
+    lines.append("")
+    return lines
+
+
+def _best_probability_by_cve(prediction_rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
+    probabilities: dict[str, float] = {}
+    for row in prediction_rows:
+        cve_id = str(row.get("cve_id", ""))
+        value = _safe_float(row.get("learned_probability"))
+        if cve_id and (cve_id not in probabilities or value > probabilities[cve_id]):
+            probabilities[cve_id] = value
+    return probabilities
+
+
+def _case_study_row(
+    row: Mapping[str, Any],
+    proxy_label: str,
+    probability: float | None,
+    group: str,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "cve_id": row.get("cve_id", ""),
+        "cvss_score": row.get("cvss_score", ""),
+        "risk_score": row.get("risk_score", ""),
+        "confidence": row.get("confidence", ""),
+        "proxy_label": proxy_label,
+        "learned_probability": "" if probability is None else round(probability, 6),
+        "coverage_limitations": row.get("coverage_limitations", ""),
+        "key_reason": reason,
+        "case_group": group,
+    }
+
+
+def _leakage_check(name: str, status: str, details: str) -> dict[str, str]:
+    return {"check": name, "status": status, "details": details}
+
+
+def _skipped_ablation_row(strategy: str, name: str, features: Sequence[str], reason: str) -> dict[str, Any]:
+    return {
+        "strategy": strategy,
+        "ablation": name,
+        "status": "skipped",
+        "features": ";".join(features),
+        "accuracy": "",
+        "balanced_accuracy": "",
+        "precision": "",
+        "recall": "",
+        "f1": "",
+        "roc_auc": "",
+        "pr_auc": "",
+        "interpretation": _ablation_interpretation(name),
+        "skip_reason": reason,
+    }
+
+
+def _ablation_interpretation(name: str) -> str:
+    mapping = {
+        "all_features": "baseline feature set for comparison",
+        "no_cvss_severity": "tests whether learned behavior is dominated by CVSS/severity",
+        "no_recency": "tests temporal signal dependence",
+        "no_nlp_context": "tests intrinsic context dependence",
+        "no_confidence_data_completeness": "tests confidence and coverage dependence",
+        "no_intrinsic_floor_flag": "tests whether intrinsic-criticality rule is reproduced",
+        "evidence_only": "tests whether sparse EPSS/KEV/external evidence can support learning",
+        "signals_only": "tests normalized signal-only behavior",
+        "metadata_context_only": "tests metadata/context behavior without explicit evidence counts",
+    }
+    return mapping.get(name, "ablation interpretation unavailable")
+
+
+def _coefficient_sign_interpretation(coefficient: float) -> str:
+    if coefficient > 0:
+        return "positive association with high proxy label"
+    if coefficient < 0:
+        return "negative association with high proxy label"
+    return "no learned directional association"
+
+
+def _feature_coverage_note(feature: str, rows: Sequence[Mapping[str, Any]]) -> str:
+    if not rows:
+        return "no exported rows"
+    missing = sum(1 for row in rows if row.get(feature) in ("", None))
+    if missing == 0:
+        return "available for all exported rows"
+    return f"missing for {missing} of {len(rows)} exported rows"
+
+
+def _disagreement_categories(
+    row: Mapping[str, Any],
+    *,
+    probability: float,
+    learned_rank: int,
+    heuristic_rank: int,
+    proxy_label: str,
+) -> list[tuple[str, str]]:
+    categories: list[tuple[str, str]] = []
+    risk = _safe_float(row.get("risk_score"))
+    cvss = _safe_float(row.get("cvss_score"))
+    confidence = _safe_float(row.get("confidence"))
+    external = _accepted_external_count(row)
+    limitations = str(row.get("coverage_limitations") or "")
+    if risk >= 7.0 and probability < 0.4:
+        categories.append(("heuristic_high_learned_low", "heuristic risk is high while learned probability is low"))
+    if probability >= 0.7 and risk < 7.0:
+        categories.append(("learned_high_heuristic_medium_low", "learned probability is high while heuristic risk is below high"))
+    if cvss >= 9.8 and probability < 0.7:
+        categories.append(("cvss_10_learned_probability_not_high", "critical CVSS does not map to high learned probability"))
+    if _truthy(row.get("intrinsic_criticality_floor_applied")) and probability < 0.4:
+        categories.append(("intrinsic_floor_applied_learned_probability_low", "intrinsic floor is applied but learned probability is low"))
+    if confidence < 0.4 and probability >= 0.7:
+        categories.append(("low_confidence_high_learned_probability", "low confidence conflicts with high learned probability"))
+    if risk >= 7.0 and external == 0:
+        categories.append(("high_risk_missing_external_evidence", "high heuristic risk has no accepted external evidence"))
+    if heuristic_rank <= 10 and proxy_label not in {"high"}:
+        categories.append(("high_heuristic_rank_low_proxy_support", "top heuristic rank has low proxy-label support"))
+    if learned_rank <= 10 and limitations:
+        categories.append(("high_learned_rank_limited_coverage", "top learned rank has coverage limitations"))
+    return categories
+
+
+def _disagreement_row(
+    row: Mapping[str, Any],
+    label_row: Mapping[str, Any],
+    strategy: str,
+    probability: float,
+    category: str,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "strategy": strategy,
+        "cve_id": row.get("cve_id", ""),
+        "cvss_score": row.get("cvss_score", ""),
+        "risk_score": row.get("risk_score", ""),
+        "risk_level": row.get("risk_level", ""),
+        "confidence": row.get("confidence", ""),
+        "learned_probability": round(probability, 6),
+        "proxy_label": label_row.get(f"proxy_label_{strategy}", ""),
+        "key_signals": _key_signal_summary(row),
+        "coverage_limitations": row.get("coverage_limitations", ""),
+        "disagreement_type": category,
+        "reason": reason,
+    }
+
+
+def _key_signal_summary(row: Mapping[str, Any]) -> str:
+    keys = ("severity_signal", "epss_signal", "kev_signal", "recency_signal", "correlation_signal", "graph_signal", "nlp_context_signal")
+    return "; ".join(f"{key}={row.get(key, '')}" for key in keys)
+
+
+def _comparison_for_strategy(
+    rows_by_cve: Mapping[str, Mapping[str, Any]],
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+    predictions: Sequence[Mapping[str, Any]],
+    strategy: str,
+) -> dict[str, Any]:
+    usable_predictions = [prediction for prediction in predictions if str(prediction.get("cve_id", "")) in rows_by_cve]
+    if not usable_predictions:
+        return {
+            "status": "skipped",
+            "skip_reason": "no learned predictions available for this strategy",
+        }
+    learned_ranked_ids = [
+        str(prediction.get("cve_id", ""))
+        for prediction in sorted(
+            usable_predictions,
+            key=lambda row: (-_safe_float(row.get("learned_probability")), str(row.get("cve_id", ""))),
+        )
+    ]
+    heuristic_ranked_ids = [
+        cve_id
+        for cve_id, row in sorted(
+            rows_by_cve.items(),
+            key=lambda item: (-_safe_float(item[1].get("risk_score")), item[0]),
+        )
+        if cve_id in set(learned_ranked_ids)
+    ]
+    labels_learned = [_strategy_binary_label(cve_id, label_by_cve, strategy) for cve_id in learned_ranked_ids]
+    labels_heuristic = [_strategy_binary_label(cve_id, label_by_cve, strategy) for cve_id in heuristic_ranked_ids]
+    return {
+        "status": "evaluated",
+        "record_count": len(learned_ranked_ids),
+        "top_k_overlap": _top_k_overlap(learned_ranked_ids, heuristic_ranked_ids, (10, 25, 50, 100)),
+        "learned_metrics": {
+            "precision_at_k": {str(k): _precision_at_k(labels_learned, k) for k in (10, 25, 50, 100)},
+            "recall_at_k": {str(k): _recall_at_k(labels_learned, k) for k in (10, 25, 50, 100)},
+        },
+        "heuristic_metrics": {
+            "precision_at_k": {str(k): _precision_at_k(labels_heuristic, k) for k in (10, 25, 50, 100)},
+            "recall_at_k": {str(k): _recall_at_k(labels_heuristic, k) for k in (10, 25, 50, 100)},
+        },
+        "spearman_like_rank_correlation": _rank_correlation(learned_ranked_ids, heuristic_ranked_ids),
+        "severity_rank_correlation": _severity_rank_correlation(learned_ranked_ids, rows_by_cve),
+        "learned_ranks_much_higher": _rank_difference_cases(
+            learned_ranked_ids,
+            heuristic_ranked_ids,
+            rows_by_cve,
+            label_by_cve,
+            strategy,
+            direction="learned_higher",
+        ),
+        "heuristic_ranks_much_higher": _rank_difference_cases(
+            learned_ranked_ids,
+            heuristic_ranked_ids,
+            rows_by_cve,
+            label_by_cve,
+            strategy,
+            direction="heuristic_higher",
+        ),
+        "interpretation": _ranking_interpretation(learned_ranked_ids, heuristic_ranked_ids, rows_by_cve),
+    }
+
+
+def _top_k_overlap(left_ids: Sequence[str], right_ids: Sequence[str], ks: Sequence[int]) -> dict[str, dict[str, float]]:
+    result: dict[str, dict[str, float]] = {}
+    for k in ks:
+        left = set(left_ids[:k])
+        right = set(right_ids[:k])
+        count = len(left & right)
+        result[str(k)] = {"count": count, "fraction": round(count / max(min(k, len(left_ids), len(right_ids)), 1), 4)}
+    return result
+
+
+def _strategy_binary_label(
+    cve_id: str,
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+    strategy: str,
+) -> int:
+    return _safe_int((label_by_cve.get(cve_id) or {}).get(f"proxy_binary_high_{strategy}"))
+
+
+def _rank_correlation(left_ids: Sequence[str], right_ids: Sequence[str]) -> float | None:
+    common = [cve_id for cve_id in left_ids if cve_id in set(right_ids)]
+    n = len(common)
+    if n < 2:
+        return None
+    left_ranks = {cve_id: index + 1 for index, cve_id in enumerate(left_ids)}
+    right_ranks = {cve_id: index + 1 for index, cve_id in enumerate(right_ids)}
+    squared_diff = sum((left_ranks[cve_id] - right_ranks[cve_id]) ** 2 for cve_id in common)
+    return round(1 - (6 * squared_diff) / (n * (n**2 - 1)), 4)
+
+
+def _severity_rank_correlation(
+    learned_ranked_ids: Sequence[str],
+    rows_by_cve: Mapping[str, Mapping[str, Any]],
+) -> float | None:
+    severity_ids = sorted(
+        learned_ranked_ids,
+        key=lambda cve_id: (-_safe_float(rows_by_cve[cve_id].get("severity_signal")), cve_id),
+    )
+    return _rank_correlation(learned_ranked_ids, severity_ids)
+
+
+def _rank_difference_cases(
+    learned_ranked_ids: Sequence[str],
+    heuristic_ranked_ids: Sequence[str],
+    rows_by_cve: Mapping[str, Mapping[str, Any]],
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+    strategy: str,
+    *,
+    direction: str,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    learned_rank = {cve_id: index + 1 for index, cve_id in enumerate(learned_ranked_ids)}
+    heuristic_rank = {cve_id: index + 1 for index, cve_id in enumerate(heuristic_ranked_ids)}
+    rows: list[dict[str, Any]] = []
+    for cve_id in learned_rank.keys() & heuristic_rank.keys():
+        delta = heuristic_rank[cve_id] - learned_rank[cve_id]
+        if direction == "learned_higher" and delta <= 0:
+            continue
+        if direction == "heuristic_higher" and delta >= 0:
+            continue
+        row = rows_by_cve[cve_id]
+        rows.append(
+            {
+                "cve_id": cve_id,
+                "learned_rank": learned_rank[cve_id],
+                "heuristic_rank": heuristic_rank[cve_id],
+                "rank_delta": delta,
+                "risk_score": row.get("risk_score", ""),
+                "cvss_score": row.get("cvss_score", ""),
+                "proxy_label": (label_by_cve.get(cve_id) or {}).get(f"proxy_label_{strategy}", ""),
+            }
+        )
+    rows = sorted(rows, key=lambda row: -abs(_safe_int(row["rank_delta"])))
+    return rows[:limit]
+
+
+def _ranking_interpretation(
+    learned_ranked_ids: Sequence[str],
+    heuristic_ranked_ids: Sequence[str],
+    rows_by_cve: Mapping[str, Mapping[str, Any]],
+) -> str:
+    heuristic_corr = _rank_correlation(learned_ranked_ids, heuristic_ranked_ids)
+    severity_corr = _severity_rank_correlation(learned_ranked_ids, rows_by_cve)
+    if heuristic_corr is not None and heuristic_corr >= 0.8:
+        return "learned ranking closely tracks heuristic risk_score"
+    if severity_corr is not None and severity_corr >= 0.8:
+        return "learned ranking mostly reproduces severity ordering"
+    return "learned ranking diverges from heuristic/severity ordering"
+
+
+def _skipped_model_report(*, generated_at: str, reason: str) -> dict[str, Any]:
+    return {
+        "generated_at": generated_at,
+        "status": "skipped",
+        "model_type": "LogisticRegression",
+        "random_seed": 42,
+        "features": list(MODEL_FEATURE_COLUMNS),
+        "leakage_guard": {
+            "risk_score_used_as_feature": "risk_score" in MODEL_FEATURE_COLUMNS,
+            "proxy_label_fields_used_as_features": [],
+        },
+        "model_registry": model_registry(None),
+        "skip_reason": reason,
+        "strategies": {
+            strategy: {"status": "skipped", "skip_reason": reason}
+            for strategy in ("strategy_a", "strategy_b", "strategy_c")
+        },
+        "alternative_models": {
+            model_name: {"status": "skipped", "skip_reason": reason}
+            for model_name in ("random_forest", "hist_gradient_boosting", "dummy")
+        },
+        "interpretation": "skipped",
+    }
+
+
+def _train_strategy_model(
+    rows: Sequence[Mapping[str, Any]],
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+    strategy: str,
+    sklearn_bundle: Mapping[str, Any],
+) -> dict[str, Any]:
+    y = [
+        _safe_int((label_by_cve.get(str(row.get("cve_id", ""))) or {}).get(f"proxy_binary_high_{strategy}"))
+        for row in rows
+    ]
+    positives = sum(y)
+    negatives = len(y) - positives
+    if len(set(y)) < 2:
+        return _skipped_strategy_result(strategy, "single-class proxy labels", positives, negatives)
+    if min(positives, negatives) < 2:
+        return _skipped_strategy_result(strategy, "too few examples in one class for stratified split", positives, negatives)
+    x = [[_feature_value(row, feature) for feature in MODEL_FEATURE_COLUMNS] for row in rows]
+    train_test_split = sklearn_bundle["train_test_split"]
+    LogisticRegression = sklearn_bundle["LogisticRegression"]
+    x_train, x_test, y_train, y_test = train_test_split(
+        x,
+        y,
+        test_size=0.3,
+        random_state=42,
+        stratify=y,
+    )
+    model = LogisticRegression(random_state=42, max_iter=1000, class_weight="balanced")
+    model.fit(x_train, y_train)
+    probabilities = [float(prob[1]) for prob in model.predict_proba(x)]
+    predictions = [
+        {
+            "cve_id": str(row.get("cve_id", "")),
+            "strategy": strategy,
+            "proxy_binary_high": label,
+            "learned_probability": round(probability, 6),
+            "learned_prediction": int(probability >= 0.5),
+        }
+        for row, label, probability in zip(rows, y, probabilities)
+    ]
+    test_probabilities = [float(prob[1]) for prob in model.predict_proba(x_test)]
+    test_predictions = [int(value >= 0.5) for value in test_probabilities]
+    metrics = _classification_metrics(y_test, test_predictions, test_probabilities, sklearn_bundle)
+    model_reports = {
+        "logistic_regression": {
+            "status": "evaluated",
+            "metrics": metrics,
+            "random_seed": 42,
+        }
+    }
+    model_reports.update(_train_alternative_models(x_train, x_test, y_train, y_test, sklearn_bundle))
+    return {
+        "predictions": predictions,
+        "report": {
+            "status": "limited" if min(positives, negatives) < 20 else "meaningful",
+            "positive_count": positives,
+            "negative_count": negatives,
+            "train_class_counts": _class_counts(y_train),
+            "test_class_counts": _class_counts(y_test),
+            "metrics": metrics,
+            "models": model_reports,
+            "learned_probability_summary": _probability_summary(probabilities),
+            "coefficients": {
+                feature: round(float(coefficient), 6)
+                for feature, coefficient in zip(MODEL_FEATURE_COLUMNS, model.coef_[0])
+            },
+        },
+    }
+
+
+def model_registry(sklearn_bundle: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
+    if sklearn_bundle is None:
+        return {
+            model_name: {"available": False, "skip_reason": "scikit-learn is not installed in the current Python environment"}
+            for model_name in ("logistic_regression", "random_forest", "hist_gradient_boosting", "dummy")
+        }
+    return {
+        "logistic_regression": {"available": "LogisticRegression" in sklearn_bundle, "random_seed": 42},
+        "random_forest": {"available": "RandomForestClassifier" in sklearn_bundle, "random_seed": 42},
+        "hist_gradient_boosting": {"available": "HistGradientBoostingClassifier" in sklearn_bundle, "random_seed": 42},
+        "dummy": {"available": "DummyClassifier" in sklearn_bundle, "random_seed": 42},
+    }
+
+
+def _train_alternative_models(
+    x_train: Sequence[Sequence[float]],
+    x_test: Sequence[Sequence[float]],
+    y_train: Sequence[int],
+    y_test: Sequence[int],
+    sklearn_bundle: Mapping[str, Any],
+) -> dict[str, Any]:
+    model_specs = {
+        "random_forest": ("RandomForestClassifier", {"random_state": 42, "n_estimators": 100, "class_weight": "balanced"}),
+        "hist_gradient_boosting": ("HistGradientBoostingClassifier", {"random_state": 42}),
+        "dummy": ("DummyClassifier", {"strategy": "most_frequent", "random_state": 42}),
+    }
+    reports: dict[str, Any] = {}
+    for model_name, (class_name, kwargs) in model_specs.items():
+        model_class = sklearn_bundle.get(class_name)
+        if model_class is None:
+            reports[model_name] = {"status": "skipped", "skip_reason": f"{class_name} is unavailable"}
+            continue
+        model = model_class(**kwargs)
+        model.fit(x_train, y_train)
+        if hasattr(model, "predict_proba"):
+            probabilities = [float(prob[1]) for prob in model.predict_proba(x_test)]
+        else:
+            probabilities = [float(value) for value in model.predict(x_test)]
+        predictions = [int(value >= 0.5) for value in probabilities]
+        reports[model_name] = {
+            "status": "evaluated",
+            "metrics": _classification_metrics(y_test, predictions, probabilities, sklearn_bundle),
+            "random_seed": 42,
+        }
+    return reports
+
+
+def _classification_metrics(
+    y_true: Sequence[int],
+    y_pred: Sequence[int],
+    probabilities: Sequence[float],
+    sklearn_bundle: Mapping[str, Any],
+) -> dict[str, Any]:
+    metrics = sklearn_bundle["metrics"]
+    result = {
+        "accuracy": round(float(metrics.accuracy_score(y_true, y_pred)), 4),
+        "balanced_accuracy": round(float(metrics.balanced_accuracy_score(y_true, y_pred)), 4),
+        "precision": round(float(metrics.precision_score(y_true, y_pred, zero_division=0)), 4),
+        "recall": round(float(metrics.recall_score(y_true, y_pred, zero_division=0)), 4),
+        "f1": round(float(metrics.f1_score(y_true, y_pred, zero_division=0)), 4),
+        "confusion_matrix": metrics.confusion_matrix(y_true, y_pred, labels=[0, 1]).tolist(),
+    }
+    if len(set(y_true)) > 1:
+        result["roc_auc"] = round(float(metrics.roc_auc_score(y_true, probabilities)), 4)
+        result["pr_auc"] = round(float(metrics.average_precision_score(y_true, probabilities)), 4)
+    else:
+        result["roc_auc"] = None
+        result["pr_auc"] = None
+    return result
+
+
+def _skipped_strategy_result(strategy: str, reason: str, positives: int, negatives: int) -> dict[str, Any]:
+    return {
+        "predictions": [],
+        "report": {
+            "status": "skipped",
+            "skip_reason": reason,
+            "positive_count": positives,
+            "negative_count": negatives,
+            "metrics": {},
+        },
+    }
+
+
+def _feature_value(row: Mapping[str, Any], feature: str) -> float:
+    if feature == "intrinsic_criticality_floor_applied":
+        return 1.0 if _truthy(row.get(feature)) else 0.0
+    return _safe_float(row.get(feature))
+
+
+def _class_counts(labels: Sequence[int]) -> dict[str, int]:
+    return {"0": sum(1 for label in labels if label == 0), "1": sum(1 for label in labels if label == 1)}
+
+
+def _probability_summary(probabilities: Sequence[float]) -> dict[str, float]:
+    if not probabilities:
+        return {"min": 0.0, "max": 0.0, "mean": 0.0}
+    return {
+        "min": round(min(probabilities), 6),
+        "max": round(max(probabilities), 6),
+        "mean": round(mean(probabilities), 6),
+    }
+
+
+def _model_interpretation(strategies: Mapping[str, Mapping[str, Any]]) -> str:
+    statuses = {payload.get("status") for payload in strategies.values()}
+    if statuses == {"skipped"}:
+        return "skipped"
+    if "meaningful" in statuses:
+        return "meaningful"
+    return "limited"
+
+
+def _load_sklearn() -> Mapping[str, Any] | None:
+    try:
+        from sklearn import metrics
+        from sklearn.dummy import DummyClassifier
+        from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.model_selection import train_test_split
+    except ImportError:
+        return None
+    return {
+        "DummyClassifier": DummyClassifier,
+        "HistGradientBoostingClassifier": HistGradientBoostingClassifier,
+        "LogisticRegression": LogisticRegression,
+        "RandomForestClassifier": RandomForestClassifier,
+        "train_test_split": train_test_split,
+        "metrics": metrics,
+    }
+
+
+def _baseline_metrics_for_strategy(
+    ranked_rows: Sequence[Mapping[str, Any]],
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+    strategy: str,
+) -> dict[str, Any]:
+    labels = [
+        _safe_int((label_by_cve.get(str(row.get("cve_id", ""))) or {}).get(f"proxy_binary_high_{strategy}"))
+        for row in ranked_rows
+    ]
+    total = len(labels)
+    positives = sum(labels)
+    status = "evaluated"
+    if positives == 0:
+        status = "no_positive_labels"
+    elif positives < 10:
+        status = "tiny_positive_class"
+    precision_ks = (10, 25, 50, 100, 250)
+    recall_ks = (10, 50, 100, 250)
+    ndcg_ks = (10, 50, 100)
+    return {
+        "status": status,
+        "record_count": total,
+        "positive_count": positives,
+        "high_label_coverage": round(positives / total, 4) if total else 0.0,
+        "precision_at_k": {
+            str(k): _precision_at_k(labels, k) if positives else None for k in precision_ks
+        },
+        "recall_at_k": {
+            str(k): _recall_at_k(labels, k) if positives else None for k in recall_ks
+        },
+        "ndcg_at_k": {
+            str(k): _ndcg_at_k(labels, k) if positives else None for k in ndcg_ks
+        },
+        "average_risk_score_by_proxy_class": _average_risk_score_by_proxy_class(
+            ranked_rows, label_by_cve, strategy
+        ),
+        "risk_bucket_distribution_by_proxy_class": _risk_bucket_distribution_by_proxy_class(
+            ranked_rows, label_by_cve, strategy
+        ),
+        "confidence_distribution_by_proxy_class": _confidence_distribution_by_proxy_class(
+            ranked_rows, label_by_cve, strategy
+        ),
+    }
+
+
+def _precision_at_k(labels: Sequence[int], k: int) -> float:
+    if not labels or k <= 0:
+        return 0.0
+    top = labels[: min(k, len(labels))]
+    return round(sum(top) / len(top), 4)
+
+
+def _recall_at_k(labels: Sequence[int], k: int) -> float:
+    positives = sum(labels)
+    if positives == 0 or k <= 0:
+        return 0.0
+    return round(sum(labels[: min(k, len(labels))]) / positives, 4)
+
+
+def _ndcg_at_k(labels: Sequence[int], k: int) -> float:
+    if not labels or sum(labels) == 0 or k <= 0:
+        return 0.0
+    top = labels[: min(k, len(labels))]
+    dcg = sum(label / log2(index + 2) for index, label in enumerate(top))
+    ideal = sorted(labels, reverse=True)[: min(k, len(labels))]
+    idcg = sum(label / log2(index + 2) for index, label in enumerate(ideal))
+    return round(dcg / idcg, 4) if idcg else 0.0
+
+
+def _average_risk_score_by_proxy_class(
+    rows: Sequence[Mapping[str, Any]],
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+    strategy: str,
+) -> dict[str, float]:
+    grouped: dict[str, list[float]] = {}
+    for row in rows:
+        label = str((label_by_cve.get(str(row.get("cve_id", ""))) or {}).get(f"proxy_label_{strategy}", "unknown"))
+        grouped.setdefault(label, []).append(_safe_float(row.get("risk_score")))
+    return {label: round(mean(values), 4) if values else 0.0 for label, values in grouped.items()}
+
+
+def _risk_bucket_distribution_by_proxy_class(
+    rows: Sequence[Mapping[str, Any]],
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+    strategy: str,
+) -> dict[str, dict[str, int]]:
+    distribution: dict[str, dict[str, int]] = {}
+    for row in rows:
+        label = str((label_by_cve.get(str(row.get("cve_id", ""))) or {}).get(f"proxy_label_{strategy}", "unknown"))
+        bucket = str(row.get("risk_level") or _risk_bucket(_safe_float(row.get("risk_score"))))
+        distribution.setdefault(label, {})
+        distribution[label][bucket] = distribution[label].get(bucket, 0) + 1
+    return distribution
+
+
+def _confidence_distribution_by_proxy_class(
+    rows: Sequence[Mapping[str, Any]],
+    label_by_cve: Mapping[str, Mapping[str, Any]],
+    strategy: str,
+) -> dict[str, Any]:
+    distribution: dict[str, dict[str, Any]] = {}
+    grouped: dict[str, list[float]] = {}
+    for row in rows:
+        label = str((label_by_cve.get(str(row.get("cve_id", ""))) or {}).get(f"proxy_label_{strategy}", "unknown"))
+        confidence = _safe_float(row.get("confidence"))
+        grouped.setdefault(label, []).append(confidence)
+        bucket = _confidence_bucket(confidence)
+        distribution.setdefault(label, {"low": 0, "medium": 0, "high": 0})
+        distribution[label][bucket] += 1
+    for label, values in grouped.items():
+        distribution.setdefault(label, {"low": 0, "medium": 0, "high": 0})
+        distribution[label]["average"] = round(mean(values), 4) if values else 0.0
+    return distribution
+
+
+def _risk_bucket(score: float) -> str:
+    if score >= 9.0:
+        return "CRITICAL"
+    if score >= 7.0:
+        return "HIGH"
+    if score >= 4.0:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _confidence_bucket(confidence: float) -> str:
+    if confidence >= 0.7:
+        return "high"
+    if confidence >= 0.4:
+        return "medium"
+    return "low"
+
+
+def _format_metric(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return str(value)
+
+
+def _strategy_a_label(row: Mapping[str, Any]) -> tuple[str, str]:
+    if _truthy(row.get("kev_listed")):
+        return "high", "kev listed"
+    if _safe_float(row.get("epss_signal")) >= 0.7:
+        return "high", "epss signal >= 0.7"
+    if (
+        _safe_float(row.get("cvss_score")) >= 9.8
+        and _safe_float(row.get("nlp_context_signal")) >= 0.8
+        and _safe_float(row.get("recency_signal")) >= 0.5
+    ):
+        return "high", "intrinsic criticality pattern"
+    if (
+        _safe_float(row.get("cvss_score")) >= 7.0
+        or _safe_float(row.get("epss_signal")) >= 0.1
+        or _safe_float(row.get("nlp_context_signal")) >= 0.5
+    ):
+        return "medium", "moderate intrinsic or exploit-likelihood signal"
+    return "low", "no high or medium proxy condition met"
+
+
+def _strategy_b_label(row: Mapping[str, Any]) -> tuple[str, str, list[str]]:
+    limitations: list[str] = []
+    epss = _safe_float(row.get("epss_signal"))
+    accepted_external = _accepted_external_count(row)
+    confidence = _safe_float(row.get("confidence"))
+    if not _truthy(row.get("epss_available")):
+        limitations.append("epss unavailable")
+    if not _truthy(row.get("kev_status_known")):
+        limitations.append("kev status unknown")
+    if accepted_external == 0:
+        limitations.append("accepted external evidence absent")
+    if _truthy(row.get("kev_listed")):
+        return "high", "kev listed", limitations
+    if epss >= 0.7:
+        return "high", "high epss signal", limitations
+    if accepted_external > 0 and confidence >= 0.5:
+        return "high", "accepted external evidence with adequate confidence", limitations
+    if epss >= 0.1 or accepted_external > 0:
+        return "medium", "some evidence signal but below high threshold", limitations
+    return "low", "no accepted evidence-prioritized high condition met", limitations
+
+
+def _strategy_c_label(row: Mapping[str, Any]) -> tuple[str, str]:
+    if _truthy(row.get("kev_listed")):
+        return "high", "kev listed"
+    if _safe_float(row.get("epss_signal")) >= 0.8:
+        return "high", "epss signal >= 0.8"
+    if (
+        _truthy(row.get("intrinsic_criticality_floor_applied"))
+        and _safe_float(row.get("cvss_score")) >= 9.8
+        and _safe_float(row.get("nlp_context_signal")) >= 0.8
+    ):
+        return "high", "intrinsic floor with critical cvss and strong context"
+    return "not_high", "no conservative high proxy condition met"
+
+
+def _accepted_external_count(row: Mapping[str, Any]) -> int:
+    return _safe_int(row.get("accepted_urlhaus_count")) + _safe_int(row.get("accepted_dread_count"))
+
+
+def _label_counts(rows: Sequence[Mapping[str, Any]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        label = str(row.get(key, ""))
+        counts[label] = counts.get(label, 0) + 1
+    return counts
+
+
+def _label_percentages(counts: Mapping[str, int], total: int) -> dict[str, float]:
+    if total <= 0:
+        return {label: 0.0 for label in counts}
+    return {label: round(count / total, 4) for label, count in counts.items()}
+
+
+def _strategy_b_limitations(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    total = len(rows)
+    if total == 0:
+        return ["no exported rows"]
+    limitations: list[str] = []
+    epss_available = sum(1 for row in rows if _truthy(row.get("epss_available")))
+    kev_known = sum(1 for row in rows if _truthy(row.get("kev_status_known")))
+    accepted_external = sum(1 for row in rows if _accepted_external_count(row) > 0)
+    if epss_available / total < 0.25:
+        limitations.append("EPSS coverage is sparse")
+    if kev_known / total < 0.25:
+        limitations.append("KEV status coverage is sparse")
+    if accepted_external == 0:
+        limitations.append("accepted external evidence is absent")
+    return limitations or ["evidence coverage is adequate for this proxy definition"]
+
+
+def _trainability_decision(*, total: int, high_count: int, limitations: Sequence[str]) -> str:
+    if total < 50 or high_count == 0:
+        return "not_recommended"
+    high_fraction = high_count / total
+    if high_fraction < 0.01 or high_fraction > 0.95:
+        return "not_recommended"
+    if any("sparse" in limitation or "absent" in limitation for limitation in limitations):
+        return "limited"
+    return "usable"
+
+
+def _proxy_reason_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        for reason in str(row.get("proxy_label_reason", "")).split(";"):
+            reason = reason.strip()
+            if not reason:
+                continue
+            counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
+def _proxy_label_warnings(
+    label_rows: Sequence[Mapping[str, Any]],
+    feature_rows: Sequence[Mapping[str, Any]],
+    reason_counts: Mapping[str, int],
+) -> list[str]:
+    warnings: list[str] = []
+    high_a = sum(1 for row in label_rows if row.get("proxy_label_strategy_a") == "high")
+    intrinsic_high_a = reason_counts.get("strategy_a:intrinsic criticality pattern", 0)
+    if high_a and intrinsic_high_a / high_a >= 0.7:
+        warnings.append("Strategy A high labels are mostly CVSS/intrinsic-context driven.")
+    if _strategy_b_limitations(feature_rows) != ["evidence coverage is adequate for this proxy definition"]:
+        warnings.append("Strategy B is limited by sparse EPSS/KEV or accepted external-evidence coverage.")
+    return warnings
+
+
+def _missing_feature_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    return {
+        column: sum(1 for row in rows if row.get(column) in ("", None))
+        for column in DATASET_COLUMNS
+    }
+
+
+def _missing_feature_percentages(missing_counts: Mapping[str, int], analyzed: int) -> dict[str, float]:
+    if analyzed <= 0:
+        return {column: 0.0 for column in DATASET_COLUMNS}
+    return {column: round(count / analyzed, 4) for column, count in missing_counts.items()}
+
+
+def _get_nested(doc: Mapping[str, Any], path: str, default: Any = None) -> Any:
+    current: Any = doc
+    for part in path.split("."):
+        if not isinstance(current, Mapping) or part not in current:
+            return default
+        current = current[part]
+    return current
+
+
+def _coalesce_nested(doc: Mapping[str, Any], *paths: str, default: Any = None) -> Any:
+    for path in paths:
+        value = _get_nested(doc, path, _MISSING)
+        if value is _MISSING or value in (None, ""):
+            continue
+        return value
+    return default
+
+
+def _first_mapping(doc: Mapping[str, Any], *paths: str) -> Mapping[str, Any]:
+    for path in paths:
+        value = _get_nested(doc, path, _MISSING)
+        if isinstance(value, Mapping):
+            return value
+    return {}
+
+
+def _as_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value]
+    return [str(value)]
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        if value in ("", None):
+            return 0
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _safe_float(value: Any) -> float:
+    try:
+        if value in ("", None):
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "listed"}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Export learned-calibration feasibility artifacts from analyzed CVE records.")
+    parser.add_argument("--output-dir", default="../reports/thesis")
+    parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--strict", action="store_true", help="Exit non-zero when no usable analyzed CVE rows are exported.")
+    args = parser.parse_args()
+    docs = read_analyzed_cves_from_mongo(limit=args.limit)
+    result = export_from_documents(docs, args.output_dir)
+    if args.strict:
+        errors = strict_validation_errors(result["report"])
+        if errors:
+            print(json.dumps({"status": "failed", "errors": errors}, indent=2))
+            raise SystemExit(2)
+    print(json.dumps({"status": "written", **result["paths"], "analyzed_records_exported": result["report"]["analyzed_records_exported"]}, indent=2))
+
+
+if __name__ == "__main__":
+    main()

@@ -7,10 +7,42 @@ The thesis artifact bundle is generated from a controlled deterministic fixture.
 ## Environment Assumptions
 
 - Repository root: `~/Coding/multi-agent-threat-intelligence`
+- Tested Python runtime: Python 3.11
+- Tested Go runtime: Go 1.24.x
+- Tested Node runtime: Node 24.x
+- Tested local database: MongoDB 7.x
 - Python virtual environment: `agent-python/.venv`
 - Python imports use `PYTHONPATH=src`
 - Thesis artifacts have a no live network requirement and are generated without live network calls
 - Dread remains optional, bounded, and disabled for deterministic thesis artifact generation
+
+## Local Python Setup
+
+From the repository root, create the expected Python virtual environment and install dependencies with:
+
+```bash
+make setup-python
+```
+
+This command creates `agent-python/.venv` and installs `agent-python/requirements.txt` into that environment. It is safe to rerun when dependencies change.
+
+For thesis reproducibility from the pinned snapshot, use:
+
+```bash
+make setup-python-locked
+```
+
+`setup-python` is the normal development setup from `requirements.txt`. `setup-python-locked` is the thesis reproducibility setup from `requirements.lock` and runs `pip check` after installation.
+
+`agent-python/requirements.txt` is the human-maintained dependency input used by setup and CI. `agent-python/requirements.lock` is a thesis reproducibility snapshot generated from the tested Python 3.11 virtual environment with:
+
+```bash
+cd agent-python
+.venv/bin/python -m pip freeze --exclude-editable > requirements.lock
+.venv/bin/python -m pip check
+```
+
+Regenerate the lock file only from a clean project virtual environment. It should not contain editable installs, local filesystem paths, or newly installed packages that are not part of the project environment.
 
 ## Final Validation Sequence
 
@@ -31,9 +63,15 @@ git status --short
 Expected result:
 
 - The Python test suite passes.
-- `make thesis-artifacts` regenerates `agent-python/reports/thesis/`.
+- `make thesis-artifacts` regenerates `reports/thesis/deterministic/`.
 - `make thesis-artifact-quality` returns a passing JSON summary.
 - `git status --short` shows only intentional working-tree changes, if any.
+
+Default `make test-python` does not require scikit-learn. Optional learned-calibration ML tests require `SKLEARN_OPTIONAL_TESTS=1` and scikit-learn installed:
+
+```bash
+make test-python-optional-ml
+```
 
 For a demo-oriented flow that runs artifact generation and the quality gate together, use:
 
@@ -47,38 +85,125 @@ For read-only diagnostics after a live local re-analysis, use:
 make thesis-runtime-diagnostics
 ```
 
-This writes `agent-python/reports/runtime/` and summarizes risk, confidence, EPSS/KEV coverage, URLhaus candidate accounting, and high-risk moderate-confidence cases. It is an operational sanity check, not the deterministic thesis benchmark.
+This writes `reports/runtime/` and summarizes risk, confidence, EPSS/KEV coverage, URLhaus candidate accounting, and high-risk moderate-confidence cases. It is an operational sanity check, not the deterministic thesis benchmark.
+
+For the experimental learned-calibration export, use:
+
+```bash
+make thesis-learned-calibration
+```
+
+This reads existing analyzed CVE records and writes proxy-label, baseline, optional model, leakage-check, and narrative artifacts. It does not change production `risk_score`, does not alter evidence gates, does not use live Dread crawling, and does not treat proxy labels as ground truth.
+
+## Report Root Strategy
+
+Generated report outputs use root-level directories:
+
+```text
+reports/thesis/deterministic/          deterministic thesis fixture artifacts
+reports/thesis/learned_calibration/    optional learned-calibration artifacts
+reports/runtime/                       read-only runtime diagnostics
+reports/real_benchmark/                optional real/curated benchmark experiments
+```
+
+The `agent-python/.cache/real_benchmark/` directory is reserved for ignored local official-format input caches used by optional real/curated benchmark commands.
 
 ## Generated Artifact Inventory
 
-The deterministic bundle is written under `agent-python/reports/thesis/`:
+The two bundles use separate subdirectories under root-level `reports/thesis/`, and they are produced by different Makefile targets.
 
-```text
-reports/thesis/manifest.json
-reports/thesis/scoring_summary.md
-reports/thesis/scoring_distribution.csv
-reports/thesis/scoring_distribution.md
-reports/thesis/scoring_sensitivity.csv
-reports/thesis/scoring_sensitivity.md
-reports/thesis/benchmark_summary.csv
-reports/thesis/benchmark_summary.md
-reports/thesis/ablation_summary.csv
-reports/thesis/ablation_summary.md
-reports/thesis/correlation_decisions.csv
-reports/thesis/case_studies.json
-reports/thesis/risk_explanation_traces.json
-reports/thesis/risk_explanation_traces.md
-reports/thesis/demo_walkthrough.md
-reports/thesis/results_summary.md
-reports/thesis/thesis_results_section.md
-reports/thesis/limitations_and_validity.md
-reports/thesis/thesis_defense_pack.md
-reports/thesis/methodology_summary.md
+### A. Deterministic Thesis Bundle
+
+Generated by:
+
+```bash
+make thesis-artifacts
+make thesis-demo
 ```
 
-`manifest.json` lists the generated files, record count, and correlation-decision count. It is the first file to inspect when checking that the bundle is complete.
+Output:
+
+```text
+reports/thesis/deterministic/
+```
+
+Contains deterministic fixture outputs only:
+
+```text
+reports/thesis/deterministic/manifest.json
+reports/thesis/deterministic/scoring_summary.md
+reports/thesis/deterministic/scoring_distribution.csv
+reports/thesis/deterministic/scoring_distribution.md
+reports/thesis/deterministic/scoring_sensitivity.csv
+reports/thesis/deterministic/scoring_sensitivity.md
+reports/thesis/deterministic/benchmark_summary.csv
+reports/thesis/deterministic/benchmark_summary.md
+reports/thesis/deterministic/ablation_summary.csv
+reports/thesis/deterministic/ablation_summary.md
+reports/thesis/deterministic/correlation_decisions.csv
+reports/thesis/deterministic/case_studies.json
+reports/thesis/deterministic/risk_explanation_traces.json
+reports/thesis/deterministic/risk_explanation_traces.md
+reports/thesis/deterministic/demo_walkthrough.md
+reports/thesis/deterministic/results_summary.md
+reports/thesis/deterministic/thesis_results_section.md
+reports/thesis/deterministic/limitations_and_validity.md
+reports/thesis/deterministic/thesis_defense_pack.md
+reports/thesis/deterministic/methodology_summary.md
+```
+
+`manifest.json` lists the generated deterministic files, record count, and correlation-decision count. It is the first file to inspect when checking that the deterministic bundle is complete.
+
+### B. Optional Learned Calibration Bundle
+
+Generated by:
+
+```bash
+make thesis-learned-calibration
+make thesis-learned-calibration-quality
+```
+
+Output:
+
+```text
+reports/thesis/learned_calibration/
+```
+
+Contains experimental learned-calibration, no-overclaim, appendix, reviewer, runtime-snapshot, and legacy diagnostic artifacts:
+
+```text
+reports/thesis/learned_calibration/learned_calibration_dataset.csv
+reports/thesis/learned_calibration/learned_calibration_labels.csv
+reports/thesis/learned_calibration/learned_calibration_report.json
+reports/thesis/learned_calibration/learned_calibration_summary.md
+reports/thesis/learned_calibration/learned_calibration_baseline_metrics.json
+reports/thesis/learned_calibration/learned_calibration_baseline_metrics.md
+reports/thesis/learned_calibration/learned_calibration_predictions.csv
+reports/thesis/learned_calibration/learned_calibration_model_report.json
+reports/thesis/learned_calibration/learned_calibration_model_summary.md
+reports/thesis/learned_calibration/learned_vs_heuristic_comparison.json
+reports/thesis/learned_calibration/learned_vs_heuristic_comparison.md
+reports/thesis/learned_calibration/learned_calibration_disagreements.csv
+reports/thesis/learned_calibration/learned_calibration_disagreements.md
+reports/thesis/learned_calibration/learned_calibration_feature_importance.csv
+reports/thesis/learned_calibration/learned_calibration_feature_importance.md
+reports/thesis/learned_calibration/learned_calibration_ablation.csv
+reports/thesis/learned_calibration/learned_calibration_ablation.md
+reports/thesis/learned_calibration/learned_calibration_leakage_checks.json
+reports/thesis/learned_calibration/learned_calibration_leakage_checks.md
+reports/thesis/learned_calibration/learned_calibration_thesis_section.md
+reports/thesis/learned_calibration/learned_calibration_limitations.md
+reports/thesis/learned_calibration/legacy_high_risk_diagnostics.csv
+reports/thesis/learned_calibration/legacy_high_risk_diagnostics.json
+reports/thesis/learned_calibration/legacy_high_risk_diagnostics.md
+reports/thesis/learned_calibration/legacy_dampening_counterfactual.csv
+reports/thesis/learned_calibration/legacy_dampening_counterfactual.json
+reports/thesis/learned_calibration/legacy_dampening_counterfactual.md
+```
 
 ## Artifact Roles
+
+Deterministic thesis bundle:
 
 - `scoring_summary.md`: overview of top scored CVEs, risk levels, and scoring behavior.
 - `scoring_distribution.csv`: machine-readable score distribution, normalized signals, and weighted contribution exports.
@@ -100,7 +225,23 @@ reports/thesis/methodology_summary.md
 - `thesis_defense_pack.md`: concise defense preparation artifact with claim scope and Q&A.
 - `methodology_summary.md`: concise method summary for the deterministic artifact bundle.
 
-For the static version of the thesis claim boundaries, see [`docs/thesis_limitations.md`](thesis_limitations.md). For a claim-to-evidence map for thesis writing and defense preparation, see [`docs/thesis_claim_evidence_map.md`](thesis_claim_evidence_map.md). For a chapter-by-chapter English writing plan, see [`docs/thesis_chapter_blueprint.md`](thesis_chapter_blueprint.md).
+Optional learned calibration bundle:
+
+- `learned_calibration_dataset.csv`: flat experimental feature export from existing analyzed CVE records.
+- `learned_calibration_labels.csv`: deterministic proxy-label export; proxy labels are not ground truth.
+- `learned_calibration_report.json` and `learned_calibration_summary.md`: feasibility, coverage, missing-feature, and proxy-label summaries.
+- `learned_calibration_baseline_metrics.*`: heuristic `risk_score` ranking compared against proxy labels.
+- `learned_calibration_model_*` and `learned_calibration_predictions.csv`: optional learned-calibration model outputs or explicit skipped status.
+- `learned_vs_heuristic_comparison.*`: learned-probability ranking compared with heuristic ranking when predictions exist.
+- `learned_calibration_disagreements.*`: examples for thesis discussion when learned predictions exist.
+- `learned_calibration_feature_importance.*`: coefficient/importance exports when a model is trained.
+- `learned_calibration_ablation.*`: deterministic learned-calibration ablation plan and results or skipped status.
+- `learned_calibration_leakage_checks.*`: checks showing `risk_score` and proxy-label fields are excluded from model inputs and production behavior is unchanged.
+- `learned_calibration_thesis_section.md` and `learned_calibration_limitations.md`: conservative thesis prose for the experimental learned-calibration discussion.
+- `legacy_high_risk_diagnostics.*`: diagnostic grouping for modern intrinsic-floor cases, old high-CVSS retained-severity cases, and high-risk records without accepted external evidence.
+- `legacy_dampening_counterfactual.*`: illustrative age-aware dampening counterfactual for future-work discussion; it does not change production scoring.
+
+For the static version of the thesis claim boundaries, see [`docs/thesis_limitations.md`](thesis_limitations.md). For a claim-to-evidence map for thesis writing and defense preparation, see [`docs/thesis_claim_evidence_map.md`](thesis_claim_evidence_map.md). For a chapter-by-chapter English writing plan, see [`docs/thesis_chapter_blueprint.md`](thesis_chapter_blueprint.md). For the experimental learned-calibration export, see [`docs/learned_calibration.md`](learned_calibration.md).
 
 ## Interpreting Evaluation Outputs
 
@@ -111,6 +252,8 @@ For the static version of the thesis claim boundaries, see [`docs/thesis_limitat
 `scoring_sensitivity.*` probes whether ranking behavior remains qualitatively stable under bounded deterministic scoring-weight perturbations. The default production weights are not changed by this analysis. This supports behavioral robustness discussion, not statistical calibration.
 
 `risk_explanation_traces.*` links CVSS, EPSS, KEV, normalized signals, weighted contributions, evidence decisions, confidence context, and asset-aware operational-risk examples. Use these traces to answer why a CVE received a particular generic risk score, confidence score, and operational risk score.
+
+`learned_calibration_*` artifacts are diagnostic. They use proxy labels that are not ground truth, preserve the existing heuristic `risk_score`, preserve evidence gates, avoid live Dread access, and keep confidence separate from risk. They can support a thesis discussion of feasibility and limitations, but not a claim of real-world exploit prediction.
 
 ## Artifact Quality Gate
 
@@ -132,7 +275,7 @@ The quality gate validates structure and formatting of the generated bundle. It 
 A passing run prints a JSON summary similar to:
 
 ```json
-{"artifact_dir":"reports/thesis","checked_files":20,"checked_markdown_files":12,"status":"passed"}
+{"artifact_dir":"reports/thesis/deterministic","checked_files":20,"checked_markdown_files":12,"status":"passed"}
 ```
 
 The quality gate does not validate statistical correctness, does not prove real-world generalization, and does not change model behavior.

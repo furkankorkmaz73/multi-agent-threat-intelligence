@@ -38,7 +38,7 @@ This makes the model auditable at the record level and prevents benchmark artifa
 
 ## Weight Sensitivity Analysis
 
-The default signal weights are heuristic engineering choices. The thesis artifact pipeline therefore includes an offline sensitivity analysis that recomputes the controlled fixture under small bounded perturbations:
+The default signal weights are heuristic engineering choices. They are not probability mixture coefficients and are not required to sum to 1.0; they are bounded additive priority contributions before scaling and clamping to `[0, 10]`. The thesis artifact pipeline therefore includes an offline sensitivity analysis that recomputes the controlled fixture under small bounded perturbations:
 
 - severity plus/minus
 - EPSS plus/minus

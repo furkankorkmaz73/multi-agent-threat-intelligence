@@ -103,6 +103,65 @@ def test_intrinsic_criticality_floor_is_bounded_and_explainable():
     assert breakdown["risk_raw"] == 7.8
 
 
+def test_intrinsic_criticality_floor_requires_all_thresholds():
+    base = {
+        "severity_signal": 1.0,
+        "epss_signal": 0.0,
+        "kev_signal": 0.0,
+        "recency_signal": 0.8,
+        "correlation_signal": 0.0,
+        "graph_signal": 0.0,
+        "nlp_context_signal": 1.0,
+    }
+
+    for changed_signal, value in (
+        ("severity_signal", 0.97),
+        ("nlp_context_signal", 0.79),
+        ("recency_signal", 0.49),
+    ):
+        signals = {**base, changed_signal: value}
+        breakdown = calculate_risk_score_from_normalized_signals(signals)
+
+        assert breakdown["intrinsic_criticality_floor_applied"] is False
+        assert breakdown["risk_score_from_signals"] == breakdown["score_before_intrinsic_floor"]
+
+
+def test_old_low_recency_high_context_does_not_receive_intrinsic_floor():
+    breakdown = calculate_risk_score_from_normalized_signals(
+        {
+            "severity_signal": 1.0,
+            "epss_signal": 0.0,
+            "kev_signal": 0.0,
+            "recency_signal": 0.05,
+            "correlation_signal": 0.0,
+            "graph_signal": 0.0,
+            "nlp_context_signal": 1.0,
+        }
+    )
+
+    assert breakdown["intrinsic_criticality_floor_applied"] is False
+    assert breakdown["risk_score_from_signals"] == breakdown["score_before_intrinsic_floor"]
+    assert breakdown["risk_score_from_signals"] < 8.1
+
+
+def test_intrinsic_criticality_floor_does_not_inflate_scores_above_floor():
+    breakdown = calculate_risk_score_from_normalized_signals(
+        {
+            "severity_signal": 1.0,
+            "epss_signal": 1.0,
+            "kev_signal": 1.0,
+            "recency_signal": 1.0,
+            "correlation_signal": 1.0,
+            "graph_signal": 1.0,
+            "nlp_context_signal": 1.0,
+        }
+    )
+
+    assert breakdown["score_before_intrinsic_floor"] > 8.1
+    assert breakdown["intrinsic_criticality_floor_applied"] is False
+    assert breakdown["risk_score_from_signals"] == breakdown["score_before_intrinsic_floor"]
+
+
 def test_intrinsic_criticality_floor_does_not_affect_medium_severity():
     breakdown = calculate_risk_score_from_normalized_signals(
         {

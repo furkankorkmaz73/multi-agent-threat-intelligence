@@ -69,6 +69,20 @@ make thesis-runtime-diagnostics
 
 The command is read-only and writes operational diagnostics under `reports/runtime/`. It reports processed counts, risk and confidence distributions, EPSS/KEV coverage, URLhaus raw/ignored/evaluated/accepted/manual/rejected candidate counts, and high-risk moderate-confidence examples. This is an operational sanity check for the local database, not the deterministic thesis benchmark.
 
+## Learned Calibration Experiment
+
+Run:
+
+```bash
+make thesis-learned-calibration
+```
+
+This read-only export creates experimental learned-calibration artifacts from existing analyzed CVE records. It builds deterministic proxy labels, baseline heuristic-ranking metrics, optional scikit-learn model outputs, learned-vs-heuristic comparisons, disagreement examples, feature-importance exports, ablation plans, leakage checks, and thesis narrative summaries.
+
+The proxy labels are not ground truth. The experiment does not change production `risk_score`, does not change URLhaus/Dread evidence gates, does not use live Dread crawling, and does not recalibrate confidence. Results are diagnostic and limited by sparse EPSS, KEV, and accepted external-evidence coverage; they should not be presented as proof of real-world exploit prediction.
+
+The learned-calibration bundle also includes legacy high-risk diagnostics and an illustrative legacy dampening counterfactual. These outputs distinguish modern intrinsic criticality floor cases from old high-CVSS retained-severity cases and high-risk cases with no accepted external evidence. They are not production scoring changes. Preserving old CVSS 10 severity can be defensible for intrinsic technical severity, but lack of EPSS, KEV, or accepted external evidence limits operational interpretation. Future age-aware dampening should be evaluated only with stronger labels or asset context.
+
 ## Thesis Artifacts
 
 Run:
@@ -80,7 +94,7 @@ make thesis-artifacts
 The command runs the deterministic thesis fixture scenario and writes:
 
 ```text
-agent-python/reports/thesis/
+reports/thesis/deterministic/
   scoring_summary.md
   scoring_distribution.csv
   scoring_distribution.md
@@ -118,7 +132,9 @@ Equivalent direct command:
 
 ```bash
 cd agent-python
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.thesis_artifact_quality --artifact-dir reports/thesis
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.thesis_artifact_quality --artifact-dir ../reports/thesis/deterministic
 ```
+
+The direct command is run from `agent-python`, so `../reports/thesis/deterministic` refers to the root-level deterministic thesis artifact directory.
 
 The gate validates artifact structure and formatting only. It checks manifest entries, listed file existence, required case studies, required explanation traces and fields, required CSV columns, known Markdown/CSV formatting regressions, and Markdown table shape. It does not recompute statistical correctness, prove real-world validity, or change model behavior.

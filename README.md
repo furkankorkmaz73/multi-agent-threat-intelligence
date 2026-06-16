@@ -4,6 +4,8 @@ An explainable threat intelligence platform for collecting, analyzing, prioritiz
 
 The project combines a Go-based collector, a Python analysis engine, MongoDB persistence, FastAPI APIs, and a React analyst console. It demonstrates practical security engineering patterns: multi-source ingestion, explainable risk scoring, evidence-quality confidence, model diagnostics, and analyst-oriented triage workflows.
 
+For thesis use, the architecture should be read as multi-agent-inspired / agent-supported and modular, not as a fully autonomous LLM-agent system. Scoring, confidence estimation, and evidence-gate decisions are deterministic and explainable. The deterministic fixture supports behavioral validation, not real-world statistical validation. This repository is a research prototype, not a production SOC platform.
+
 ---
 
 ## What This Project Does
@@ -156,9 +158,13 @@ A deterministic local end-to-end scenario exercises fixture ingestion, worker li
 make thesis-scenario
 ```
 
-The command writes `agent-python/reports/thesis_scenario_report.json`.
+The command writes `reports/thesis/deterministic/thesis_scenario_report.json`.
 
-For reproducible thesis artifact generation and validation, see [`docs/thesis_reproducibility.md`](docs/thesis_reproducibility.md). For conservative thesis claim boundaries, see [`docs/thesis_limitations.md`](docs/thesis_limitations.md). For claim-to-evidence mapping, see [`docs/thesis_claim_evidence_map.md`](docs/thesis_claim_evidence_map.md). For a chapter-by-chapter English writing plan, see [`docs/thesis_chapter_blueprint.md`](docs/thesis_chapter_blueprint.md).
+For reproducible thesis artifact generation and validation, see [`docs/thesis_reproducibility.md`](docs/thesis_reproducibility.md). For conservative thesis claim boundaries, see [`docs/thesis_limitations.md`](docs/thesis_limitations.md). For claim-to-evidence mapping, see [`docs/thesis_claim_evidence_map.md`](docs/thesis_claim_evidence_map.md). For a chapter-by-chapter English writing plan, see [`docs/thesis_chapter_blueprint.md`](docs/thesis_chapter_blueprint.md). For the experimental learned-calibration analysis, see [`docs/learned_calibration.md`](docs/learned_calibration.md).
+
+Tested thesis-reproducibility assumptions are Python 3.11, Go 1.24.x, Node 24.x, MongoDB 7.x, `agent-python/.venv`, and `PYTHONPATH=src`.
+
+Use `make setup-python` for normal development setup from `agent-python/requirements.txt`. Use `make setup-python-locked` when recreating the thesis environment from the pinned `agent-python/requirements.lock` snapshot.
 
 ## Reproducible Thesis Demo
 
@@ -172,11 +178,21 @@ The demo flow regenerates the deterministic thesis fixture artifacts, runs the a
 
 Open these files first:
 
-- `agent-python/reports/thesis/demo_walkthrough.md`
-- `agent-python/reports/thesis/thesis_defense_pack.md`
-- `agent-python/reports/thesis/manifest.json`
+- `reports/thesis/deterministic/demo_walkthrough.md`
+- `reports/thesis/deterministic/thesis_defense_pack.md`
+- `reports/thesis/deterministic/manifest.json`
 
-After a live local re-analysis, `make thesis-runtime-diagnostics` writes read-only operational diagnostics to `agent-python/reports/runtime/`, including confidence distribution, EPSS/KEV coverage, and URLhaus raw/ignored/rejected/accepted candidate accounting. This is an operational sanity check, not the deterministic thesis benchmark.
+After a live local re-analysis, `make thesis-runtime-diagnostics` writes read-only operational diagnostics to `reports/runtime/`, including confidence distribution, EPSS/KEV coverage, and URLhaus raw/ignored/rejected/accepted candidate accounting. This is an operational sanity check, not the deterministic thesis benchmark.
+
+## Experimental Learned Calibration
+
+Run the read-only learned-calibration export:
+
+```bash
+make thesis-learned-calibration
+```
+
+This writes experimental proxy-label, baseline, optional model, leakage-check, and narrative artifacts under `reports/thesis/learned_calibration/`. Proxy labels are not ground truth, production `risk_score` is unchanged, evidence gates are unchanged, Dread live crawling is not used, and confidence remains separate from risk. These artifacts are diagnostic thesis material, not proof of real-world exploit prediction.
 
 ## Production-like E2E Scenario
 
@@ -218,7 +234,7 @@ Generate model results and immediately run the KEV/EPSS benchmark with local off
 make real-cve-export REAL_CVE_FLAGS="--cve-file .cache/real_benchmark/nvd_curated_cves.json --offline --run-benchmark --kev-file .cache/real_benchmark/cisa_kev.json --epss-file .cache/real_benchmark/first_epss.csv"
 ```
 
-The model export writes `model_results.json`, `model_results.csv`, `analysis_failures.json`, and `run_metadata.json` under `agent-python/reports/real_benchmark/model_export/`.
+The model export writes `model_results.json`, `model_results.csv`, `analysis_failures.json`, and `run_metadata.json` under `reports/real_benchmark/model_export/`.
 
 Build and evaluate the expanded balanced benchmark from local official-format NVD, KEV, and EPSS files:
 
@@ -226,21 +242,21 @@ Build and evaluate the expanded balanced benchmark from local official-format NV
 make balanced-benchmark BALANCED_FLAGS="--nvd-file .cache/real_benchmark/nvd_candidates.json --kev-file .cache/real_benchmark/cisa_kev.json --epss-file .cache/real_benchmark/first_epss.csv --model-results reports/real_benchmark/model_export/model_results.json"
 ```
 
-The balanced runner writes `balanced_benchmark_definition.json`, `benchmark_summary.json`, `benchmark_records.csv`, `baseline_metrics.csv`, `ablation_metrics.csv`, `ablation_records.csv`, `benchmark_diagnostics.json`, and `case_candidates.json` under `agent-python/reports/real_benchmark/balanced/`.
+The balanced runner writes `balanced_benchmark_definition.json`, `benchmark_summary.json`, `benchmark_records.csv`, `baseline_metrics.csv`, `ablation_metrics.csv`, `ablation_records.csv`, `benchmark_diagnostics.json`, and `case_candidates.json` under `reports/real_benchmark/balanced/`.
 
 Online refresh:
 
 ```bash
-make real-benchmark MODEL_RESULTS=reports/model_results.json REAL_BENCHMARK_FLAGS=--refresh
+make real-benchmark MODEL_RESULTS=reports/real_benchmark/model_export/model_results.json REAL_BENCHMARK_FLAGS=--refresh
 ```
 
 Offline cached run:
 
 ```bash
-make real-benchmark MODEL_RESULTS=reports/model_results.json REAL_BENCHMARK_FLAGS=--offline
+make real-benchmark MODEL_RESULTS=reports/real_benchmark/model_export/model_results.json REAL_BENCHMARK_FLAGS=--offline
 ```
 
-The runner writes `benchmark_summary.json`, `benchmark_records.csv`, and `baseline_metrics.csv` under `agent-python/reports/real_benchmark/`. Official datasets are cached under `agent-python/.cache/real_benchmark/`; both locations are ignored local outputs.
+The runner writes `benchmark_summary.json`, `benchmark_records.csv`, and `baseline_metrics.csv` under `reports/real_benchmark/`. Official datasets are cached under `agent-python/.cache/real_benchmark/`; both locations are ignored local outputs.
 
 ---
 
@@ -406,13 +422,15 @@ The project includes optional OpenAI-compatible LLM support.
 
 LLM usage is not required for the pipeline to work.
 
-If `OPENAI_API_KEY` is configured, the Python analyzer can use the LLM helper for:
+LLM calls are disabled by default. To enable assistive extraction, set `LLM_ENABLED=1` and provide either `LLM_API_KEY` or the backward-compatible `OPENAI_API_KEY` alias. An API key alone does not enable LLM calls.
+
+When enabled, the Python analyzer can use the LLM helper for:
 
 - CVE structured field extraction
 - Dread post classification
 - short analyst-style explanation generation
 
-If no API key is configured:
+If LLM support is disabled or no API key is configured:
 
 - the LLM client is disabled
 - LLM helper functions return empty values
@@ -421,9 +439,13 @@ If no API key is configured:
 Environment variables:
 
 ```bash
-OPENAI_API_KEY=your_key_here
-OPENAI_BASE_URL=
+LLM_ENABLED=1
+LLM_API_KEY=your_key_here
+LLM_BASE_URL=
 LLM_MODEL=gpt-4o-mini
+# Backward-compatible aliases:
+OPENAI_API_KEY=
+OPENAI_BASE_URL=
 ```
 
 This makes the project:
@@ -468,11 +490,14 @@ A Dread collector path exists, but this source should be treated as optional / e
 
 ## Running With Docker
 
-Start MongoDB, API, and frontend:
+Create the local Docker environment file, then start MongoDB, API, and frontend:
 
 ```bash
+cp .env.example .env
 docker compose up -d
 ```
+
+Review `.env` before non-local use. The checked-in example is intended for local development defaults.
 
 Check containers:
 
@@ -783,7 +808,7 @@ This project is a research prototype and has not been hardened for protected ope
 
 Known limitations:
 
-- No authentication or authorization layer
+- API-key authentication and role-based authorization are implemented for controlled deployments, but the prototype is not hardened as a production SOC platform
 - MongoDB runs without access control in local development
 - API error handling can be improved when MongoDB is unavailable
 - Broader live EPSS/KEV operational validation remains future work
@@ -799,32 +824,29 @@ Known limitations:
 
 High-value next steps:
 
-1. **CISA KEV integration**
-   - Add known-exploited vulnerability signal.
-   - Improve CRITICAL risk decisions.
+1. **Broader EPSS/KEV coverage validation**
+   - Validate with larger local EPSS and CISA KEV exports.
+   - Improve freshness handling and operational coverage reporting.
+   - Keep EPSS/KEV unavailable cases explicit in confidence limitations.
 
-2. **EPSS integration**
-   - Add exploitation probability signal.
-   - Improve CVE prioritization quality.
-
-3. **API robustness**
+2. **API robustness**
    - Return graceful degraded responses when MongoDB is unavailable.
    - Improve frontend degraded-state handling.
 
-4. **Dashboard charts**
+3. **Dashboard charts**
    - Risk distribution
    - Confidence distribution
    - Source coverage
    - URLhaus online/offline split
    - Top malware families
 
-5. **URLhaus enrichment**
+4. **URLhaus enrichment**
    - Domain reputation
    - ASN/geolocation
    - Passive DNS
    - Malware family clustering
 
-6. **CI pipeline**
+5. **CI pipeline**
    - Python tests
    - Go tests
    - Frontend build

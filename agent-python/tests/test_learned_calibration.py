@@ -1,0 +1,1739 @@
+from __future__ import annotations
+
+import csv
+import json
+import os
+from copy import deepcopy
+
+import pytest
+from pymongo.errors import ServerSelectionTimeoutError
+
+import evaluation.learned_calibration as learned_calibration
+from evaluation.learned_calibration import (
+    ABLATION_COLUMNS,
+    BOOTSTRAP_STABILITY_COLUMNS,
+    CASE_STUDY_COLUMNS,
+    COVERAGE_STRATA_COLUMNS,
+    DATASET_COLUMNS,
+    DISAGREEMENT_COLUMNS,
+    FEATURE_IMPORTANCE_COLUMNS,
+    LABEL_COLUMNS,
+    LIMITATIONS_MATRIX_COLUMNS,
+    MODEL_FEATURE_COLUMNS,
+    LEGACY_HIGH_RISK_DIAGNOSTIC_COLUMNS,
+    LEGACY_DAMPENING_COUNTERFACTUAL_COLUMNS,
+    ablation_plan,
+    build_proxy_label_row,
+    build_proxy_label_rows,
+    build_leakage_checks,
+    build_legacy_high_risk_diagnostics,
+    build_legacy_dampening_counterfactual,
+    build_learned_calibration_manifest,
+    build_limitations_matrix,
+    build_no_overclaim_audit,
+    build_negative_control_rankings,
+    build_publication_tables,
+    build_reviewer_checklist,
+    build_runtime_snapshot,
+    build_feasibility_report,
+    bootstrap_sample_indices,
+    build_consistency_audit,
+    compute_baseline_metrics,
+    compute_bootstrap_stability,
+    compute_coverage_strata,
+    compute_disagreement_cases,
+    compute_learned_vs_heuristic_comparison,
+    compute_negative_controls,
+    compute_proxy_threshold_sensitivity,
+    compute_ablation_experiments,
+    export_from_documents,
+    extract_feature_importance,
+    model_registry,
+    extract_cve_year,
+    extract_calibration_row,
+    proxy_threshold_grid,
+    read_analyzed_cves_from_mongo,
+    render_coverage_strata_markdown,
+    render_consistency_audit_markdown,
+    render_limitations_matrix_markdown,
+    render_legacy_high_risk_diagnostics_markdown,
+    render_no_overclaim_audit_markdown,
+    render_negative_controls_markdown,
+    render_reviewer_checklist_markdown,
+    render_runtime_snapshot_markdown,
+    select_case_studies,
+    strict_validation_errors,
+    summarize_bootstrap_metrics,
+    train_learned_calibration_models,
+)
+
+
+def _require_optional_sklearn_tests():
+    if os.getenv("SKLEARN_OPTIONAL_TESTS") != "1":
+        pytest.skip("set SKLEARN_OPTIONAL_TESTS=1 to run optional sklearn tests")
+    return pytest.importorskip("sklearn")
+
+
+def _synthetic_doc() -> dict:
+    return {
+        "_id": "CVE-2026-1234",
+        "analysis": {
+            "entity_id": "CVE-2026-1234",
+            "risk_score": 8.1,
+            "risk_level": "HIGH",
+            "confidence": 0.61,
+            "evidence": {
+                "cvss_score": 10.0,
+                "related_urlhaus_count": 1,
+                "related_dread_count": 0,
+                "candidate_urlhaus_count": 3,
+                "candidate_dread_count": 0,
+                "epss_available": True,
+                "kev_status_known": True,
+                "kev_listed": False,
+                "age_days": 5,
+                "urlhaus_match_stats": {
+                    "raw_candidate_count": 3,
+                    "ignored_low_signal_count": 2,
+                    "rejected_match_count": 1,
+                },
+            },
+            "feature_breakdown": {
+                "severity_signal": 1.0,
+                "epss_signal": 0.42,
+                "kev_signal": 0.0,
+                "recency_signal": 0.8,
+                "correlation_signal": 0.2,
+                "graph_signal": 0.0,
+                "nlp_context_signal": 1.0,
+                "score_before_intrinsic_floor": 7.8,
+                "intrinsic_criticality_floor_applied": True,
+            },
+            "confidence_breakdown": {
+                "assessment_confidence": 0.64,
+                "data_completeness": 0.72,
+                "coverage_limitations": ["no_kev_listing"],
+            },
+        },
+    }
+
+
+def _row(**overrides) -> dict:
+    row = {column: "" for column in DATASET_COLUMNS}
+    row.update(
+        {
+            "cve_id": "CVE-2026-LABEL",
+            "cvss_score": 5.0,
+            "risk_score": 4.0,
+            "confidence": 0.45,
+            "epss_signal": 0.0,
+            "nlp_context_signal": 0.2,
+            "recency_signal": 0.2,
+            "accepted_urlhaus_count": 0,
+            "accepted_dread_count": 0,
+            "epss_available": False,
+            "kev_status_known": False,
+            "kev_listed": False,
+            "intrinsic_criticality_floor_applied": False,
+        }
+    )
+    row.update(overrides)
+    return row
+
+
+def test_extract_calibration_row_from_synthetic_analyzed_cve():
+    row = extract_calibration_row(_synthetic_doc())
+
+    assert row is not None
+    assert list(row.keys()) == DATASET_COLUMNS
+    assert row["cve_id"] == "CVE-2026-1234"
+    assert row["cvss_score"] == 10.0
+    assert row["risk_score"] == 8.1
+    assert row["accepted_urlhaus_count"] == 1
+    assert row["urlhaus_raw_candidate_count"] == 3
+    assert row["urlhaus_ignored_low_signal_count"] == 2
+    assert row["assessment_confidence"] == 0.64
+    assert row["coverage_limitations"] == "no_kev_listing"
+
+
+def test_extract_calibration_row_does_not_mutate_input_document():
+    doc = _synthetic_doc()
+    before = deepcopy(doc)
+
+    _ = extract_calibration_row(doc)
+
+    assert doc == before
+
+
+def test_extract_calibration_row_supports_legacy_top_level_shape():
+    doc = {
+        "_id": "CVE-2026-0002",
+        "risk_score": 6.9,
+        "risk_level": "MEDIUM",
+        "confidence": 0.58,
+        "evidence": {
+            "cvss_score": 8.8,
+            "related_urlhaus_count": 0,
+            "candidate_urlhaus_count": 4,
+            "urlhaus_match_stats": {
+                "raw_candidate_count": 4,
+                "ignored_low_signal_count": 3,
+                "rejected_match_count": 1,
+            },
+            "epss_available": False,
+            "kev_status_known": False,
+            "age_days": 22,
+        },
+        "features": {
+            "severity_signal": 0.88,
+            "epss_signal": 0.0,
+            "kev_signal": 0.0,
+            "recency_signal": 0.7,
+            "correlation_signal": 0.0,
+            "graph_signal": 0.0,
+            "nlp_context_signal": 0.8,
+        },
+        "confidence_breakdown": {
+            "assessment_confidence": 0.6,
+            "data_completeness": 0.35,
+            "coverage_limitations": ["epss_unavailable", "kev_status_unknown"],
+        },
+    }
+
+    row = extract_calibration_row(doc)
+
+    assert row is not None
+    assert row["cve_id"] == "CVE-2026-0002"
+    assert row["risk_score"] == 6.9
+    assert row["cvss_score"] == 8.8
+    assert row["severity_signal"] == 0.88
+    assert row["urlhaus_raw_candidate_count"] == 4
+    assert row["urlhaus_ignored_low_signal_count"] == 3
+    assert row["coverage_limitations"] == "epss_unavailable;kev_status_unknown"
+
+
+def test_extract_cve_year_handles_valid_and_invalid_ids():
+    assert extract_cve_year("CVE-2008-1447") == 2008
+    assert extract_cve_year("cve-2026-9001") == 2026
+    assert extract_cve_year("not-a-cve") is None
+    assert extract_cve_year("CVE-ABCD-0001") is None
+
+
+def test_legacy_high_risk_diagnostics_group_legacy_and_modern_rows():
+    rows = [
+        _row(
+            cve_id="CVE-2008-0001",
+            cvss_score=10.0,
+            risk_score=7.42,
+            risk_level="HIGH",
+            confidence=0.44,
+            severity_signal=1.0,
+            recency_signal=0.05,
+            nlp_context_signal=0.9,
+            correlation_signal=0.0,
+            coverage_limitations="epss unavailable;kev status unknown",
+        ),
+        _row(
+            cve_id="CVE-2026-9001",
+            cvss_score=10.0,
+            risk_score=8.1,
+            risk_level="HIGH",
+            confidence=0.55,
+            severity_signal=1.0,
+            recency_signal=0.8,
+            nlp_context_signal=1.0,
+            intrinsic_criticality_floor_applied=True,
+        ),
+    ]
+
+    payload = build_legacy_high_risk_diagnostics(rows)
+
+    assert payload["total_analyzed_cves"] == 2
+    assert payload["count_per_diagnostic_group"]["legacy_high_cvss_high_risk"] == 1
+    assert payload["count_per_diagnostic_group"]["legacy_cvss10_high_context"] == 1
+    assert payload["count_per_diagnostic_group"]["low_recency_high_risk"] == 1
+    assert payload["count_per_diagnostic_group"]["modern_intrinsic_floor"] == 1
+    assert payload["count_per_diagnostic_group"]["modern_high_risk_no_external_evidence"] == 1
+    groups = {row["diagnostic_group"] for row in payload["rows"]}
+    assert "legacy_high_cvss_high_risk" in groups
+    assert "modern_intrinsic_floor" in groups
+
+
+def test_legacy_high_risk_diagnostics_interpretation_is_diagnostic_only():
+    payload = build_legacy_high_risk_diagnostics(
+        [
+            _row(
+                cve_id="CVE-2010-0001",
+                cvss_score=10.0,
+                risk_score=7.1,
+                confidence=0.4,
+                recency_signal=0.0,
+                nlp_context_signal=0.9,
+            )
+        ]
+    )
+    text = render_legacy_high_risk_diagnostics_markdown(payload)
+
+    assert "not a production scoring change" in payload["warning"]
+    assert "not evidence of current exploitation" in json.dumps(payload)
+    assert "does not change production `risk_score`" in text
+
+
+def test_legacy_high_risk_diagnostics_empty_input():
+    payload = build_legacy_high_risk_diagnostics([])
+    markdown = render_legacy_high_risk_diagnostics_markdown(payload)
+
+    assert payload["total_analyzed_cves"] == 0
+    assert payload["count_per_diagnostic_group"] == {}
+    assert payload["rows"] == []
+    assert "No CVEs matched the diagnostic groups." in markdown
+
+
+def test_legacy_dampening_counterfactual_applies_rule_and_floor():
+    payload = build_legacy_dampening_counterfactual(
+        [
+            _row(
+                cve_id="CVE-2008-0001",
+                cvss_score=10.0,
+                risk_score=7.1,
+                recency_signal=0.0,
+                epss_signal=0.0,
+                kev_listed=False,
+                accepted_urlhaus_count=0,
+                accepted_dread_count=0,
+            )
+        ]
+    )
+    row = payload["rows"][0]
+
+    assert payload["affected_record_count"] == 1
+    assert row["dampening_applied"] is True
+    assert row["counterfactual_score"] == 6.8
+    assert row["counterfactual_floor"] == 6.8
+    assert row["risk_bucket_changed"] is True
+    assert row["high_medium_low_level_changed"] is True
+
+
+def test_legacy_dampening_counterfactual_cvss9_floor():
+    payload = build_legacy_dampening_counterfactual(
+        [
+            _row(
+                cve_id="CVE-2009-0001",
+                cvss_score=9.3,
+                risk_score=6.9,
+                recency_signal=0.0,
+                epss_signal=0.0,
+                kev_listed=False,
+                accepted_urlhaus_count=0,
+                accepted_dread_count=0,
+            )
+        ]
+    )
+    row = payload["rows"][0]
+
+    assert row["dampening_applied"] is True
+    assert row["counterfactual_score"] == 6.5
+    assert row["counterfactual_floor"] == 6.5
+
+
+def test_legacy_dampening_counterfactual_leaves_modern_and_external_rows_unchanged():
+    payload = build_legacy_dampening_counterfactual(
+        [
+            _row(cve_id="CVE-2026-0001", cvss_score=10.0, risk_score=8.1, recency_signal=0.8),
+            _row(
+                cve_id="CVE-2008-0002",
+                cvss_score=10.0,
+                risk_score=7.5,
+                recency_signal=0.0,
+                accepted_urlhaus_count=1,
+            ),
+            _row(
+                cve_id="CVE-2008-0003",
+                cvss_score=10.0,
+                risk_score=7.5,
+                recency_signal=0.0,
+                kev_listed=True,
+            ),
+        ]
+    )
+
+    assert payload["affected_record_count"] == 0
+    assert all(row["counterfactual_score"] == row["risk_score"] for row in payload["rows"])
+    assert all(row["dampening_applied"] is False for row in payload["rows"])
+
+
+def test_legacy_dampening_counterfactual_bucket_change_calculation():
+    payload = build_legacy_dampening_counterfactual(
+        [
+            _row(cve_id="CVE-2008-0001", cvss_score=10.0, risk_score=7.1, recency_signal=0.0),
+            _row(cve_id="CVE-2008-0002", cvss_score=10.0, risk_score=8.2, recency_signal=0.0),
+        ]
+    )
+
+    assert payload["affected_record_count"] == 2
+    assert payload["risk_bucket_change_count"] == 1
+    assert payload["high_medium_low_level_change_count"] == 1
+    assert "future work" in payload["material_thesis_conclusion_effect"]
+
+
+def test_feasibility_report_from_synthetic_rows():
+    rows = [extract_calibration_row(_synthetic_doc()) for _ in range(3)]
+
+    report = build_feasibility_report(rows, total_records_read=5, generated_at="2026-06-16T00:00:00+03:00")
+
+    assert report["total_cve_records_read"] == 5
+    assert report["analyzed_records_exported"] == 3
+    assert report["records_with_cvss"] == 3
+    assert report["epss_availability_count"] == 3
+    assert report["kev_known_count"] == 3
+    assert report["urlhaus_accepted_count"] == 3
+    assert report["dread_accepted_count"] == 0
+    assert report["intrinsic_criticality_floor_count"] == 3
+    assert report["proxy_supervised_learning_feasibility"] == "not_recommended"
+    assert "missing_feature_counts" in report
+    assert "missing_feature_accounting" in report
+    assert "missing_feature_percentages" in report
+    assert "coverage" in report
+    assert report["dataset_columns"] == DATASET_COLUMNS
+    assert "proxy_label_class_counts" in report
+    assert "proxy_binary_counts" in report
+    assert "proxy_label_trainability" in report
+
+
+def test_feasibility_report_accounts_for_missing_features():
+    row = {column: "" for column in DATASET_COLUMNS}
+    row["cve_id"] = "CVE-2026-MISSING"
+    row["risk_score"] = 4.1
+
+    report = build_feasibility_report([row], total_records_read=1, generated_at="2026-06-16T00:00:00+03:00")
+
+    assert report["missing_feature_counts"]["risk_score"] == 0
+    assert report["missing_feature_counts"]["cvss_score"] == 1
+    assert report["missing_feature_percentages"]["cvss_score"] == 1.0
+    assert report["missing_feature_accounting"]["counts"]["cvss_score"] == 1
+    assert strict_validation_errors(report) == ["No exported records include CVSS scores."]
+
+
+def test_export_writes_three_output_files(tmp_path):
+    docs = [_synthetic_doc()]
+
+    result = export_from_documents(docs, tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+
+    dataset = tmp_path / "learned_calibration_dataset.csv"
+    labels = tmp_path / "learned_calibration_labels.csv"
+    report = tmp_path / "learned_calibration_report.json"
+    summary = tmp_path / "learned_calibration_summary.md"
+    baseline = tmp_path / "learned_calibration_baseline_metrics.json"
+    baseline_summary = tmp_path / "learned_calibration_baseline_metrics.md"
+    predictions = tmp_path / "learned_calibration_predictions.csv"
+    model_report = tmp_path / "learned_calibration_model_report.json"
+    model_summary = tmp_path / "learned_calibration_model_summary.md"
+    comparison = tmp_path / "learned_vs_heuristic_comparison.json"
+    comparison_summary = tmp_path / "learned_vs_heuristic_comparison.md"
+    disagreements = tmp_path / "learned_calibration_disagreements.csv"
+    disagreements_summary = tmp_path / "learned_calibration_disagreements.md"
+    importance = tmp_path / "learned_calibration_feature_importance.csv"
+    importance_summary = tmp_path / "learned_calibration_feature_importance.md"
+    ablation = tmp_path / "learned_calibration_ablation.csv"
+    ablation_summary = tmp_path / "learned_calibration_ablation.md"
+    leakage = tmp_path / "learned_calibration_leakage_checks.json"
+    leakage_summary = tmp_path / "learned_calibration_leakage_checks.md"
+    thesis_section = tmp_path / "learned_calibration_thesis_section.md"
+    limitations = tmp_path / "learned_calibration_limitations.md"
+    case_studies = tmp_path / "learned_calibration_case_studies.csv"
+    case_studies_summary = tmp_path / "learned_calibration_case_studies.md"
+    tables = tmp_path / "learned_calibration_tables.json"
+    tables_summary = tmp_path / "learned_calibration_tables.md"
+    proxy_sensitivity = tmp_path / "learned_calibration_proxy_sensitivity.csv"
+    proxy_sensitivity_json = tmp_path / "learned_calibration_proxy_sensitivity.json"
+    proxy_sensitivity_summary = tmp_path / "learned_calibration_proxy_sensitivity.md"
+    bootstrap = tmp_path / "learned_calibration_bootstrap_stability.csv"
+    bootstrap_json = tmp_path / "learned_calibration_bootstrap_stability.json"
+    bootstrap_summary = tmp_path / "learned_calibration_bootstrap_stability.md"
+    coverage_strata = tmp_path / "learned_calibration_coverage_strata.csv"
+    coverage_strata_json = tmp_path / "learned_calibration_coverage_strata.json"
+    coverage_strata_summary = tmp_path / "learned_calibration_coverage_strata.md"
+    negative_controls = tmp_path / "learned_calibration_negative_controls.json"
+    negative_controls_summary = tmp_path / "learned_calibration_negative_controls.md"
+    consistency_audit = tmp_path / "learned_calibration_consistency_audit.json"
+    consistency_audit_summary = tmp_path / "learned_calibration_consistency_audit.md"
+    appendix = tmp_path / "learned_calibration_appendix.md"
+    runtime_snapshot = tmp_path / "learned_calibration_runtime_snapshot.json"
+    runtime_snapshot_summary = tmp_path / "learned_calibration_runtime_snapshot.md"
+    reviewer_checklist = tmp_path / "learned_calibration_reviewer_checklist.json"
+    reviewer_checklist_summary = tmp_path / "learned_calibration_reviewer_checklist.md"
+    defense_qa = tmp_path / "learned_calibration_defense_qa.md"
+    limitations_matrix = tmp_path / "learned_calibration_limitations_matrix.csv"
+    limitations_matrix_json = tmp_path / "learned_calibration_limitations_matrix.json"
+    limitations_matrix_summary = tmp_path / "learned_calibration_limitations_matrix.md"
+    no_overclaim_audit = tmp_path / "learned_calibration_no_overclaim_audit.json"
+    no_overclaim_audit_summary = tmp_path / "learned_calibration_no_overclaim_audit.md"
+    legacy_high_risk = tmp_path / "legacy_high_risk_diagnostics.csv"
+    legacy_high_risk_json = tmp_path / "legacy_high_risk_diagnostics.json"
+    legacy_high_risk_summary = tmp_path / "legacy_high_risk_diagnostics.md"
+    legacy_dampening = tmp_path / "legacy_dampening_counterfactual.csv"
+    legacy_dampening_json = tmp_path / "legacy_dampening_counterfactual.json"
+    legacy_dampening_summary = tmp_path / "legacy_dampening_counterfactual.md"
+    manifest = tmp_path / "learned_calibration_manifest.json"
+    manifest_summary = tmp_path / "learned_calibration_manifest.md"
+    assert result["paths"] == {
+        "dataset": str(dataset),
+        "labels": str(labels),
+        "report": str(report),
+        "summary": str(summary),
+        "baseline_metrics": str(baseline),
+        "baseline_summary": str(baseline_summary),
+        "predictions": str(predictions),
+        "model_report": str(model_report),
+        "model_summary": str(model_summary),
+        "learned_vs_heuristic_comparison": str(comparison),
+        "learned_vs_heuristic_summary": str(comparison_summary),
+        "disagreements": str(disagreements),
+        "disagreements_summary": str(disagreements_summary),
+        "feature_importance": str(importance),
+        "feature_importance_summary": str(importance_summary),
+        "ablation": str(ablation),
+        "ablation_summary": str(ablation_summary),
+        "leakage_checks": str(leakage),
+        "leakage_checks_summary": str(leakage_summary),
+        "thesis_section": str(thesis_section),
+        "limitations": str(limitations),
+        "case_studies": str(case_studies),
+        "case_studies_summary": str(case_studies_summary),
+        "tables": str(tables),
+        "tables_summary": str(tables_summary),
+        "proxy_sensitivity": str(proxy_sensitivity),
+        "proxy_sensitivity_json": str(proxy_sensitivity_json),
+        "proxy_sensitivity_summary": str(proxy_sensitivity_summary),
+        "bootstrap_stability": str(bootstrap),
+        "bootstrap_stability_json": str(bootstrap_json),
+        "bootstrap_stability_summary": str(bootstrap_summary),
+        "coverage_strata": str(coverage_strata),
+        "coverage_strata_json": str(coverage_strata_json),
+        "coverage_strata_summary": str(coverage_strata_summary),
+        "negative_controls": str(negative_controls),
+        "negative_controls_summary": str(negative_controls_summary),
+        "consistency_audit": str(consistency_audit),
+        "consistency_audit_summary": str(consistency_audit_summary),
+        "appendix": str(appendix),
+        "runtime_snapshot": str(runtime_snapshot),
+        "runtime_snapshot_summary": str(runtime_snapshot_summary),
+        "reviewer_checklist": str(reviewer_checklist),
+        "reviewer_checklist_summary": str(reviewer_checklist_summary),
+        "defense_qa": str(defense_qa),
+        "limitations_matrix": str(limitations_matrix),
+        "limitations_matrix_json": str(limitations_matrix_json),
+        "limitations_matrix_summary": str(limitations_matrix_summary),
+        "no_overclaim_audit": str(no_overclaim_audit),
+        "no_overclaim_audit_summary": str(no_overclaim_audit_summary),
+        "legacy_high_risk_diagnostics": str(legacy_high_risk),
+        "legacy_high_risk_diagnostics_json": str(legacy_high_risk_json),
+        "legacy_high_risk_diagnostics_summary": str(legacy_high_risk_summary),
+        "legacy_dampening_counterfactual": str(legacy_dampening),
+        "legacy_dampening_counterfactual_json": str(legacy_dampening_json),
+        "legacy_dampening_counterfactual_summary": str(legacy_dampening_summary),
+        "manifest": str(manifest),
+        "manifest_summary": str(manifest_summary),
+    }
+    assert dataset.exists()
+    assert labels.exists()
+    assert report.exists()
+    assert summary.exists()
+    assert baseline.exists()
+    assert baseline_summary.exists()
+    assert predictions.exists()
+    assert model_report.exists()
+    assert model_summary.exists()
+    assert comparison.exists()
+    assert comparison_summary.exists()
+    assert disagreements.exists()
+    assert disagreements_summary.exists()
+    assert importance.exists()
+    assert importance_summary.exists()
+    assert ablation.exists()
+    assert ablation_summary.exists()
+    assert leakage.exists()
+    assert leakage_summary.exists()
+    assert thesis_section.exists()
+    assert limitations.exists()
+    assert case_studies.exists()
+    assert case_studies_summary.exists()
+    assert tables.exists()
+    assert tables_summary.exists()
+    assert proxy_sensitivity.exists()
+    assert proxy_sensitivity_json.exists()
+    assert proxy_sensitivity_summary.exists()
+    assert bootstrap.exists()
+    assert bootstrap_json.exists()
+    assert bootstrap_summary.exists()
+    assert coverage_strata.exists()
+    assert coverage_strata_json.exists()
+    assert coverage_strata_summary.exists()
+    assert negative_controls.exists()
+    assert negative_controls_summary.exists()
+    assert consistency_audit.exists()
+    assert consistency_audit_summary.exists()
+    assert appendix.exists()
+    assert runtime_snapshot.exists()
+    assert runtime_snapshot_summary.exists()
+    assert reviewer_checklist.exists()
+    assert reviewer_checklist_summary.exists()
+    assert defense_qa.exists()
+    assert limitations_matrix.exists()
+    assert limitations_matrix_json.exists()
+    assert limitations_matrix_summary.exists()
+    assert no_overclaim_audit.exists()
+    assert no_overclaim_audit_summary.exists()
+    assert legacy_high_risk.exists()
+    assert legacy_high_risk_json.exists()
+    assert legacy_high_risk_summary.exists()
+    assert legacy_dampening.exists()
+    assert legacy_dampening_json.exists()
+    assert legacy_dampening_summary.exists()
+    assert manifest.exists()
+    assert manifest_summary.exists()
+    rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
+    assert rows[0]["cve_id"] == "CVE-2026-1234"
+    label_rows = list(csv.DictReader(labels.open(encoding="utf-8")))
+    assert list(label_rows[0].keys()) == LABEL_COLUMNS
+    assert label_rows[0]["cve_id"] == "CVE-2026-1234"
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["analyzed_records_exported"] == 1
+    assert payload["proxy_label_class_counts"]["strategy_a"]["high"] == 1
+    baseline_payload = json.loads(baseline.read_text(encoding="utf-8"))
+    assert baseline_payload["ranking_method"] == "heuristic_risk_score"
+    assert "strategy_a" in baseline_payload["strategies"]
+    model_payload = json.loads(model_report.read_text(encoding="utf-8"))
+    assert model_payload["model_type"] == "LogisticRegression"
+    assert model_payload["leakage_guard"]["risk_score_used_as_feature"] is False
+    assert "random_forest" in model_payload["model_registry"]
+    comparison_payload = json.loads(comparison.read_text(encoding="utf-8"))
+    assert comparison_payload["status"] in {"completed", "skipped"}
+    disagreement_rows = list(csv.DictReader(disagreements.open(encoding="utf-8")))
+    if disagreement_rows:
+        assert list(disagreement_rows[0].keys()) == DISAGREEMENT_COLUMNS
+    importance_rows = list(csv.DictReader(importance.open(encoding="utf-8")))
+    if importance_rows:
+        assert list(importance_rows[0].keys()) == FEATURE_IMPORTANCE_COLUMNS
+    ablation_rows = list(csv.DictReader(ablation.open(encoding="utf-8")))
+    assert list(ablation_rows[0].keys()) == ABLATION_COLUMNS
+    leakage_payload = json.loads(leakage.read_text(encoding="utf-8"))
+    assert leakage_payload["status"] == "passed"
+    thesis_text = thesis_section.read_text(encoding="utf-8")
+    limitations_text = limitations.read_text(encoding="utf-8")
+    assert "not ground truth exploitation outcomes" in thesis_text
+    assert "production risk score remains heuristic" in thesis_text
+    assert "does not replace the deterministic scoring engine" in limitations_text
+    case_study_rows = list(csv.DictReader(case_studies.open(encoding="utf-8")))
+    if case_study_rows:
+        assert list(case_study_rows[0].keys()) == CASE_STUDY_COLUMNS
+    table_payload = json.loads(tables.read_text(encoding="utf-8"))
+    assert "dataset_coverage_summary" in table_payload
+    assert "artifact_inventory" in table_payload
+    proxy_payload = json.loads(proxy_sensitivity_json.read_text(encoding="utf-8"))
+    assert proxy_payload["grid_size"] == 320
+    bootstrap_payload = json.loads(bootstrap_json.read_text(encoding="utf-8"))
+    assert bootstrap_payload["status"] in {"evaluated", "skipped"}
+    bootstrap_rows = list(csv.DictReader(bootstrap.open(encoding="utf-8")))
+    if bootstrap_rows:
+        assert list(bootstrap_rows[0].keys()) == BOOTSTRAP_STABILITY_COLUMNS
+    coverage_rows = list(csv.DictReader(coverage_strata.open(encoding="utf-8")))
+    assert list(coverage_rows[0].keys()) == COVERAGE_STRATA_COLUMNS
+    coverage_payload = json.loads(coverage_strata_json.read_text(encoding="utf-8"))
+    assert coverage_payload["status"] == "evaluated"
+    negative_payload = json.loads(negative_controls.read_text(encoding="utf-8"))
+    assert negative_payload["status"] == "evaluated"
+    assert "random_seed_42" in {row["control"] for row in negative_payload["controls"]}
+    audit_payload = json.loads(consistency_audit.read_text(encoding="utf-8"))
+    assert audit_payload["status"] == "passed"
+    appendix_text = appendix.read_text(encoding="utf-8")
+    assert "## 1. Purpose of the Learned Calibration Experiment" in appendix_text
+    assert "## 16. Recommended Future Work" in appendix_text
+    assert "Proxy labels are not ground truth" in appendix_text
+    assert "Legacy high-risk diagnostics distinguish modern intrinsic criticality floor cases" in appendix_text
+    assert "not a production scoring change" in appendix_text
+    assert "Future age-aware dampening should be evaluated only with stronger labels or asset context" in appendix_text
+    snapshot_payload = json.loads(runtime_snapshot.read_text(encoding="utf-8"))
+    assert snapshot_payload["status"] == "available"
+    assert snapshot_payload["row_counts"]["learned_calibration_dataset.csv"] == 1
+    checklist_payload = json.loads(reviewer_checklist.read_text(encoding="utf-8"))
+    assert checklist_payload["item_count"] >= 10
+    assert any(section["section"] == "manual review items for the thesis author" for section in checklist_payload["sections"])
+    defense_text = defense_qa.read_text(encoding="utf-8")
+    assert defense_text.count("## Q") >= 20
+    assert "live Dread crawling was not used" in defense_text
+    assert "does not prove real-world exploitation prediction" in defense_text
+    matrix_rows = list(csv.DictReader(limitations_matrix.open(encoding="utf-8")))
+    assert list(matrix_rows[0].keys()) == LIMITATIONS_MATRIX_COLUMNS
+    matrix_payload = json.loads(limitations_matrix_json.read_text(encoding="utf-8"))
+    assert matrix_payload["row_count"] >= 11
+    no_overclaim_payload = json.loads(no_overclaim_audit.read_text(encoding="utf-8"))
+    assert no_overclaim_payload["status"] == "passed"
+    legacy_rows = list(csv.DictReader(legacy_high_risk.open(encoding="utf-8")))
+    assert list(legacy_rows[0].keys()) == LEGACY_HIGH_RISK_DIAGNOSTIC_COLUMNS
+    legacy_payload = json.loads(legacy_high_risk_json.read_text(encoding="utf-8"))
+    assert legacy_payload["warning"].startswith("This diagnostic is not a production scoring change")
+    dampening_rows = list(csv.DictReader(legacy_dampening.open(encoding="utf-8")))
+    assert list(dampening_rows[0].keys()) == LEGACY_DAMPENING_COUNTERFACTUAL_COLUMNS
+    dampening_payload = json.loads(legacy_dampening_json.read_text(encoding="utf-8"))
+    assert dampening_payload["warning"].startswith("This is a counterfactual sensitivity artifact only")
+    manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert manifest_payload["status"] == "complete"
+    assert any(item["group"] == "dataset" for item in manifest_payload["artifacts"])
+    text = summary.read_text(encoding="utf-8")
+    assert "Proxy labels are not ground truth" in text
+    assert "production `risk_score` behavior is unchanged" in text
+    assert "Proxy labels are deterministic thesis-analysis aids" in text
+
+
+def test_export_sorts_rows_by_cve_id(tmp_path):
+    first = _synthetic_doc()
+    first["_id"] = "CVE-2026-2000"
+    first["analysis"]["entity_id"] = "CVE-2026-2000"
+    second = _synthetic_doc()
+    second["_id"] = "CVE-2026-1000"
+    second["analysis"]["entity_id"] = "CVE-2026-1000"
+
+    export_from_documents([first, second], tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+
+    rows = list(csv.DictReader((tmp_path / "learned_calibration_dataset.csv").open(encoding="utf-8")))
+    assert [row["cve_id"] for row in rows] == ["CVE-2026-1000", "CVE-2026-2000"]
+
+
+def test_mongodb_unavailable_error_is_clear(monkeypatch):
+    class FailingAdmin:
+        def command(self, _name):
+            raise ServerSelectionTimeoutError("connection refused")
+
+    class FailingClient:
+        admin = FailingAdmin()
+
+    monkeypatch.setattr(learned_calibration.pymongo, "MongoClient", lambda *args, **kwargs: FailingClient())
+
+    with pytest.raises(RuntimeError, match="MongoDB is unavailable for learned calibration export"):
+        read_analyzed_cves_from_mongo()
+
+
+def test_proxy_label_strategy_a_intrinsic_known_evidence_rules():
+    kev = build_proxy_label_row(_row(kev_listed=True, kev_status_known=True))
+    epss = build_proxy_label_row(_row(epss_signal=0.7, epss_available=True))
+    intrinsic = build_proxy_label_row(
+        _row(cvss_score=9.8, nlp_context_signal=0.8, recency_signal=0.5)
+    )
+    medium = build_proxy_label_row(_row(cvss_score=7.0))
+    low = build_proxy_label_row(_row(cvss_score=4.0, nlp_context_signal=0.1))
+
+    assert kev["proxy_label_strategy_a"] == "high"
+    assert epss["proxy_label_strategy_a"] == "high"
+    assert intrinsic["proxy_label_strategy_a"] == "high"
+    assert medium["proxy_label_strategy_a"] == "medium"
+    assert low["proxy_label_strategy_a"] == "low"
+    assert intrinsic["proxy_binary_high_strategy_a"] == 1
+    assert "intrinsic criticality pattern" in intrinsic["proxy_label_reason"]
+
+
+def test_proxy_label_strategy_b_sparse_evidence_and_accepted_support():
+    sparse = _row()
+    accepted = _row(accepted_urlhaus_count=1, confidence=0.62)
+
+    sparse_label = build_proxy_label_row(sparse)
+    accepted_label = build_proxy_label_row(accepted)
+    report = build_feasibility_report([sparse, accepted], total_records_read=2, generated_at="2026-06-16T00:00:00+03:00")
+
+    assert sparse_label["proxy_label_strategy_b"] == "low"
+    assert accepted_label["proxy_label_strategy_b"] == "high"
+    assert "accepted external evidence with adequate confidence" in accepted_label["proxy_label_reason"]
+    assert report["proxy_label_trainability"]["strategy_b"] == "not_recommended"
+    assert "Strategy B is limited by sparse EPSS/KEV" in " ".join(report["warnings"])
+
+
+def test_proxy_label_strategy_c_conservative_binary_rules():
+    high = build_proxy_label_row(
+        _row(
+            cvss_score=9.8,
+            nlp_context_signal=0.9,
+            intrinsic_criticality_floor_applied=True,
+        )
+    )
+    not_high = build_proxy_label_row(_row(cvss_score=9.8, nlp_context_signal=0.9))
+
+    assert high["proxy_label_strategy_c"] == "high"
+    assert high["proxy_binary_high_strategy_c"] == 1
+    assert not_high["proxy_label_strategy_c"] == "not_high"
+    assert not_high["proxy_binary_high_strategy_c"] == 0
+
+
+def test_proxy_label_generation_does_not_mutate_input_rows():
+    rows = [_row(cvss_score=9.8, nlp_context_signal=0.8, recency_signal=0.7)]
+    before = deepcopy(rows)
+
+    labels = build_proxy_label_rows(rows)
+
+    assert rows == before
+    assert labels[0]["proxy_label_strategy_a"] == "high"
+
+
+def test_baseline_metrics_precision_recall_and_ndcg():
+    rows = [
+        _row(cve_id="CVE-1", risk_score=0.9),
+        _row(cve_id="CVE-2", risk_score=0.8),
+        _row(cve_id="CVE-3", risk_score=0.7),
+        _row(cve_id="CVE-4", risk_score=0.6),
+    ]
+    labels = [
+        {**build_proxy_label_row(rows[0]), "proxy_binary_high_strategy_a": 1, "proxy_label_strategy_a": "high"},
+        {**build_proxy_label_row(rows[1]), "proxy_binary_high_strategy_a": 0, "proxy_label_strategy_a": "low"},
+        {**build_proxy_label_row(rows[2]), "proxy_binary_high_strategy_a": 1, "proxy_label_strategy_a": "high"},
+        {**build_proxy_label_row(rows[3]), "proxy_binary_high_strategy_a": 0, "proxy_label_strategy_a": "low"},
+    ]
+
+    metrics = compute_baseline_metrics(rows, labels, generated_at="2026-06-16T00:00:00+03:00")
+    strategy = metrics["strategies"]["strategy_a"]
+
+    assert strategy["precision_at_k"]["10"] == 0.5
+    assert strategy["recall_at_k"]["10"] == 1.0
+    assert strategy["ndcg_at_k"]["10"] > 0
+    assert strategy["high_label_coverage"] == 0.5
+
+
+def test_baseline_metrics_handle_no_positive_labels():
+    rows = [_row(cve_id="CVE-1", risk_score=0.9), _row(cve_id="CVE-2", risk_score=0.8)]
+    labels = [
+        {**build_proxy_label_row(rows[0]), "proxy_binary_high_strategy_b": 0, "proxy_label_strategy_b": "low"},
+        {**build_proxy_label_row(rows[1]), "proxy_binary_high_strategy_b": 0, "proxy_label_strategy_b": "low"},
+    ]
+
+    metrics = compute_baseline_metrics(rows, labels, generated_at="2026-06-16T00:00:00+03:00")
+    strategy = metrics["strategies"]["strategy_b"]
+
+    assert strategy["status"] == "no_positive_labels"
+    assert strategy["precision_at_k"]["10"] is None
+    assert strategy["recall_at_k"]["50"] is None
+    assert strategy["ndcg_at_k"]["50"] is None
+
+
+def test_baseline_metrics_use_cve_id_for_tied_score_ordering():
+    rows = [_row(cve_id="CVE-B", risk_score=5.0), _row(cve_id="CVE-A", risk_score=5.0)]
+    labels = [
+        {**build_proxy_label_row(rows[0]), "proxy_binary_high_strategy_a": 0, "proxy_label_strategy_a": "low"},
+        {**build_proxy_label_row(rows[1]), "proxy_binary_high_strategy_a": 1, "proxy_label_strategy_a": "high"},
+    ]
+
+    metrics = compute_baseline_metrics(rows, labels, generated_at="2026-06-16T00:00:00+03:00")
+
+    assert metrics["strategies"]["strategy_a"]["precision_at_k"]["10"] == 0.5
+    assert metrics["strategies"]["strategy_a"]["recall_at_k"]["10"] == 1.0
+
+
+def test_baseline_metrics_include_bucket_distributions():
+    rows = [
+        _row(cve_id="CVE-H", risk_score=8.2, risk_level="HIGH", confidence=0.75),
+        _row(cve_id="CVE-L", risk_score=3.2, risk_level="LOW", confidence=0.25),
+    ]
+    labels = [
+        {**build_proxy_label_row(rows[0]), "proxy_binary_high_strategy_a": 1, "proxy_label_strategy_a": "high"},
+        {**build_proxy_label_row(rows[1]), "proxy_binary_high_strategy_a": 0, "proxy_label_strategy_a": "low"},
+    ]
+
+    metrics = compute_baseline_metrics(rows, labels, generated_at="2026-06-16T00:00:00+03:00")
+    strategy = metrics["strategies"]["strategy_a"]
+
+    assert strategy["risk_bucket_distribution_by_proxy_class"]["high"]["HIGH"] == 1
+    assert strategy["risk_bucket_distribution_by_proxy_class"]["low"]["LOW"] == 1
+    assert strategy["confidence_distribution_by_proxy_class"]["high"]["high"] == 1
+    assert strategy["confidence_distribution_by_proxy_class"]["low"]["low"] == 1
+
+
+def test_model_training_skips_when_sklearn_unavailable(monkeypatch):
+    monkeypatch.setattr(learned_calibration, "_load_sklearn", lambda: None)
+    rows = [_row(cve_id="CVE-1"), _row(cve_id="CVE-2")]
+    labels = build_proxy_label_rows(rows)
+
+    result = train_learned_calibration_models(rows, labels, generated_at="2026-06-16T00:00:00+03:00")
+
+    assert result["predictions"] == []
+    assert result["report"]["status"] == "skipped"
+    assert "scikit-learn is not installed" in result["report"]["skip_reason"]
+    assert result["report"]["alternative_models"]["dummy"]["status"] == "skipped"
+
+
+def test_model_features_exclude_risk_score_and_proxy_labels():
+    assert "risk_score" not in MODEL_FEATURE_COLUMNS
+    assert all(not feature.startswith("proxy_") for feature in MODEL_FEATURE_COLUMNS)
+
+
+def test_model_registry_reports_unavailable_models_without_sklearn():
+    registry = model_registry(None)
+
+    assert registry["random_forest"]["available"] is False
+    assert registry["hist_gradient_boosting"]["available"] is False
+    assert registry["dummy"]["available"] is False
+
+
+def test_model_registry_uses_fixed_random_seed_for_available_models():
+    registry = model_registry(
+        {
+            "LogisticRegression": object,
+            "RandomForestClassifier": object,
+            "HistGradientBoostingClassifier": object,
+            "DummyClassifier": object,
+        }
+    )
+
+    assert registry["random_forest"]["available"] is True
+    assert registry["hist_gradient_boosting"]["random_seed"] == 42
+    assert registry["dummy"]["random_seed"] == 42
+
+
+def test_model_training_single_class_skip_if_sklearn_available():
+    _require_optional_sklearn_tests()
+    rows = [_row(cve_id=f"CVE-{index}", cvss_score=5.0 + index) for index in range(12)]
+    labels = [
+        {**build_proxy_label_row(row), "proxy_binary_high_strategy_a": 0, "proxy_label_strategy_a": "low"}
+        for row in rows
+    ]
+
+    result = train_learned_calibration_models(rows, labels, generated_at="2026-06-16T00:00:00+03:00")
+
+    assert result["report"]["strategies"]["strategy_a"]["status"] == "skipped"
+    assert result["report"]["strategies"]["strategy_a"]["skip_reason"] == "single-class proxy labels"
+
+
+def test_model_training_is_deterministic_if_sklearn_available():
+    _require_optional_sklearn_tests()
+    rows = [
+        _row(
+            cve_id=f"CVE-{index:04d}",
+            cvss_score=9.8 if index % 2 else 4.0,
+            severity_signal=0.98 if index % 2 else 0.4,
+            nlp_context_signal=0.9 if index % 2 else 0.2,
+            recency_signal=0.8 if index % 2 else 0.1,
+            intrinsic_criticality_floor_applied=bool(index % 2),
+        )
+        for index in range(40)
+    ]
+    labels = [
+        {
+            **build_proxy_label_row(row),
+            "proxy_binary_high_strategy_a": int(index % 2 == 1),
+            "proxy_label_strategy_a": "high" if index % 2 == 1 else "low",
+        }
+        for index, row in enumerate(rows)
+    ]
+
+    first = train_learned_calibration_models(rows, labels, generated_at="2026-06-16T00:00:00+03:00")
+    second = train_learned_calibration_models(rows, labels, generated_at="2026-06-16T00:00:00+03:00")
+
+    assert first["predictions"] == second["predictions"]
+    assert first["report"]["strategies"]["strategy_a"]["status"] in {"limited", "meaningful"}
+
+
+def test_learned_vs_heuristic_comparison_top_k_overlap_and_metrics():
+    rows = [
+        _row(cve_id="CVE-1", risk_score=0.9, severity_signal=0.9),
+        _row(cve_id="CVE-2", risk_score=0.8, severity_signal=0.8),
+        _row(cve_id="CVE-3", risk_score=0.7, severity_signal=0.7),
+    ]
+    labels = [
+        {**build_proxy_label_row(rows[0]), "proxy_binary_high_strategy_a": 1, "proxy_label_strategy_a": "high"},
+        {**build_proxy_label_row(rows[1]), "proxy_binary_high_strategy_a": 0, "proxy_label_strategy_a": "low"},
+        {**build_proxy_label_row(rows[2]), "proxy_binary_high_strategy_a": 1, "proxy_label_strategy_a": "high"},
+    ]
+    predictions = [
+        {"cve_id": "CVE-3", "strategy": "strategy_a", "learned_probability": 0.95},
+        {"cve_id": "CVE-1", "strategy": "strategy_a", "learned_probability": 0.9},
+        {"cve_id": "CVE-2", "strategy": "strategy_a", "learned_probability": 0.1},
+    ]
+
+    comparison = compute_learned_vs_heuristic_comparison(
+        rows, labels, predictions, generated_at="2026-06-16T00:00:00+03:00"
+    )
+    strategy = comparison["strategies"]["strategy_a"]
+
+    assert strategy["status"] == "evaluated"
+    assert strategy["top_k_overlap"]["10"]["count"] == 3
+    assert strategy["learned_metrics"]["precision_at_k"]["10"] == 0.6667
+    assert strategy["heuristic_metrics"]["precision_at_k"]["10"] == 0.6667
+    assert strategy["spearman_like_rank_correlation"] is not None
+
+
+def test_learned_vs_heuristic_comparison_extracts_rank_difference_cases():
+    rows = [
+        _row(cve_id="CVE-LOW", risk_score=1.0, cvss_score=4.0),
+        _row(cve_id="CVE-HIGH", risk_score=9.0, cvss_score=9.8),
+        _row(cve_id="CVE-MID", risk_score=5.0, cvss_score=6.0),
+    ]
+    labels = build_proxy_label_rows(rows)
+    predictions = [
+        {"cve_id": "CVE-LOW", "strategy": "strategy_a", "learned_probability": 0.99},
+        {"cve_id": "CVE-MID", "strategy": "strategy_a", "learned_probability": 0.5},
+        {"cve_id": "CVE-HIGH", "strategy": "strategy_a", "learned_probability": 0.01},
+    ]
+
+    comparison = compute_learned_vs_heuristic_comparison(
+        rows, labels, predictions, generated_at="2026-06-16T00:00:00+03:00"
+    )
+    strategy = comparison["strategies"]["strategy_a"]
+
+    assert strategy["learned_ranks_much_higher"][0]["cve_id"] == "CVE-LOW"
+    assert strategy["heuristic_ranks_much_higher"][0]["cve_id"] == "CVE-HIGH"
+    assert strategy["learned_ranks_much_higher"][0]["rank_delta"] > 0
+    assert strategy["heuristic_ranks_much_higher"][0]["rank_delta"] < 0
+
+
+def test_learned_vs_heuristic_comparison_skips_without_predictions():
+    rows = [_row(cve_id="CVE-1", risk_score=0.9)]
+    labels = build_proxy_label_rows(rows)
+
+    comparison = compute_learned_vs_heuristic_comparison(
+        rows, labels, [], generated_at="2026-06-16T00:00:00+03:00"
+    )
+
+    assert comparison["status"] == "skipped"
+    assert comparison["strategies"]["strategy_a"]["status"] == "skipped"
+    assert comparison["strategies"]["strategy_a"]["skip_reason"] == "no learned predictions available for this strategy"
+
+
+def test_disagreement_cases_include_expected_categories_and_reasons():
+    rows = [
+        _row(
+            cve_id="CVE-HIGH",
+            cvss_score=10.0,
+            risk_score=8.2,
+            risk_level="HIGH",
+            confidence=0.35,
+            severity_signal=1.0,
+            nlp_context_signal=0.9,
+            intrinsic_criticality_floor_applied=True,
+            coverage_limitations="epss_unavailable;kev_status_unknown",
+        ),
+        _row(
+            cve_id="CVE-LEARNED",
+            cvss_score=5.0,
+            risk_score=4.0,
+            risk_level="MEDIUM",
+            confidence=0.3,
+            coverage_limitations="no_accepted_external_evidence",
+        ),
+    ]
+    labels = build_proxy_label_rows(rows)
+    predictions = [
+        {"cve_id": "CVE-HIGH", "strategy": "strategy_a", "learned_probability": 0.2},
+        {"cve_id": "CVE-LEARNED", "strategy": "strategy_a", "learned_probability": 0.95},
+    ]
+
+    cases = compute_disagreement_cases(rows, labels, predictions)
+    by_type = {case["disagreement_type"]: case for case in cases}
+
+    assert by_type["heuristic_high_learned_low"]["cve_id"] == "CVE-HIGH"
+    assert "heuristic risk is high" in by_type["heuristic_high_learned_low"]["reason"]
+    assert by_type["cvss_10_learned_probability_not_high"]["cve_id"] == "CVE-HIGH"
+    assert by_type["intrinsic_floor_applied_learned_probability_low"]["cve_id"] == "CVE-HIGH"
+    assert by_type["learned_high_heuristic_medium_low"]["cve_id"] == "CVE-LEARNED"
+    assert by_type["low_confidence_high_learned_probability"]["cve_id"] == "CVE-LEARNED"
+
+
+def test_disagreement_cases_limit_examples_per_category():
+    rows = [
+        _row(cve_id=f"CVE-{index}", risk_score=8.0, risk_level="HIGH", cvss_score=9.8)
+        for index in range(10)
+    ]
+    labels = build_proxy_label_rows(rows)
+    predictions = [
+        {"cve_id": row["cve_id"], "strategy": "strategy_a", "learned_probability": 0.1}
+        for row in rows
+    ]
+
+    cases = compute_disagreement_cases(rows, labels, predictions, max_examples_per_category=3)
+    high_low = [case for case in cases if case["disagreement_type"] == "heuristic_high_learned_low"]
+
+    assert len(high_low) == 3
+
+
+def test_disagreement_cases_empty_when_predictions_unavailable():
+    rows = [_row(cve_id="CVE-1")]
+    labels = build_proxy_label_rows(rows)
+
+    assert compute_disagreement_cases(rows, labels, []) == []
+
+
+def test_feature_importance_extracts_and_sorts_coefficients():
+    report = {
+        "strategies": {
+            "strategy_a": {
+                "status": "limited",
+                "coefficients": {
+                    "severity_signal": 0.2,
+                    "epss_signal": -1.3,
+                    "recency_signal": 0.7,
+                },
+            }
+        }
+    }
+
+    rows = [_row(epss_signal=0.4, severity_signal=1.0, recency_signal=0.8)]
+    importance = extract_feature_importance(report, rows)
+
+    assert [row["feature"] for row in importance] == ["epss_signal", "recency_signal", "severity_signal"]
+    assert importance[0]["absolute_coefficient_rank"] == 1
+    assert importance[0]["sign_interpretation"] == "negative association with high proxy label"
+    assert importance[0]["feature_coverage_note"] == "available for all exported rows"
+
+
+def test_feature_importance_skips_without_coefficients():
+    report = {"strategies": {"strategy_a": {"status": "skipped"}}}
+
+    assert extract_feature_importance(report, [_row()]) == []
+
+
+def test_ablation_plan_contains_expected_variants_and_excludes_risk_score():
+    names = [item["name"] for item in ablation_plan()]
+
+    assert names == [
+        "all_features",
+        "no_cvss_severity",
+        "no_recency",
+        "no_nlp_context",
+        "no_confidence_data_completeness",
+        "no_intrinsic_floor_flag",
+        "evidence_only",
+        "signals_only",
+        "metadata_context_only",
+    ]
+    assert all("risk_score" not in item["features"] for item in ablation_plan())
+
+
+def test_ablation_experiments_skip_when_model_not_completed():
+    report = {"status": "skipped", "skip_reason": "scikit-learn unavailable"}
+
+    rows = compute_ablation_experiments(report)
+
+    assert len(rows) == 27
+    assert all(row["status"] == "skipped" for row in rows)
+    assert rows[0]["skip_reason"] == "scikit-learn unavailable"
+    assert set(rows[0].keys()) == set(ABLATION_COLUMNS)
+
+
+def test_ablation_experiments_emit_metric_table_shape_for_completed_report():
+    report = {
+        "status": "completed",
+        "strategies": {
+            "strategy_a": {
+                "status": "limited",
+                "metrics": {
+                    "accuracy": 0.8,
+                    "balanced_accuracy": 0.75,
+                    "precision": 0.5,
+                    "recall": 0.6,
+                    "f1": 0.55,
+                    "roc_auc": 0.7,
+                    "pr_auc": 0.4,
+                },
+            }
+        },
+    }
+
+    rows = compute_ablation_experiments(report)
+
+    assert rows[0]["status"] == "baseline_only"
+    assert rows[0]["balanced_accuracy"] == 0.75
+    assert set(rows[0].keys()) == set(ABLATION_COLUMNS)
+
+
+def test_leakage_checks_pass_for_default_configuration():
+    report = {
+        "leakage_guard": {
+            "risk_score_used_as_feature": False,
+            "proxy_label_fields_used_as_features": [],
+        }
+    }
+    feasibility = {"proxy_supervised_learning_feasibility": "limited"}
+
+    checks = build_leakage_checks(
+        report,
+        feasibility,
+        summary_text="Proxy labels are not ground truth, and production risk_score behavior is unchanged.",
+    )
+
+    assert checks["status"] == "passed"
+    names = {check["check"] for check in checks["checks"]}
+    assert "final_risk_score_not_model_input" in names
+    assert "dread_live_crawling_not_used" in names
+
+
+def test_leakage_checks_fail_when_limitation_text_missing():
+    checks = build_leakage_checks(
+        {"leakage_guard": {"risk_score_used_as_feature": False}},
+        {},
+        summary_text="",
+    )
+
+    assert checks["status"] == "failed"
+    failed = [check for check in checks["checks"] if check["status"] == "failed"]
+    assert failed[0]["check"] == "proxy_label_limitations_text_present"
+
+
+def test_case_study_selection_covers_requested_groups():
+    rows = [
+        _row(cve_id="CVE-HH", risk_score=8.0, confidence=0.6, cvss_score=9.0),
+        _row(cve_id="CVE-HL", risk_score=8.1, confidence=0.6, cvss_score=10.0, intrinsic_criticality_floor_applied=True),
+        _row(cve_id="CVE-LH", risk_score=5.0, confidence=0.2, cvss_score=5.0),
+        _row(cve_id="CVE-MISSING", risk_score=8.2, confidence=0.5, cvss_score=10.0, epss_available=False, kev_status_known=False),
+        _row(cve_id="CVE-URL", risk_score=4.5, confidence=0.5, urlhaus_ignored_low_signal_count=6),
+        _row(cve_id="CVE-LOWCONF", risk_score=7.5, confidence=0.2, cvss_score=8.8),
+    ]
+    labels = build_proxy_label_rows(rows)
+    predictions = [
+        {"cve_id": "CVE-HH", "learned_probability": 0.9, "strategy": "strategy_a"},
+        {"cve_id": "CVE-HL", "learned_probability": 0.1, "strategy": "strategy_a"},
+        {"cve_id": "CVE-LH", "learned_probability": 0.95, "strategy": "strategy_a"},
+    ]
+
+    cases = select_case_studies(rows, labels, predictions)
+    groups = {case["case_group"] for case in cases}
+
+    assert "high_heuristic_risk_and_high_learned_probability" in groups
+    assert "high_heuristic_risk_but_low_learned_probability" in groups
+    assert "low_medium_heuristic_risk_but_high_learned_probability" in groups
+    assert "intrinsic_floor_applied" in groups
+    assert "missing_epss_kev_high_intrinsic_severity" in groups
+    assert "rejected_ignored_urlhaus_heavy" in groups
+    assert "low_confidence_but_high_risk" in groups
+
+
+def test_case_study_selection_limits_examples_per_group():
+    rows = [_row(cve_id=f"CVE-{index}", risk_score=8.0, confidence=0.6) for index in range(10)]
+    labels = build_proxy_label_rows(rows)
+    predictions = [{"cve_id": row["cve_id"], "learned_probability": 0.9, "strategy": "strategy_a"} for row in rows]
+
+    cases = select_case_studies(rows, labels, predictions, max_per_group=3)
+    high = [case for case in cases if case["case_group"] == "high_heuristic_risk_and_high_learned_probability"]
+
+    assert len(high) == 3
+
+
+def test_publication_tables_generated_from_artifact_payloads():
+    feasibility = {
+        "analyzed_records_exported": 10,
+        "records_with_cvss": 8,
+        "epss_availability_count": 2,
+        "kev_known_count": 1,
+        "accepted_external_evidence_count": 0,
+        "proxy_label_class_counts": {"strategy_a": {"high": 1, "low": 9}},
+    }
+    baseline = {"strategies": {"strategy_a": {"status": "tiny_positive_class", "precision_at_k": {"10": 0.1}, "recall_at_k": {"50": 1.0}, "ndcg_at_k": {"50": 0.5}}}}
+    model = {"strategies": {"strategy_a": {"status": "skipped", "metrics": {}}}}
+    ablations = [{"ablation": "all_features", "status": "skipped", "interpretation": "baseline feature set for comparison"}]
+    leakage = {"checks": [{"check": "risk_score", "status": "passed", "details": "excluded"}]}
+
+    tables = build_publication_tables(
+        feasibility_report=feasibility,
+        baseline_metrics=baseline,
+        model_report=model,
+        ablations=ablations,
+        leakage_checks=leakage,
+    )
+
+    assert tables["dataset_coverage_summary"][0]["value"] == 10
+    assert tables["proxy_label_class_distribution"][0]["strategy"] == "strategy_a"
+    assert tables["heuristic_baseline_metrics"][0]["precision_at_10"] == 0.1
+    assert tables["learned_model_metrics"][0]["status"] == "skipped"
+    assert tables["ablation_summary"][0]["ablation"] == "all_features"
+    assert tables["leakage_robustness_checks"][0]["status"] == "passed"
+
+
+def test_learned_calibration_manifest_reports_files(tmp_path):
+    (tmp_path / "learned_calibration_dataset.csv").write_text("cve_id\nCVE-1\n", encoding="utf-8")
+    (tmp_path / "learned_calibration_labels.csv").write_text("cve_id\nCVE-1\n", encoding="utf-8")
+    for name in (
+        "learned_calibration_baseline_metrics.json",
+        "learned_calibration_baseline_metrics.md",
+        "learned_calibration_model_report.json",
+        "learned_calibration_model_summary.md",
+        "learned_calibration_predictions.csv",
+        "learned_vs_heuristic_comparison.json",
+        "learned_vs_heuristic_comparison.md",
+        "learned_calibration_disagreements.csv",
+        "learned_calibration_disagreements.md",
+        "learned_calibration_feature_importance.csv",
+        "learned_calibration_feature_importance.md",
+        "learned_calibration_ablation.csv",
+        "learned_calibration_ablation.md",
+        "learned_calibration_leakage_checks.json",
+        "learned_calibration_leakage_checks.md",
+        "learned_calibration_thesis_section.md",
+        "learned_calibration_limitations.md",
+        "learned_calibration_tables.json",
+        "learned_calibration_tables.md",
+        "learned_calibration_case_studies.csv",
+        "learned_calibration_case_studies.md",
+        "learned_calibration_proxy_sensitivity.csv",
+        "learned_calibration_proxy_sensitivity.json",
+        "learned_calibration_proxy_sensitivity.md",
+        "learned_calibration_bootstrap_stability.csv",
+        "learned_calibration_bootstrap_stability.json",
+        "learned_calibration_bootstrap_stability.md",
+        "learned_calibration_coverage_strata.csv",
+        "learned_calibration_coverage_strata.json",
+        "learned_calibration_coverage_strata.md",
+        "learned_calibration_negative_controls.json",
+        "learned_calibration_negative_controls.md",
+        "learned_calibration_consistency_audit.json",
+        "learned_calibration_consistency_audit.md",
+        "learned_calibration_appendix.md",
+        "learned_calibration_runtime_snapshot.json",
+        "learned_calibration_runtime_snapshot.md",
+        "learned_calibration_reviewer_checklist.json",
+        "learned_calibration_reviewer_checklist.md",
+        "learned_calibration_defense_qa.md",
+        "learned_calibration_limitations_matrix.csv",
+        "learned_calibration_limitations_matrix.json",
+        "learned_calibration_limitations_matrix.md",
+        "learned_calibration_no_overclaim_audit.json",
+        "learned_calibration_no_overclaim_audit.md",
+        "legacy_high_risk_diagnostics.csv",
+        "legacy_high_risk_diagnostics.json",
+        "legacy_high_risk_diagnostics.md",
+        "legacy_dampening_counterfactual.csv",
+        "legacy_dampening_counterfactual.json",
+        "legacy_dampening_counterfactual.md",
+    ):
+        (tmp_path / name).write_text("x", encoding="utf-8")
+
+    manifest = build_learned_calibration_manifest(tmp_path)
+
+    assert manifest["status"] == "complete"
+    assert manifest["artifact_count"] >= 20
+    dataset = next(item for item in manifest["artifacts"] if item["group"] == "dataset")
+    assert dataset["exists"] is True
+    assert dataset["size_bytes"] > 0
+    assert dataset["producer"] == "evaluation.learned_calibration"
+
+
+def test_proxy_threshold_grid_size_and_values():
+    grid = proxy_threshold_grid()
+
+    assert len(grid) == 320
+    assert grid[0] == {
+        "epss_high_threshold": 0.5,
+        "cvss_critical_threshold": 9.0,
+        "nlp_context_threshold": 0.6,
+        "recency_threshold": 0.3,
+    }
+
+
+def test_proxy_threshold_sensitivity_stability_and_classification():
+    rows = [
+        _row(cve_id="CVE-H", risk_score=9.0, cvss_score=9.8, nlp_context_signal=0.9, recency_signal=0.8),
+        _row(cve_id="CVE-M", risk_score=5.0, cvss_score=7.0, nlp_context_signal=0.4, recency_signal=0.1),
+        _row(cve_id="CVE-L", risk_score=1.0, cvss_score=3.0, nlp_context_signal=0.1, recency_signal=0.1),
+    ]
+    labels = build_proxy_label_rows(rows)
+
+    result = compute_proxy_threshold_sensitivity(rows, labels)
+
+    assert result["grid_size"] == 320
+    first = result["rows"][0]
+    assert first["high_count"] == 1
+    assert first["medium_count"] == 1
+    assert first["low_count"] == 1
+    assert first["label_stability_vs_strategy_a"] == 1.0
+    assert first["classification"] == "too_narrow"
+
+
+def test_bootstrap_sample_indices_are_deterministic():
+    assert bootstrap_sample_indices(5, seed=42, iteration=0) == bootstrap_sample_indices(5, seed=42, iteration=0)
+    assert bootstrap_sample_indices(5, seed=42, iteration=0) != bootstrap_sample_indices(5, seed=42, iteration=1)
+    assert len(bootstrap_sample_indices(5, seed=42, iteration=0)) == 5
+
+
+def test_bootstrap_summary_statistics():
+    rows = [
+        {"precision_at_10": 0.0, "recall_at_50": 0.2, "top50_overlap_with_full": 0.5},
+        {"precision_at_10": 1.0, "recall_at_50": 0.8, "top50_overlap_with_full": 1.0},
+    ]
+
+    summary = summarize_bootstrap_metrics(rows)
+
+    assert summary["precision_at_10"]["mean"] == 0.5
+    assert summary["precision_at_10"]["stddev"] == 0.5
+    assert summary["precision_at_10"]["min"] == 0.0
+    assert summary["precision_at_10"]["max"] == 1.0
+    assert summary["precision_at_10"]["p05"] == 0.05
+    assert summary["precision_at_10"]["p95"] == 0.95
+
+
+def test_bootstrap_stability_seeded_output_is_stable():
+    rows = [
+        _row(
+            cve_id=f"CVE-{index:04d}",
+            risk_score=100 - index,
+            cvss_score=9.8 if index % 5 == 0 else 5.0,
+            nlp_context_signal=0.9 if index % 5 == 0 else 0.2,
+            recency_signal=0.8 if index % 5 == 0 else 0.2,
+        )
+        for index in range(25)
+    ]
+    labels = build_proxy_label_rows(rows)
+
+    first = compute_bootstrap_stability(rows, labels, iterations=12, seed=42)
+    second = compute_bootstrap_stability(rows, labels, iterations=12, seed=42)
+
+    assert first == second
+    assert first["status"] == "evaluated"
+    assert first["iteration_count"] == 12
+    assert len(first["iterations"]) == 12
+    assert first["iterations"][0]["sample_size"] == 25
+    assert set(first["summary"]) == {
+        "precision_at_10",
+        "precision_at_50",
+        "precision_at_100",
+        "recall_at_50",
+        "recall_at_100",
+        "top50_overlap_with_full",
+        "top100_overlap_with_full",
+    }
+
+
+def test_bootstrap_stability_skips_unusable_labels():
+    rows = [_row(cve_id=f"CVE-{index}", risk_score=10 - index, cvss_score=4.0) for index in range(12)]
+    labels = [
+        {**build_proxy_label_row(row), "proxy_binary_high_strategy_a": 0, "proxy_label_strategy_a": "low"}
+        for row in rows
+    ]
+
+    result = compute_bootstrap_stability(rows, labels, iterations=10, seed=42)
+
+    assert result["status"] == "skipped"
+    assert result["iterations"] == []
+    assert "no positive proxy labels" in result["skip_reason"]
+
+
+def test_coverage_strata_grouping_and_aggregation_metrics():
+    rows = [
+        _row(
+            cve_id="CVE-A",
+            risk_score=8.0,
+            confidence=0.6,
+            epss_available=True,
+            kev_status_known=True,
+            kev_listed=True,
+            accepted_urlhaus_count=1,
+            intrinsic_criticality_floor_applied=True,
+            urlhaus_ignored_low_signal_count=0,
+            urlhaus_rejected_match_count=2,
+        ),
+        _row(
+            cve_id="CVE-B",
+            risk_score=4.0,
+            confidence=0.2,
+            epss_available=False,
+            kev_status_known=False,
+            kev_listed=False,
+            accepted_urlhaus_count=0,
+            intrinsic_criticality_floor_applied=False,
+            urlhaus_ignored_low_signal_count=12,
+            urlhaus_rejected_match_count=0,
+            cvss_score="",
+        ),
+    ]
+    labels = [
+        {**build_proxy_label_row(rows[0]), "proxy_binary_high_strategy_a": 1, "proxy_binary_high_strategy_b": 1, "proxy_binary_high_strategy_c": 1},
+        {**build_proxy_label_row(rows[1]), "proxy_binary_high_strategy_a": 0, "proxy_binary_high_strategy_b": 0, "proxy_binary_high_strategy_c": 0},
+    ]
+
+    result = compute_coverage_strata(rows, labels)
+
+    assert result["status"] == "evaluated"
+    epss_available = next(row for row in result["rows"] if row["stratum"] == "epss_availability" and row["group"] == "epss_available")
+    assert epss_available["count"] == 1
+    assert epss_available["average_risk_score"] == 8.0
+    assert epss_available["average_confidence"] == 0.6
+    assert epss_available["strategy_a_high_count"] == 1
+    missing = json.loads(epss_available["missing_feature_percentages"])
+    assert missing["cvss_score"] == 0.0
+    epss_unavailable = next(row for row in result["rows"] if row["stratum"] == "epss_availability" and row["group"] == "epss_unavailable")
+    assert json.loads(epss_unavailable["missing_feature_percentages"])["cvss_score"] == 1.0
+
+
+def test_coverage_strata_bucket_assignment():
+    rows = [
+        _row(cve_id="CVE-NONE", urlhaus_ignored_low_signal_count=0, urlhaus_rejected_match_count=0),
+        _row(cve_id="CVE-LOW", urlhaus_ignored_low_signal_count=4, urlhaus_rejected_match_count=3),
+        _row(cve_id="CVE-MED", urlhaus_ignored_low_signal_count=12, urlhaus_rejected_match_count=50),
+        _row(cve_id="CVE-HIGH", urlhaus_ignored_low_signal_count=150, urlhaus_rejected_match_count=120),
+    ]
+    labels = build_proxy_label_rows(rows)
+
+    result = compute_coverage_strata(rows, labels)
+    ignored_groups = {
+        row["group"]
+        for row in result["rows"]
+        if row["stratum"] == "ignored_urlhaus_candidate_bucket"
+    }
+    rejected_groups = {
+        row["group"]
+        for row in result["rows"]
+        if row["stratum"] == "rejected_urlhaus_candidate_bucket"
+    }
+
+    assert ignored_groups == {"none", "low_1_to_9", "medium_10_to_99", "high_100_plus"}
+    assert rejected_groups == {"none", "low_1_to_9", "medium_10_to_99", "high_100_plus"}
+
+
+def test_coverage_strata_markdown_summary_text():
+    rows = [_row(cve_id="CVE-A", risk_score=8.0, confidence=0.6, epss_available=False)]
+    labels = build_proxy_label_rows(rows)
+
+    markdown = render_coverage_strata_markdown(compute_coverage_strata(rows, labels))
+
+    assert "# Learned Calibration Coverage-Limitation Strata" in markdown
+    assert "| Stratum | Group | Count | Avg Risk | Avg Confidence | A High | B High | C High | Interpretation |" in markdown
+    assert "Missing-feature percentages are available" in markdown
+
+
+def test_negative_control_random_ranking_is_reproducible():
+    rows = [_row(cve_id=f"CVE-{index}", risk_score=index) for index in range(10)]
+
+    first = build_negative_control_rankings(rows, seed=42)["random_seed_42"]
+    second = build_negative_control_rankings(rows, seed=42)["random_seed_42"]
+
+    assert [row["cve_id"] for row in first] == [row["cve_id"] for row in second]
+    assert [row["cve_id"] for row in first] != [row["cve_id"] for row in rows]
+
+
+def test_negative_control_reverse_risk_ranking():
+    rows = [
+        _row(cve_id="CVE-HIGH", risk_score=9.0),
+        _row(cve_id="CVE-LOW", risk_score=1.0),
+        _row(cve_id="CVE-MED", risk_score=5.0),
+    ]
+
+    rankings = build_negative_control_rankings(rows)
+
+    assert [row["cve_id"] for row in rankings["heuristic_risk_score"]] == ["CVE-HIGH", "CVE-MED", "CVE-LOW"]
+    assert [row["cve_id"] for row in rankings["reverse_risk_score"]] == ["CVE-LOW", "CVE-MED", "CVE-HIGH"]
+
+
+def test_negative_control_single_feature_rankings():
+    rows = [
+        _row(cve_id="CVE-CVSS", cvss_score=9.8, recency_signal=0.1, nlp_context_signal=0.1, confidence=0.1),
+        _row(cve_id="CVE-RECENCY", cvss_score=4.0, recency_signal=0.9, nlp_context_signal=0.2, confidence=0.2),
+        _row(cve_id="CVE-NLP", cvss_score=5.0, recency_signal=0.2, nlp_context_signal=0.95, confidence=0.3),
+        _row(cve_id="CVE-CONF", cvss_score=6.0, recency_signal=0.3, nlp_context_signal=0.4, confidence=0.99),
+    ]
+
+    rankings = build_negative_control_rankings(rows)
+
+    assert rankings["cvss_only"][0]["cve_id"] == "CVE-CVSS"
+    assert rankings["recency_only"][0]["cve_id"] == "CVE-RECENCY"
+    assert rankings["nlp_context_only"][0]["cve_id"] == "CVE-NLP"
+    assert rankings["confidence_only"][0]["cve_id"] == "CVE-CONF"
+
+
+def test_negative_control_metric_comparison_table():
+    rows = [
+        _row(cve_id="CVE-H1", risk_score=10.0, cvss_score=9.8, nlp_context_signal=0.9, recency_signal=0.8),
+        _row(cve_id="CVE-H2", risk_score=9.0, cvss_score=9.8, nlp_context_signal=0.9, recency_signal=0.8),
+        _row(cve_id="CVE-L1", risk_score=1.0, cvss_score=4.0, nlp_context_signal=0.1, recency_signal=0.1),
+        _row(cve_id="CVE-L2", risk_score=0.5, cvss_score=3.0, nlp_context_signal=0.1, recency_signal=0.1),
+    ]
+    labels = [
+        {**build_proxy_label_row(row), "proxy_binary_high_strategy_a": int(row["cve_id"].startswith("CVE-H"))}
+        for row in rows
+    ]
+
+    result = compute_negative_controls(rows, labels, seed=42)
+    markdown = render_negative_controls_markdown(result)
+
+    assert result["status"] == "evaluated"
+    assert {"heuristic_risk_score", "random_seed_42", "reverse_risk_score", "cvss_only"}.issubset(
+        {row["control"] for row in result["controls"]}
+    )
+    assert "| Control | Precision@10 | Precision@50 | Precision@100 | Recall@50 | Recall@100 | Top50 Overlap | Top100 Overlap |" in markdown
+    assert "CVSS-only is close to the heuristic" in markdown
+
+
+def test_consistency_audit_passes_for_generated_bundle(tmp_path):
+    export_from_documents([_synthetic_doc()], tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+
+    audit = build_consistency_audit(tmp_path)
+    markdown = render_consistency_audit_markdown(audit)
+
+    assert audit["status"] == "passed"
+    assert any(check["check"] == "dataset_label_row_count_match" for check in audit["checks"])
+    assert "# Learned Calibration Artifact Consistency Audit" in markdown
+
+
+def test_consistency_audit_detects_mismatched_cve_ids(tmp_path):
+    export_from_documents([_synthetic_doc()], tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+    (tmp_path / "learned_calibration_labels.csv").write_text(
+        "cve_id,proxy_label_strategy_a,proxy_binary_high_strategy_a\nCVE-OTHER,high,1\n",
+        encoding="utf-8",
+    )
+
+    audit = build_consistency_audit(tmp_path)
+    check = next(item for item in audit["checks"] if item["check"] == "label_ids_match_dataset_ids")
+
+    assert audit["status"] == "failed"
+    assert check["status"] == "failed"
+
+
+def test_consistency_audit_detects_malformed_json(tmp_path):
+    export_from_documents([_synthetic_doc()], tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+    (tmp_path / "learned_calibration_baseline_metrics.json").write_text("{", encoding="utf-8")
+
+    audit = build_consistency_audit(tmp_path)
+    check = next(item for item in audit["checks"] if item["check"] == "json_parseable:learned_calibration_baseline_metrics.json")
+
+    assert audit["status"] == "failed"
+    assert check["status"] == "failed"
+
+
+def test_consistency_audit_detects_missing_limitation_language(tmp_path):
+    export_from_documents([_synthetic_doc()], tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+    (tmp_path / "learned_calibration_summary.md").write_text("Plain summary without required framing.", encoding="utf-8")
+
+    audit = build_consistency_audit(tmp_path)
+    check = next(item for item in audit["checks"] if item["check"] == "markdown_limitation_language:learned_calibration_summary.md")
+
+    assert audit["status"] == "failed"
+    assert check["status"] == "failed"
+
+
+def test_runtime_snapshot_generation_from_temp_artifact_dir(tmp_path):
+    export_from_documents([_synthetic_doc()], tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+
+    snapshot = build_runtime_snapshot(
+        tmp_path,
+        generated_at="2026-06-16T00:00:00+03:00",
+        git_metadata={"branch": "test-branch", "head_commit": "abc1234"},
+    )
+    markdown = render_runtime_snapshot_markdown(snapshot)
+
+    assert snapshot["status"] == "available"
+    assert snapshot["git"]["branch"] == "test-branch"
+    assert snapshot["git"]["head_commit"] == "abc1234"
+    assert snapshot["row_counts"]["learned_calibration_dataset.csv"] == 1
+    assert snapshot["json_status_values"]["learned_calibration_model_report.json"] == "skipped"
+    assert "# Learned Calibration Runtime Snapshot" in markdown
+
+
+def test_runtime_snapshot_missing_artifact_handling(tmp_path):
+    (tmp_path / "learned_calibration_dataset.csv").write_text("cve_id\nCVE-1\n", encoding="utf-8")
+
+    snapshot = build_runtime_snapshot(
+        tmp_path,
+        generated_at="2026-06-16T00:00:00+03:00",
+        git_metadata={"branch": "test", "head_commit": "abc"},
+    )
+
+    assert snapshot["status"] == "incomplete"
+    assert snapshot["core_artifact_existence"]["learned_calibration_labels.csv"] is False
+    assert snapshot["row_counts"]["learned_calibration_labels.csv"] is None
+    assert any("Optional artifact missing" in warning for warning in snapshot["warnings"])
+
+
+def test_runtime_snapshot_git_metadata_fallback(monkeypatch, tmp_path):
+    monkeypatch.setattr(learned_calibration, "_current_git_metadata", lambda: {"branch": "unknown", "head_commit": "unknown"})
+
+    snapshot = build_runtime_snapshot(tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+
+    assert snapshot["git"] == {"branch": "unknown", "head_commit": "unknown"}
+
+
+def test_reviewer_checklist_item_creation(tmp_path):
+    export_from_documents([_synthetic_doc()], tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+
+    checklist = build_reviewer_checklist(tmp_path)
+
+    assert checklist["status"] == "ready_with_manual_review"
+    assert checklist["status_counts"]["manual"] >= 1
+    sections = {section["section"] for section in checklist["sections"]}
+    assert "reproducibility checks" in sections
+    assert "proxy-label validity checks" in sections
+    assert "manual review items for the thesis author" in sections
+
+
+def test_reviewer_checklist_unavailable_artifact_handling(tmp_path):
+    checklist = build_reviewer_checklist(tmp_path)
+    flat = [item for section in checklist["sections"] for item in section["items"]]
+
+    assert checklist["status"] == "incomplete"
+    assert any(item["status"] == "unavailable" for item in flat)
+    artifact_item = next(item for item in flat if item["check_id"] == "artifact-consistency")
+    assert artifact_item["status"] == "unavailable"
+
+
+def test_reviewer_checklist_markdown_rendering(tmp_path):
+    export_from_documents([_synthetic_doc()], tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+
+    markdown = render_reviewer_checklist_markdown(build_reviewer_checklist(tmp_path))
+
+    assert "# Learned Calibration Reviewer Checklist" in markdown
+    assert "## Reproducibility Checks" in markdown
+    assert "| Check ID | Status | Evidence Artifact | Reviewer Note |" in markdown
+    assert "Proxy labels are not ground truth" in markdown
+
+
+def test_limitations_matrix_required_categories_present():
+    matrix = build_limitations_matrix()
+    limitations = {row["limitation"] for row in matrix["rows"]}
+
+    assert matrix["status"] == "available"
+    assert {
+        "proxy labels are not ground truth",
+        "EPSS coverage sparse or unavailable",
+        "KEV status sparse or unavailable",
+        "accepted external evidence sparse or absent",
+        "Dread live crawling disabled",
+        "URLhaus correlation evidence gated and conservative",
+        "model training skipped if scikit-learn unavailable",
+        "CVSS/severity dominance risk",
+        "confidence not equivalent to correctness",
+        "deterministic fixture validation is not real-world generalization",
+        "learned calibration does not replace production scoring",
+    }.issubset(limitations)
+    assert all(set(row) == set(LIMITATIONS_MATRIX_COLUMNS) for row in matrix["rows"])
+
+
+def test_limitations_matrix_markdown_rendering():
+    markdown = render_limitations_matrix_markdown(build_limitations_matrix())
+
+    assert "# Learned Calibration Limitations Matrix" in markdown
+    assert "| Limitation | Impact | Mitigation Already Implemented | Future Work | Thesis-Safe Wording |" in markdown
+    assert "Proxy labels support feasibility discussion" in markdown
+
+
+def test_no_overclaim_audit_passes_safe_generated_bundle(tmp_path):
+    export_from_documents([_synthetic_doc()], tmp_path, generated_at="2026-06-16T00:00:00+03:00")
+
+    audit = build_no_overclaim_audit(tmp_path)
+    markdown = render_no_overclaim_audit_markdown(audit)
+
+    assert audit["status"] == "passed"
+    assert audit["findings"] == []
+    assert "# Learned Calibration No-Overclaim Audit" in markdown
+
+
+def test_no_overclaim_audit_flags_unsafe_positive_claim(tmp_path):
+    (tmp_path / "learned_calibration_summary.md").write_text(
+        "This system has statistically proven real-world performance.",
+        encoding="utf-8",
+    )
+
+    audit = build_no_overclaim_audit(tmp_path)
+
+    assert audit["status"] == "failed"
+    assert audit["findings"][0]["phrase"] == "statistically proven real-world performance"
+
+
+def test_no_overclaim_audit_allows_negated_ground_truth_wording(tmp_path):
+    (tmp_path / "learned_calibration_summary.md").write_text(
+        "Proxy labels are not ground truth and do not replace production scoring.",
+        encoding="utf-8",
+    )
+
+    audit = build_no_overclaim_audit(tmp_path)
+
+    assert audit["status"] == "passed"
