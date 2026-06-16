@@ -829,20 +829,20 @@ High-value next steps:
    - Return graceful degraded responses when MongoDB is unavailable.
    - Improve frontend degraded-state handling.
 
-4. **Dashboard charts**
+3. **Dashboard charts**
    - Risk distribution
    - Confidence distribution
    - Source coverage
    - URLhaus online/offline split
    - Top malware families
 
-5. **URLhaus enrichment**
+4. **URLhaus enrichment**
    - Domain reputation
    - ASN/geolocation
    - Passive DNS
    - Malware family clustering
 
-6. **CI pipeline**
+5. **CI pipeline**
    - Python tests
    - Go tests
    - Frontend build

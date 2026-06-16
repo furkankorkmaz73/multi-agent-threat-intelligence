@@ -158,6 +158,16 @@ def test_readme_roadmap_frames_epss_kev_as_coverage_validation():
     assert "Keep EPSS/KEV unavailable cases explicit in confidence limitations" in readme
 
 
+def test_readme_roadmap_numbering_is_sequential():
+    repo_root = Path(__file__).resolve().parents[2]
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+    roadmap = readme.split("## Roadmap", 1)[1].split("## Engineering Notes", 1)[0]
+
+    numbers = [int(match) for match in re.findall(r"^([0-9]+)\. \*\*", roadmap, flags=re.MULTILINE)]
+    assert numbers
+    assert numbers == list(range(1, len(numbers) + 1))
+
+
 def test_thesis_limitations_doc_contains_required_sections():
     repo_root = Path(__file__).resolve().parents[2]
     doc_path = repo_root / "docs" / "thesis_limitations.md"
