@@ -50,6 +50,16 @@ def test_agent_python_env_example_matches_current_scoring_default():
     assert f"BASE_CVSS_MULTIPLIER={expected}" in env_text
 
 
+def test_readme_does_not_claim_auth_is_absent():
+    repo_root = Path(__file__).resolve().parents[2]
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+
+    assert "No authentication or authorization layer" not in readme
+    assert "API-key authentication and role-based authorization are implemented for controlled deployments" in readme
+    assert "not hardened as a production SOC platform" in readme
+    assert "MongoDB runs without access control in local development" in readme
+
+
 def test_thesis_limitations_doc_contains_required_sections():
     repo_root = Path(__file__).resolve().parents[2]
     doc_path = repo_root / "docs" / "thesis_limitations.md"

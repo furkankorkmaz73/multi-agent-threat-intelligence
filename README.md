@@ -791,7 +791,7 @@ This project is a research prototype and has not been hardened for protected ope
 
 Known limitations:
 
-- No authentication or authorization layer
+- API-key authentication and role-based authorization are implemented for controlled deployments, but the prototype is not hardened as a production SOC platform
 - MongoDB runs without access control in local development
 - API error handling can be improved when MongoDB is unavailable
 - Broader live EPSS/KEV operational validation remains future work
