@@ -13,8 +13,8 @@ from evaluation.runner import write_report_json
 from evaluation.scoring_sensitivity import build_scoring_sensitivity_report
 
 
-DEFAULT_SCENARIO_REPORT = Path("reports/thesis_scenario_report.json")
-DEFAULT_OUTPUT_DIR = Path("reports/thesis")
+DEFAULT_SCENARIO_REPORT = Path("reports/thesis/deterministic/thesis_scenario_report.json")
+DEFAULT_OUTPUT_DIR = Path("reports/thesis/deterministic")
 THESIS_ARTIFACT_VERSION = "thesis-artifacts-v1"
 SCORING_DISTRIBUTION_FIELDS = [
     "cve_id",
@@ -56,6 +56,15 @@ SCORING_DISTRIBUTION_FIELDS = [
     "coverage_limitations",
     "fixture_rationale",
 ]
+
+
+def _display_path(path: str | Path) -> str:
+    candidate = Path(path)
+    parts = candidate.parts
+    if "reports" in parts:
+        report_index = parts.index("reports")
+        return Path(*parts[report_index:]).as_posix()
+    return str(candidate)
 
 
 def generate_thesis_artifacts(
@@ -182,10 +191,10 @@ def generate_thesis_artifacts(
 
     manifest = {
         "version": THESIS_ARTIFACT_VERSION,
-        "scenario_report_path": str(scenario_report_path),
-        "output_dir": str(output),
+        "scenario_report_path": _display_path(scenario_report_path),
+        "output_dir": _display_path(output),
         "generated_files": {
-            name: str(path)
+            name: _display_path(path)
             for name, path in files.items()
             if name != "manifest"
         },
@@ -1052,12 +1061,12 @@ def _demo_walkthrough_markdown(
             _markdown_table(
                 ["Output", "Purpose"],
                 [
-                    ["`reports/thesis_scenario_report.json`", "Structured deterministic scenario report."],
-                    ["`reports/thesis/manifest.json`", "Generated artifact inventory and record counts."],
-                    ["`reports/thesis/demo_walkthrough.md`", "This demo-oriented walkthrough."],
-                    ["`reports/thesis/thesis_defense_pack.md`", "Concise defense preparation summary and Q&A."],
-                    ["`reports/thesis/results_summary.md`", "Compact technical results summary."],
-                    ["`reports/thesis/risk_explanation_traces.md`", "Readable end-to-end explanation traces."],
+                    ["`reports/thesis/deterministic/thesis_scenario_report.json`", "Structured deterministic scenario report."],
+                    ["`reports/thesis/deterministic/manifest.json`", "Generated artifact inventory and record counts."],
+                    ["`reports/thesis/deterministic/demo_walkthrough.md`", "This demo-oriented walkthrough."],
+                    ["`reports/thesis/deterministic/thesis_defense_pack.md`", "Concise defense preparation summary and Q&A."],
+                    ["`reports/thesis/deterministic/results_summary.md`", "Compact technical results summary."],
+                    ["`reports/thesis/deterministic/risk_explanation_traces.md`", "Readable end-to-end explanation traces."],
                 ],
                 align=["left", "left"],
             ),
