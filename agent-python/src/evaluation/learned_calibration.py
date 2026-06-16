@@ -218,6 +218,29 @@ LEGACY_HIGH_RISK_DIAGNOSTIC_COLUMNS = [
     "interpretation",
 ]
 
+LEGACY_DAMPENING_COUNTERFACTUAL_COLUMNS = [
+    "cve_id",
+    "cve_year",
+    "risk_score",
+    "counterfactual_score",
+    "risk_bucket",
+    "counterfactual_risk_bucket",
+    "high_medium_low_level",
+    "counterfactual_high_medium_low_level",
+    "risk_bucket_changed",
+    "high_medium_low_level_changed",
+    "cvss_score",
+    "recency_signal",
+    "epss_signal",
+    "kev_listed",
+    "accepted_urlhaus_count",
+    "accepted_dread_count",
+    "dampening_applied",
+    "dampening_amount",
+    "counterfactual_floor",
+    "interpretation",
+]
+
 
 def extract_calibration_row(doc: Mapping[str, Any]) -> dict[str, Any] | None:
     source = deepcopy(dict(doc))
@@ -462,6 +485,9 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     legacy_high_risk_path = output / "legacy_high_risk_diagnostics.csv"
     legacy_high_risk_json_path = output / "legacy_high_risk_diagnostics.json"
     legacy_high_risk_summary_path = output / "legacy_high_risk_diagnostics.md"
+    legacy_dampening_path = output / "legacy_dampening_counterfactual.csv"
+    legacy_dampening_json_path = output / "legacy_dampening_counterfactual.json"
+    legacy_dampening_summary_path = output / "legacy_dampening_counterfactual.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
@@ -584,6 +610,14 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
             writer.writerow({column: row.get(column, "") for column in LEGACY_HIGH_RISK_DIAGNOSTIC_COLUMNS})
     legacy_high_risk_json_path.write_text(json.dumps(legacy_high_risk, indent=2, sort_keys=True, default=str), encoding="utf-8")
     legacy_high_risk_summary_path.write_text(render_legacy_high_risk_diagnostics_markdown(legacy_high_risk), encoding="utf-8")
+    legacy_dampening = build_legacy_dampening_counterfactual(rows)
+    with legacy_dampening_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=LEGACY_DAMPENING_COUNTERFACTUAL_COLUMNS)
+        writer.writeheader()
+        for row in legacy_dampening["rows"]:
+            writer.writerow({column: row.get(column, "") for column in LEGACY_DAMPENING_COUNTERFACTUAL_COLUMNS})
+    legacy_dampening_json_path.write_text(json.dumps(legacy_dampening, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    legacy_dampening_summary_path.write_text(render_legacy_dampening_counterfactual_markdown(legacy_dampening), encoding="utf-8")
     no_overclaim_audit = build_no_overclaim_audit(output)
     no_overclaim_audit_path.write_text(json.dumps(no_overclaim_audit, indent=2, sort_keys=True, default=str), encoding="utf-8")
     no_overclaim_audit_summary_path.write_text(render_no_overclaim_audit_markdown(no_overclaim_audit), encoding="utf-8")
@@ -682,6 +716,9 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "legacy_high_risk_diagnostics": str(legacy_high_risk_path),
         "legacy_high_risk_diagnostics_json": str(legacy_high_risk_json_path),
         "legacy_high_risk_diagnostics_summary": str(legacy_high_risk_summary_path),
+        "legacy_dampening_counterfactual": str(legacy_dampening_path),
+        "legacy_dampening_counterfactual_json": str(legacy_dampening_json_path),
+        "legacy_dampening_counterfactual_summary": str(legacy_dampening_summary_path),
         "manifest": str(manifest_path),
         "manifest_summary": str(manifest_summary_path),
     }
@@ -2867,6 +2904,168 @@ def _legacy_high_risk_interpretation(group: str) -> str:
     return "Diagnostic grouping only; this row does not change production scoring."
 
 
+def build_legacy_dampening_counterfactual(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    counterfactual_rows = [_legacy_dampening_counterfactual_row(row) for row in rows]
+    affected_rows = [row for row in counterfactual_rows if _truthy(row.get("dampening_applied"))]
+    original_scores = [_safe_float(row.get("risk_score")) for row in affected_rows]
+    counterfactual_scores = [_safe_float(row.get("counterfactual_score")) for row in affected_rows]
+    top_affected = sorted(
+        affected_rows,
+        key=lambda item: (
+            -_safe_float(item.get("dampening_amount")),
+            -_safe_float(item.get("risk_score")),
+            str(item.get("cve_id", "")),
+        ),
+    )[:10]
+    return {
+        "status": "available",
+        "warning": "This is a counterfactual sensitivity artifact only; it does not change production risk_score, confidence, or evidence gates.",
+        "affected_record_count": len(affected_rows),
+        "average_original_score": round(mean(original_scores), 4) if original_scores else 0.0,
+        "average_counterfactual_score": round(mean(counterfactual_scores), 4) if counterfactual_scores else 0.0,
+        "risk_bucket_change_count": sum(1 for row in counterfactual_rows if _truthy(row.get("risk_bucket_changed"))),
+        "high_medium_low_level_change_count": sum(1 for row in counterfactual_rows if _truthy(row.get("high_medium_low_level_changed"))),
+        "top_affected_cves": [
+            {
+                "cve_id": row.get("cve_id", ""),
+                "risk_score": row.get("risk_score", ""),
+                "counterfactual_score": row.get("counterfactual_score", ""),
+                "dampening_amount": row.get("dampening_amount", ""),
+                "interpretation": row.get("interpretation", ""),
+            }
+            for row in top_affected
+        ],
+        "material_thesis_conclusion_effect": _legacy_dampening_material_effect(counterfactual_rows),
+        "rows": counterfactual_rows,
+    }
+
+
+def render_legacy_dampening_counterfactual_markdown(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "# Legacy Dampening Counterfactual",
+        "",
+        "This artifact evaluates an illustrative age-aware dampening rule for legacy CVEs.",
+        "It is diagnostic only and does not change production `risk_score`, confidence, or URLhaus/Dread evidence gates.",
+        "",
+        f"- Affected records: `{payload.get('affected_record_count', 0)}`",
+        f"- Average original score: `{payload.get('average_original_score', 0.0)}`",
+        f"- Average counterfactual score: `{payload.get('average_counterfactual_score', 0.0)}`",
+        f"- Risk bucket changes: `{payload.get('risk_bucket_change_count', 0)}`",
+        f"- HIGH/MEDIUM/LOW level changes: `{payload.get('high_medium_low_level_change_count', 0)}`",
+        f"- Thesis conclusion effect: {payload.get('material_thesis_conclusion_effect', '')}",
+        "",
+        "## Top Affected CVEs",
+        "",
+        "| CVE | Original Risk | Counterfactual Risk | Dampening | Interpretation |",
+        "| --- | ---: | ---: | ---: | --- |",
+    ]
+    examples = payload.get("top_affected_cves") or []
+    if examples:
+        for row in examples:
+            lines.append(
+                "| {cve} | {risk} | {counterfactual} | {amount} | {interpretation} |".format(
+                    cve=row.get("cve_id", ""),
+                    risk=row.get("risk_score", ""),
+                    counterfactual=row.get("counterfactual_score", ""),
+                    amount=row.get("dampening_amount", ""),
+                    interpretation=row.get("interpretation", ""),
+                )
+            )
+    else:
+        lines.append("| none | 0.0 | 0.0 | 0.0 | No rows met the counterfactual dampening rule. |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _legacy_dampening_counterfactual_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    cve_year = extract_cve_year(row.get("cve_id"))
+    original = round(_safe_float(row.get("risk_score")), 4)
+    counterfactual = _legacy_dampened_score(row, cve_year)
+    original_bucket = _risk_bucket(original)
+    counterfactual_bucket = _risk_bucket(counterfactual)
+    original_level = _high_medium_low_level(original)
+    counterfactual_level = _high_medium_low_level(counterfactual)
+    dampening_amount = round(max(original - counterfactual, 0.0), 4)
+    applied = dampening_amount > 0
+    return {
+        "cve_id": row.get("cve_id", ""),
+        "cve_year": cve_year if cve_year is not None else "",
+        "risk_score": original,
+        "counterfactual_score": counterfactual,
+        "risk_bucket": original_bucket,
+        "counterfactual_risk_bucket": counterfactual_bucket,
+        "high_medium_low_level": original_level,
+        "counterfactual_high_medium_low_level": counterfactual_level,
+        "risk_bucket_changed": original_bucket != counterfactual_bucket,
+        "high_medium_low_level_changed": original_level != counterfactual_level,
+        "cvss_score": row.get("cvss_score", ""),
+        "recency_signal": row.get("recency_signal", ""),
+        "epss_signal": row.get("epss_signal", ""),
+        "kev_listed": row.get("kev_listed", ""),
+        "accepted_urlhaus_count": row.get("accepted_urlhaus_count", 0),
+        "accepted_dread_count": row.get("accepted_dread_count", 0),
+        "dampening_applied": applied,
+        "dampening_amount": dampening_amount,
+        "counterfactual_floor": _legacy_dampening_floor(_safe_float(row.get("cvss_score"))) if applied else "",
+        "interpretation": _legacy_dampening_interpretation(applied),
+    }
+
+
+def _legacy_dampened_score(row: Mapping[str, Any], cve_year: int | None = None) -> float:
+    original = _safe_float(row.get("risk_score"))
+    if not _legacy_dampening_applies(row, cve_year):
+        return round(original, 4)
+    floor_value = _legacy_dampening_floor(_safe_float(row.get("cvss_score")))
+    return round(max(original - 0.6, floor_value, 0.0), 4)
+
+
+def _legacy_dampening_applies(row: Mapping[str, Any], cve_year: int | None = None) -> bool:
+    year = cve_year if cve_year is not None else extract_cve_year(row.get("cve_id"))
+    if year is None or year > 2010:
+        return False
+    return (
+        _safe_float(row.get("recency_signal")) <= 0.1
+        and _safe_int(row.get("accepted_urlhaus_count")) == 0
+        and _safe_int(row.get("accepted_dread_count")) == 0
+        and not _truthy(row.get("kev_listed"))
+        and _safe_float(row.get("epss_signal")) == 0.0
+    )
+
+
+def _legacy_dampening_floor(cvss_score: float) -> float:
+    if cvss_score >= 10.0:
+        return 6.8
+    if cvss_score >= 9.0:
+        return 6.5
+    return 0.0
+
+
+def _high_medium_low_level(score: float) -> str:
+    if score >= 7.0:
+        return "HIGH"
+    if score >= 4.0:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _legacy_dampening_interpretation(applied: bool) -> str:
+    if applied:
+        return "Illustrative age-aware dampening applied because the legacy CVE has low recency and no EPSS, KEV, URLhaus, or Dread support in this export."
+    return "Production score retained in the counterfactual because the CVE is modern or has recency/external evidence conditions outside the diagnostic rule."
+
+
+def _legacy_dampening_material_effect(rows: Sequence[Mapping[str, Any]]) -> str:
+    if not rows:
+        return "No rows were available, so thesis conclusions cannot be assessed from this artifact."
+    changed = sum(1 for row in rows if _truthy(row.get("high_medium_low_level_changed")))
+    affected = sum(1 for row in rows if _truthy(row.get("dampening_applied")))
+    if affected == 0:
+        return "No rows meet the illustrative rule; thesis conclusions are unchanged by this counterfactual."
+    if changed == 0:
+        return "The rule changes some scores but does not change HIGH/MEDIUM/LOW levels; thesis conclusions are not materially altered."
+    return "The rule changes some HIGH/MEDIUM/LOW levels; this supports treating age-aware dampening as future work requiring stronger labels or asset context."
+
+
 def build_no_overclaim_audit(artifact_dir: str | Path) -> dict[str, Any]:
     root = Path(artifact_dir)
     findings: list[dict[str, str]] = []
@@ -3333,6 +3532,9 @@ def _learned_calibration_artifact_specs() -> list[dict[str, str]]:
         {"group": "legacy high-risk diagnostics", "filename": "legacy_high_risk_diagnostics.csv", "description": "Legacy high-risk diagnostic rows", "usage": "Diagnostic review of old or intrinsic-severity-driven high-risk CVEs."},
         {"group": "legacy high-risk diagnostics", "filename": "legacy_high_risk_diagnostics.json", "description": "Legacy high-risk diagnostic payload", "usage": "Machine-readable summary of legacy high-risk diagnostic groups."},
         {"group": "legacy high-risk diagnostics", "filename": "legacy_high_risk_diagnostics.md", "description": "Readable legacy high-risk diagnostics", "usage": "Thesis discussion of retained severity versus operational evidence coverage."},
+        {"group": "legacy dampening counterfactual", "filename": "legacy_dampening_counterfactual.csv", "description": "Legacy dampening counterfactual rows", "usage": "Diagnostic sensitivity rows for possible future age-aware dampening."},
+        {"group": "legacy dampening counterfactual", "filename": "legacy_dampening_counterfactual.json", "description": "Legacy dampening counterfactual payload", "usage": "Machine-readable score and bucket-change summary."},
+        {"group": "legacy dampening counterfactual", "filename": "legacy_dampening_counterfactual.md", "description": "Readable legacy dampening counterfactual", "usage": "Thesis discussion of age-aware dampening as future work."},
     ]
 
 

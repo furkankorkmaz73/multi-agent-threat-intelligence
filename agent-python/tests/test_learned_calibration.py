@@ -20,11 +20,13 @@ from evaluation.learned_calibration import (
     LIMITATIONS_MATRIX_COLUMNS,
     MODEL_FEATURE_COLUMNS,
     LEGACY_HIGH_RISK_DIAGNOSTIC_COLUMNS,
+    LEGACY_DAMPENING_COUNTERFACTUAL_COLUMNS,
     ablation_plan,
     build_proxy_label_row,
     build_proxy_label_rows,
     build_leakage_checks,
     build_legacy_high_risk_diagnostics,
+    build_legacy_dampening_counterfactual,
     build_learned_calibration_manifest,
     build_limitations_matrix,
     build_no_overclaim_audit,
@@ -280,6 +282,93 @@ def test_legacy_high_risk_diagnostics_empty_input():
     assert "No CVEs matched the diagnostic groups." in markdown
 
 
+def test_legacy_dampening_counterfactual_applies_rule_and_floor():
+    payload = build_legacy_dampening_counterfactual(
+        [
+            _row(
+                cve_id="CVE-2008-0001",
+                cvss_score=10.0,
+                risk_score=7.1,
+                recency_signal=0.0,
+                epss_signal=0.0,
+                kev_listed=False,
+                accepted_urlhaus_count=0,
+                accepted_dread_count=0,
+            )
+        ]
+    )
+    row = payload["rows"][0]
+
+    assert payload["affected_record_count"] == 1
+    assert row["dampening_applied"] is True
+    assert row["counterfactual_score"] == 6.8
+    assert row["counterfactual_floor"] == 6.8
+    assert row["risk_bucket_changed"] is True
+    assert row["high_medium_low_level_changed"] is True
+
+
+def test_legacy_dampening_counterfactual_cvss9_floor():
+    payload = build_legacy_dampening_counterfactual(
+        [
+            _row(
+                cve_id="CVE-2009-0001",
+                cvss_score=9.3,
+                risk_score=6.9,
+                recency_signal=0.0,
+                epss_signal=0.0,
+                kev_listed=False,
+                accepted_urlhaus_count=0,
+                accepted_dread_count=0,
+            )
+        ]
+    )
+    row = payload["rows"][0]
+
+    assert row["dampening_applied"] is True
+    assert row["counterfactual_score"] == 6.5
+    assert row["counterfactual_floor"] == 6.5
+
+
+def test_legacy_dampening_counterfactual_leaves_modern_and_external_rows_unchanged():
+    payload = build_legacy_dampening_counterfactual(
+        [
+            _row(cve_id="CVE-2026-0001", cvss_score=10.0, risk_score=8.1, recency_signal=0.8),
+            _row(
+                cve_id="CVE-2008-0002",
+                cvss_score=10.0,
+                risk_score=7.5,
+                recency_signal=0.0,
+                accepted_urlhaus_count=1,
+            ),
+            _row(
+                cve_id="CVE-2008-0003",
+                cvss_score=10.0,
+                risk_score=7.5,
+                recency_signal=0.0,
+                kev_listed=True,
+            ),
+        ]
+    )
+
+    assert payload["affected_record_count"] == 0
+    assert all(row["counterfactual_score"] == row["risk_score"] for row in payload["rows"])
+    assert all(row["dampening_applied"] is False for row in payload["rows"])
+
+
+def test_legacy_dampening_counterfactual_bucket_change_calculation():
+    payload = build_legacy_dampening_counterfactual(
+        [
+            _row(cve_id="CVE-2008-0001", cvss_score=10.0, risk_score=7.1, recency_signal=0.0),
+            _row(cve_id="CVE-2008-0002", cvss_score=10.0, risk_score=8.2, recency_signal=0.0),
+        ]
+    )
+
+    assert payload["affected_record_count"] == 2
+    assert payload["risk_bucket_change_count"] == 1
+    assert payload["high_medium_low_level_change_count"] == 1
+    assert "future work" in payload["material_thesis_conclusion_effect"]
+
+
 def test_feasibility_report_from_synthetic_rows():
     rows = [extract_calibration_row(_synthetic_doc()) for _ in range(3)]
 
@@ -375,6 +464,9 @@ def test_export_writes_three_output_files(tmp_path):
     legacy_high_risk = tmp_path / "legacy_high_risk_diagnostics.csv"
     legacy_high_risk_json = tmp_path / "legacy_high_risk_diagnostics.json"
     legacy_high_risk_summary = tmp_path / "legacy_high_risk_diagnostics.md"
+    legacy_dampening = tmp_path / "legacy_dampening_counterfactual.csv"
+    legacy_dampening_json = tmp_path / "legacy_dampening_counterfactual.json"
+    legacy_dampening_summary = tmp_path / "legacy_dampening_counterfactual.md"
     manifest = tmp_path / "learned_calibration_manifest.json"
     manifest_summary = tmp_path / "learned_calibration_manifest.md"
     assert result["paths"] == {
@@ -430,6 +522,9 @@ def test_export_writes_three_output_files(tmp_path):
         "legacy_high_risk_diagnostics": str(legacy_high_risk),
         "legacy_high_risk_diagnostics_json": str(legacy_high_risk_json),
         "legacy_high_risk_diagnostics_summary": str(legacy_high_risk_summary),
+        "legacy_dampening_counterfactual": str(legacy_dampening),
+        "legacy_dampening_counterfactual_json": str(legacy_dampening_json),
+        "legacy_dampening_counterfactual_summary": str(legacy_dampening_summary),
         "manifest": str(manifest),
         "manifest_summary": str(manifest_summary),
     }
@@ -485,6 +580,9 @@ def test_export_writes_three_output_files(tmp_path):
     assert legacy_high_risk.exists()
     assert legacy_high_risk_json.exists()
     assert legacy_high_risk_summary.exists()
+    assert legacy_dampening.exists()
+    assert legacy_dampening_json.exists()
+    assert legacy_dampening_summary.exists()
     assert manifest.exists()
     assert manifest_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
@@ -565,6 +663,10 @@ def test_export_writes_three_output_files(tmp_path):
     assert list(legacy_rows[0].keys()) == LEGACY_HIGH_RISK_DIAGNOSTIC_COLUMNS
     legacy_payload = json.loads(legacy_high_risk_json.read_text(encoding="utf-8"))
     assert legacy_payload["warning"].startswith("This diagnostic is not a production scoring change")
+    dampening_rows = list(csv.DictReader(legacy_dampening.open(encoding="utf-8")))
+    assert list(dampening_rows[0].keys()) == LEGACY_DAMPENING_COUNTERFACTUAL_COLUMNS
+    dampening_payload = json.loads(legacy_dampening_json.read_text(encoding="utf-8"))
+    assert dampening_payload["warning"].startswith("This is a counterfactual sensitivity artifact only")
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert manifest_payload["status"] == "complete"
     assert any(item["group"] == "dataset" for item in manifest_payload["artifacts"])
@@ -1182,6 +1284,9 @@ def test_learned_calibration_manifest_reports_files(tmp_path):
         "legacy_high_risk_diagnostics.csv",
         "legacy_high_risk_diagnostics.json",
         "legacy_high_risk_diagnostics.md",
+        "legacy_dampening_counterfactual.csv",
+        "legacy_dampening_counterfactual.json",
+        "legacy_dampening_counterfactual.md",
     ):
         (tmp_path / name).write_text("x", encoding="utf-8")
 
