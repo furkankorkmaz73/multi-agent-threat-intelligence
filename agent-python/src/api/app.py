@@ -28,7 +28,7 @@ diagnostic_agent = DiagnosticAgent()
 recommender_agent = RecommenderAgent()
 SETTINGS = get_settings()
 
-app = FastAPI(title="Threat-Agent API", version="0.2.0", description="API for multi-source cyber threat intelligence analysis results.")
+app = FastAPI(title="Threat-Agent API", version=APP_VERSION, description="API for multi-source cyber threat intelligence analysis results.")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=SETTINGS.api.cors_origins,

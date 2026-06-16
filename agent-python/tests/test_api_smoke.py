@@ -16,6 +16,10 @@ sys.modules.setdefault("pymongo", SimpleNamespace(MongoClient=_DummyMongoClient,
 import api.app as app_module
 
 
+def test_fastapi_metadata_version_uses_config_app_version():
+    assert app_module.app.version == app_module.APP_VERSION
+
+
 
 
 class StubRepo:
