@@ -1,4 +1,7 @@
 SHELL := /bin/bash
+PYTHON ?= .venv/bin/python
+UVICORN ?= .venv/bin/uvicorn
+GOTOOLCHAIN ?= go1.24.0
 
 .PHONY: help setup-python test-python thesis-scenario thesis-artifacts thesis-artifact-quality thesis-demo thesis-runtime-diagnostics thesis-learned-calibration thesis-learned-calibration-quality e2e-system real-cve-export real-benchmark balanced-benchmark run-api run-worker setup-frontend run-frontend build-frontend test-go docker-up docker-worker docker-down clean
 
@@ -34,17 +37,17 @@ setup-python:
 	cd agent-python && .venv/bin/python -m pip install -r requirements.txt
 
 test-python:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m pytest -q -p no:ddtrace
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m pytest -q -p no:ddtrace
 
 thesis-scenario:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m integration.thesis_scenario --output ../reports/thesis_scenario_report.json
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m integration.thesis_scenario --output ../reports/thesis_scenario_report.json
 
 thesis-artifacts:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m integration.thesis_scenario --output ../reports/thesis_scenario_report.json
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.thesis_artifacts --scenario-report ../reports/thesis_scenario_report.json --output-dir ../reports/thesis
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m integration.thesis_scenario --output ../reports/thesis_scenario_report.json
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m evaluation.thesis_artifacts --scenario-report ../reports/thesis_scenario_report.json --output-dir ../reports/thesis
 
 thesis-artifact-quality:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.thesis_artifact_quality --artifact-dir ../reports/thesis
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m evaluation.thesis_artifact_quality --artifact-dir ../reports/thesis
 
 thesis-demo:
 	$(MAKE) thesis-artifacts
@@ -57,31 +60,31 @@ thesis-demo:
 	@echo "Quality gate: passed"
 
 thesis-runtime-diagnostics:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.runtime_diagnostics --output-dir ../reports/runtime
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m evaluation.runtime_diagnostics --output-dir ../reports/runtime
 
 thesis-learned-calibration:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.learned_calibration --output-dir ../reports/thesis
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m evaluation.learned_calibration --output-dir ../reports/thesis
 
 thesis-learned-calibration-quality:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.learned_calibration_quality --artifact-dir ../reports/thesis
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m evaluation.learned_calibration_quality --artifact-dir ../reports/thesis
 
 e2e-system:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m integration.e2e_system --output-dir $(HOME)/thesis-artifacts/e2e-system --generated-at 2026-06-10T00:00:00+00:00
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m integration.e2e_system --output-dir $(HOME)/thesis-artifacts/e2e-system --generated-at 2026-06-10T00:00:00+00:00
 
 real-cve-export:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m evaluation.model_export --output-dir reports/real_benchmark/model_export --cache-dir .cache/real_benchmark $(REAL_CVE_FLAGS)
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m evaluation.model_export --output-dir ../reports/real_benchmark/model_export --cache-dir .cache/real_benchmark $(REAL_CVE_FLAGS)
 
 real-benchmark:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m evaluation.real_benchmark --model-results $(MODEL_RESULTS) --output-dir reports/real_benchmark --cache-dir .cache/real_benchmark $(REAL_BENCHMARK_FLAGS)
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m evaluation.real_benchmark --model-results $(MODEL_RESULTS) --output-dir ../reports/real_benchmark --cache-dir .cache/real_benchmark $(REAL_BENCHMARK_FLAGS)
 
 balanced-benchmark:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python -m evaluation.balanced_benchmark --output-dir reports/real_benchmark/balanced $(BALANCED_FLAGS)
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m evaluation.balanced_benchmark --output-dir ../reports/real_benchmark/balanced $(BALANCED_FLAGS)
 
 run-api:
-	cd agent-python && PYTHONPATH=src uvicorn api.app:app --reload --host 127.0.0.1 --port 8000
+	cd agent-python && PYTHONPATH=src $(UVICORN) api.app:app --reload --host 127.0.0.1 --port 8000
 
 run-worker:
-	cd agent-python && PYTHONPATH=src python src/main.py --source all --run-once
+	cd agent-python && PYTHONPATH=src $(PYTHON) src/main.py --source all --run-once
 
 setup-frontend:
 	cd agent-python/frontend && npm ci

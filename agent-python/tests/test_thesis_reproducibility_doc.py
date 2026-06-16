@@ -315,6 +315,25 @@ def test_makefile_setup_python_creates_expected_virtualenv():
     assert "creates `agent-python/.venv`" in doc
 
 
+def test_makefile_uses_venv_interpreter_for_python_targets():
+    repo_root = Path(__file__).resolve().parents[2]
+    makefile = (repo_root / "Makefile").read_text(encoding="utf-8")
+
+    assert "PYTHON ?= .venv/bin/python" in makefile
+    assert "UVICORN ?= .venv/bin/uvicorn" in makefile
+
+    for target in ("real-cve-export", "real-benchmark", "balanced-benchmark", "run-worker"):
+        block = re.search(rf"^{target}:\n((?:\t.*\n)+)", makefile, flags=re.MULTILINE)
+        assert block is not None
+        assert "$(PYTHON)" in block.group(1)
+        assert " python -m evaluation" not in block.group(1)
+
+    run_api = re.search(r"^run-api:\n((?:\t.*\n)+)", makefile, flags=re.MULTILINE)
+    assert run_api is not None
+    assert "$(UVICORN)" in run_api.group(1)
+    assert " uvicorn " not in run_api.group(1)
+
+
 def test_makefile_exposes_runtime_diagnostics_target():
     repo_root = Path(__file__).resolve().parents[2]
     makefile = (repo_root / "Makefile").read_text(encoding="utf-8")
