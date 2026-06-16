@@ -12,8 +12,10 @@ if str(SRC_PATH) not in sys.path:
 def _install_pymongo_stub_if_missing():
     """Allow unit tests to be collected in minimal environments without pymongo."""
     try:
+        from bson import ObjectId  # noqa: F401
+        from bson.errors import InvalidId  # noqa: F401
         import pymongo  # noqa: F401
-        from pymongo.errors import PyMongoError  # noqa: F401
+        from pymongo.errors import PyMongoError, ServerSelectionTimeoutError  # noqa: F401
         return
     except Exception:
         pass
@@ -62,11 +64,49 @@ def _install_pymongo_stub_if_missing():
     class PyMongoError(Exception):
         pass
 
+    class ServerSelectionTimeoutError(PyMongoError):
+        pass
+
     errors_stub.PyMongoError = PyMongoError
+    errors_stub.ServerSelectionTimeoutError = ServerSelectionTimeoutError
     pymongo_stub.errors = errors_stub
+
+    bson_errors_stub = types.ModuleType("bson.errors")
+
+    class InvalidId(Exception):
+        pass
+
+    class ObjectId:
+        def __init__(self, value=None):
+            if value is None:
+                self.value = "000000000000000000000000"
+                return
+            if isinstance(value, ObjectId):
+                self.value = value.value
+                return
+            text = str(value)
+            if len(text) != 24:
+                raise InvalidId(f"{text!r} is not a valid ObjectId")
+            self.value = text
+
+        def __str__(self):
+            return self.value
+
+        def __repr__(self):
+            return f"ObjectId({self.value!r})"
+
+        def __eq__(self, other):
+            return isinstance(other, ObjectId) and self.value == other.value
+
+    bson_stub = types.ModuleType("bson")
+    bson_stub.ObjectId = ObjectId
+    bson_errors_stub.InvalidId = InvalidId
+    bson_stub.errors = bson_errors_stub
 
     sys.modules["pymongo"] = pymongo_stub
     sys.modules["pymongo.errors"] = errors_stub
+    sys.modules["bson"] = bson_stub
+    sys.modules["bson.errors"] = bson_errors_stub
 
 
 _install_pymongo_stub_if_missing()

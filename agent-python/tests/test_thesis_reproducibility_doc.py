@@ -362,6 +362,21 @@ def test_makefile_go_target_matches_ci_toolchain_commands():
         assert required in block
 
 
+def test_conftest_minimal_dependency_stubs_cover_database_imports():
+    repo_root = Path(__file__).resolve().parents[2]
+    conftest = (repo_root / "agent-python" / "tests" / "conftest.py").read_text(encoding="utf-8")
+
+    for required in (
+        "ObjectId",
+        "InvalidId",
+        "ServerSelectionTimeoutError",
+        'sys.modules["bson"]',
+        'sys.modules["bson.errors"]',
+        'sys.modules["pymongo.errors"]',
+    ):
+        assert required in conftest
+
+
 def test_learned_calibration_doc_contains_safe_experimental_framing():
     repo_root = Path(__file__).resolve().parents[2]
     doc_path = repo_root / "docs" / "learned_calibration.md"
