@@ -35,7 +35,7 @@ git status --short
 Expected result:
 
 - The Python test suite passes.
-- `make thesis-artifacts` regenerates `agent-python/reports/thesis/`.
+- `make thesis-artifacts` regenerates `reports/thesis/`.
 - `make thesis-artifact-quality` returns a passing JSON summary.
 - `git status --short` shows only intentional working-tree changes, if any.
 
@@ -51,7 +51,7 @@ For read-only diagnostics after a live local re-analysis, use:
 make thesis-runtime-diagnostics
 ```
 
-This writes `agent-python/reports/runtime/` and summarizes risk, confidence, EPSS/KEV coverage, URLhaus candidate accounting, and high-risk moderate-confidence cases. It is an operational sanity check, not the deterministic thesis benchmark.
+This writes `reports/runtime/` and summarizes risk, confidence, EPSS/KEV coverage, URLhaus candidate accounting, and high-risk moderate-confidence cases. It is an operational sanity check, not the deterministic thesis benchmark.
 
 For the experimental learned-calibration export, use:
 
@@ -63,7 +63,7 @@ This reads existing analyzed CVE records and writes proxy-label, baseline, optio
 
 ## Generated Artifact Inventory
 
-The deterministic bundle is written under `agent-python/reports/thesis/`:
+The deterministic bundle is written under `reports/thesis/`:
 
 ```text
 reports/thesis/manifest.json

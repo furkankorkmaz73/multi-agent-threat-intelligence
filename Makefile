@@ -35,23 +35,23 @@ test-python:
 	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m pytest -q -p no:ddtrace
 
 thesis-scenario:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m integration.thesis_scenario --output reports/thesis_scenario_report.json
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m integration.thesis_scenario --output ../reports/thesis_scenario_report.json
 
 thesis-artifacts:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m integration.thesis_scenario --output reports/thesis_scenario_report.json
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.thesis_artifacts --scenario-report reports/thesis_scenario_report.json --output-dir reports/thesis
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m integration.thesis_scenario --output ../reports/thesis_scenario_report.json
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.thesis_artifacts --scenario-report ../reports/thesis_scenario_report.json --output-dir ../reports/thesis
 
 thesis-artifact-quality:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.thesis_artifact_quality --artifact-dir reports/thesis
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.thesis_artifact_quality --artifact-dir ../reports/thesis
 
 thesis-demo:
 	$(MAKE) thesis-artifacts
 	$(MAKE) thesis-artifact-quality
 	@echo "Thesis demo ready."
-	@echo "Scenario report: agent-python/reports/thesis_scenario_report.json"
-	@echo "Artifact directory: agent-python/reports/thesis"
-	@echo "Manifest: agent-python/reports/thesis/manifest.json"
-	@echo "Demo walkthrough: agent-python/reports/thesis/demo_walkthrough.md"
+	@echo "Scenario report: reports/thesis_scenario_report.json"
+	@echo "Artifact directory: reports/thesis"
+	@echo "Manifest: reports/thesis/manifest.json"
+	@echo "Demo walkthrough: reports/thesis/demo_walkthrough.md"
 	@echo "Quality gate: passed"
 
 thesis-runtime-diagnostics:

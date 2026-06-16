@@ -94,7 +94,7 @@ make thesis-artifacts
 The command runs the deterministic thesis fixture scenario and writes:
 
 ```text
-agent-python/reports/thesis/
+reports/thesis/
   scoring_summary.md
   scoring_distribution.csv
   scoring_distribution.md
@@ -132,7 +132,9 @@ Equivalent direct command:
 
 ```bash
 cd agent-python
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.thesis_artifact_quality --artifact-dir reports/thesis
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.thesis_artifact_quality --artifact-dir ../reports/thesis
 ```
+
+The direct command is run from `agent-python`, so `../reports/thesis` refers to the root-level thesis artifact directory.
 
 The gate validates artifact structure and formatting only. It checks manifest entries, listed file existence, required case studies, required explanation traces and fields, required CSV columns, known Markdown/CSV formatting regressions, and Markdown table shape. It does not recompute statistical correctness, prove real-world validity, or change model behavior.

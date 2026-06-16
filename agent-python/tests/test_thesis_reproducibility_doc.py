@@ -40,6 +40,28 @@ def test_thesis_reproducibility_doc_contains_required_commands_and_artifacts():
         "no live network",
     ):
         assert required in text
+    assert "reports/thesis/" in text
+    assert "reports/runtime/" in text
+    assert "agent-python/reports/runtime/" not in text
+
+
+def test_readme_uses_root_level_thesis_report_paths():
+    repo_root = Path(__file__).resolve().parents[2]
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+
+    for required in (
+        "reports/thesis/",
+        "reports/runtime/",
+        "reports/thesis/demo_walkthrough.md",
+        "reports/thesis/manifest.json",
+    ):
+        assert required in readme
+
+    for stale in (
+        "agent-python/reports/thesis/",
+        "agent-python/reports/runtime/",
+    ):
+        assert stale not in readme
 
 
 def test_agent_python_env_example_matches_current_scoring_default():
@@ -200,7 +222,10 @@ def test_makefile_exposes_thesis_demo_target():
         "thesis-demo:",
         "$(MAKE) thesis-artifacts",
         "$(MAKE) thesis-artifact-quality",
-        "Demo walkthrough: agent-python/reports/thesis/demo_walkthrough.md",
+        "Scenario report: reports/thesis_scenario_report.json",
+        "Artifact directory: reports/thesis",
+        "Manifest: reports/thesis/manifest.json",
+        "Demo walkthrough: reports/thesis/demo_walkthrough.md",
     ):
         assert required in makefile
 
