@@ -64,6 +64,18 @@ def test_readme_uses_root_level_thesis_report_paths():
         assert stale not in readme
 
 
+def test_readme_docker_section_documents_env_file_setup():
+    repo_root = Path(__file__).resolve().parents[2]
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+    compose = (repo_root / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "env_file:" in compose
+    assert "- .env" in compose
+    assert "cp .env.example .env" in readme
+    assert "Review `.env` before non-local use" in readme
+    assert "docker compose up -d" in readme
+
+
 def test_agent_python_env_example_matches_current_scoring_default():
     repo_root = Path(__file__).resolve().parents[2]
     env_text = (repo_root / "agent-python" / ".env.example").read_text(encoding="utf-8")

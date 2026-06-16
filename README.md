@@ -480,11 +480,14 @@ A Dread collector path exists, but this source should be treated as optional / e
 
 ## Running With Docker
 
-Start MongoDB, API, and frontend:
+Create the local Docker environment file, then start MongoDB, API, and frontend:
 
 ```bash
+cp .env.example .env
 docker compose up -d
 ```
+
+Review `.env` before non-local use. The checked-in example is intended for local development defaults.
 
 Check containers:
 
