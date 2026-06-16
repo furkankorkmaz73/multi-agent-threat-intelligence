@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 def test_thesis_reproducibility_doc_contains_required_commands_and_artifacts():
@@ -34,6 +35,19 @@ def test_thesis_reproducibility_doc_contains_required_commands_and_artifacts():
         "no live network",
     ):
         assert required in text
+
+
+def test_agent_python_env_example_matches_current_scoring_default():
+    repo_root = Path(__file__).resolve().parents[2]
+    env_text = (repo_root / "agent-python" / ".env.example").read_text(encoding="utf-8")
+    config_text = (repo_root / "agent-python" / "src" / "config.py").read_text(encoding="utf-8")
+
+    config_match = re.search(r'base_cvss_multiplier: float = _float_env\("BASE_CVSS_MULTIPLIER", ([0-9.]+)\)', config_text)
+    assert config_match is not None
+    expected = config_match.group(1)
+
+    assert "BASE_CVSS_MULTIPLIER=0.55" not in env_text
+    assert f"BASE_CVSS_MULTIPLIER={expected}" in env_text
 
 
 def test_thesis_limitations_doc_contains_required_sections():
