@@ -26,6 +26,16 @@ make setup-python
 
 This command creates `agent-python/.venv` and installs `agent-python/requirements.txt` into that environment. It is safe to rerun when dependencies change.
 
+`agent-python/requirements.txt` is the human-maintained dependency input used by setup and CI. `agent-python/requirements.lock` is a thesis reproducibility snapshot generated from the tested Python 3.11 virtual environment with:
+
+```bash
+cd agent-python
+.venv/bin/python -m pip freeze --exclude-editable > requirements.lock
+.venv/bin/python -m pip check
+```
+
+Regenerate the lock file only from a clean project virtual environment. It should not contain editable installs, local filesystem paths, or newly installed packages that are not part of the project environment.
+
 ## Final Validation Sequence
 
 Run this sequence from a clean checkout or before freezing thesis artifacts:

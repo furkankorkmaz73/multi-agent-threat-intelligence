@@ -315,6 +315,18 @@ def test_makefile_setup_python_creates_expected_virtualenv():
     assert "creates `agent-python/.venv`" in doc
 
 
+def test_python_dependency_lock_snapshot_is_documented():
+    repo_root = Path(__file__).resolve().parents[2]
+    lock_path = repo_root / "agent-python" / "requirements.lock"
+    doc = (repo_root / "docs" / "thesis_reproducibility.md").read_text(encoding="utf-8")
+
+    assert lock_path.exists()
+    assert "agent-python/requirements.txt` is the human-maintained dependency input" in doc
+    assert "agent-python/requirements.lock` is a thesis reproducibility snapshot" in doc
+    assert ".venv/bin/python -m pip freeze --exclude-editable > requirements.lock" in doc
+    assert ".venv/bin/python -m pip check" in doc
+
+
 def test_makefile_uses_venv_interpreter_for_python_targets():
     repo_root = Path(__file__).resolve().parents[2]
     makefile = (repo_root / "Makefile").read_text(encoding="utf-8")
