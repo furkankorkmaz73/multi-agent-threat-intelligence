@@ -81,6 +81,8 @@ This read-only export creates experimental learned-calibration artifacts from ex
 
 The proxy labels are not ground truth. The experiment does not change production `risk_score`, does not change URLhaus/Dread evidence gates, does not use live Dread crawling, and does not recalibrate confidence. Results are diagnostic and limited by sparse EPSS, KEV, and accepted external-evidence coverage; they should not be presented as proof of real-world exploit prediction.
 
+The learned-calibration bundle also includes legacy high-risk diagnostics and an illustrative legacy dampening counterfactual. These outputs distinguish modern intrinsic criticality floor cases from old high-CVSS retained-severity cases and high-risk cases with no accepted external evidence. They are not production scoring changes. Preserving old CVSS 10 severity can be defensible for intrinsic technical severity, but lack of EPSS, KEV, or accepted external evidence limits operational interpretation. Future age-aware dampening should be evaluated only with stronger labels or asset context.
+
 ## Thesis Artifacts
 
 Run:

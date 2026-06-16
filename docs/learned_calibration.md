@@ -74,6 +74,12 @@ Generated files:
 - `reports/thesis/learned_calibration_limitations_matrix.md`
 - `reports/thesis/learned_calibration_no_overclaim_audit.json`
 - `reports/thesis/learned_calibration_no_overclaim_audit.md`
+- `reports/thesis/legacy_high_risk_diagnostics.csv`
+- `reports/thesis/legacy_high_risk_diagnostics.json`
+- `reports/thesis/legacy_high_risk_diagnostics.md`
+- `reports/thesis/legacy_dampening_counterfactual.csv`
+- `reports/thesis/legacy_dampening_counterfactual.json`
+- `reports/thesis/legacy_dampening_counterfactual.md`
 - `reports/thesis/learned_calibration_quality_report.json`
 - `reports/thesis/learned_calibration_quality_report.md`
 
@@ -130,6 +136,10 @@ The defense Q&A artifact provides concise academic answers for common thesis-def
 The limitations-matrix artifacts consolidate thesis-safe limitations into structured CSV, JSON, and Markdown forms. They map each limitation to interpretive impact, implemented mitigation, future work, and wording that can be reused in thesis text.
 
 The no-overclaim audit artifacts scan learned-calibration docs and generated reports for unsafe claims such as ground-truth prediction, production readiness, autonomous-agent claims, optimal weights, or learned-model replacement of heuristic scoring. Explicitly negated or limitation-framed wording is allowed.
+
+The legacy high-risk diagnostic artifacts separate modern intrinsic criticality floor cases from old high-CVSS retained-severity cases and high-risk records with no accepted external evidence. These diagnostics are not a production scoring change. Preserving old CVSS 10 severity can be defensible for intrinsic technical severity, but lack of EPSS, KEV, or accepted external evidence limits operational interpretation.
+
+The legacy dampening counterfactual artifacts evaluate an illustrative age-aware dampening rule for future work. They do not change production `risk_score`, confidence, or evidence gates. Any future age-aware dampening should be evaluated only with stronger labels, asset context, and explicit review of operational impact.
 
 The quality report artifacts are produced by `make thesis-learned-calibration-quality`. The gate checks required learned-calibration files, JSON parseability, CSV headers, limitation language, experimental framing, unchanged production risk score wording, unchanged evidence-gate wording, and absence of real-world exploitation-proof claims.
 

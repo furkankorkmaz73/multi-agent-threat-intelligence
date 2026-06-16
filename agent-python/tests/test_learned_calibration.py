@@ -643,6 +643,9 @@ def test_export_writes_three_output_files(tmp_path):
     assert "## 1. Purpose of the Learned Calibration Experiment" in appendix_text
     assert "## 16. Recommended Future Work" in appendix_text
     assert "Proxy labels are not ground truth" in appendix_text
+    assert "Legacy high-risk diagnostics distinguish modern intrinsic criticality floor cases" in appendix_text
+    assert "not a production scoring change" in appendix_text
+    assert "Future age-aware dampening should be evaluated only with stronger labels or asset context" in appendix_text
     snapshot_payload = json.loads(runtime_snapshot.read_text(encoding="utf-8"))
     assert snapshot_payload["status"] == "available"
     assert snapshot_payload["row_counts"]["learned_calibration_dataset.csv"] == 1

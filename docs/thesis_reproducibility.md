@@ -103,6 +103,12 @@ reports/thesis/learned_calibration_leakage_checks.json
 reports/thesis/learned_calibration_leakage_checks.md
 reports/thesis/learned_calibration_thesis_section.md
 reports/thesis/learned_calibration_limitations.md
+reports/thesis/legacy_high_risk_diagnostics.csv
+reports/thesis/legacy_high_risk_diagnostics.json
+reports/thesis/legacy_high_risk_diagnostics.md
+reports/thesis/legacy_dampening_counterfactual.csv
+reports/thesis/legacy_dampening_counterfactual.json
+reports/thesis/legacy_dampening_counterfactual.md
 ```
 
 `manifest.json` lists the generated files, record count, and correlation-decision count. It is the first file to inspect when checking that the bundle is complete.
@@ -139,6 +145,8 @@ reports/thesis/learned_calibration_limitations.md
 - `learned_calibration_ablation.*`: deterministic learned-calibration ablation plan and results or skipped status.
 - `learned_calibration_leakage_checks.*`: checks showing `risk_score` and proxy-label fields are excluded from model inputs and production behavior is unchanged.
 - `learned_calibration_thesis_section.md` and `learned_calibration_limitations.md`: conservative thesis prose for the experimental learned-calibration discussion.
+- `legacy_high_risk_diagnostics.*`: diagnostic grouping for modern intrinsic-floor cases, old high-CVSS retained-severity cases, and high-risk records without accepted external evidence.
+- `legacy_dampening_counterfactual.*`: illustrative age-aware dampening counterfactual for future-work discussion; it does not change production scoring.
 
 For the static version of the thesis claim boundaries, see [`docs/thesis_limitations.md`](thesis_limitations.md). For a claim-to-evidence map for thesis writing and defense preparation, see [`docs/thesis_claim_evidence_map.md`](thesis_claim_evidence_map.md). For a chapter-by-chapter English writing plan, see [`docs/thesis_chapter_blueprint.md`](thesis_chapter_blueprint.md). For the experimental learned-calibration export, see [`docs/learned_calibration.md`](learned_calibration.md).
 

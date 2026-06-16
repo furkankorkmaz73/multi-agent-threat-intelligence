@@ -2319,6 +2319,7 @@ def render_learned_calibration_appendix(
         "## 5. Coverage Limitations",
         "",
         f"Coverage remains limited: EPSS availability is `{feasibility_report.get('epss_availability_count', 0)}` and KEV-known count is `{feasibility_report.get('kev_known_count', 0)}` in the exported dataset. Missing EPSS, KEV, or accepted external evidence should be interpreted as coverage limitations rather than proof that a CVE is unimportant.",
+        "Legacy high-risk diagnostics distinguish modern intrinsic criticality floor cases, old high-CVSS retained-severity cases, and high-risk cases with no accepted external evidence. These diagnostics are not a production scoring change. Preserving old CVSS 10 severity can be defensible for intrinsic technical severity, but lack of EPSS, KEV, or accepted external evidence limits operational interpretation.",
         "",
         "## 6. Baseline Ranking Metrics",
         "",
@@ -2362,7 +2363,7 @@ def render_learned_calibration_appendix(
         "",
         "## 16. Recommended Future Work",
         "",
-        f"Future work should add defensible external labels, improve EPSS/KEV and asset-context coverage, evaluate train/test separation on curated datasets, and repeat consistency checks. Current consistency-audit status is `{consistency_audit.get('status', 'unavailable')}`.",
+        f"Future work should add defensible external labels, improve EPSS/KEV and asset-context coverage, evaluate train/test separation on curated datasets, and repeat consistency checks. Future age-aware dampening should be evaluated only with stronger labels or asset context. Current consistency-audit status is `{consistency_audit.get('status', 'unavailable')}`.",
         "",
     ]
     return "\n".join(lines)

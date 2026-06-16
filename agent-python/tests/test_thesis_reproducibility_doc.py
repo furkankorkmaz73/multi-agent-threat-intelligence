@@ -167,5 +167,11 @@ def test_learned_calibration_doc_contains_safe_experimental_framing():
         "confidence remains separate from risk",
         "diagnostic thesis material",
         "learned_calibration_leakage_checks.json",
+        "legacy_high_risk_diagnostics.json",
+        "legacy_dampening_counterfactual.json",
+        "not a production scoring change",
+        "Preserving old CVSS 10 severity can be defensible for intrinsic technical severity",
+        "lack of EPSS, KEV, or accepted external evidence limits operational interpretation",
+        "future age-aware dampening",
     ):
         assert required in text
