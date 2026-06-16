@@ -156,7 +156,7 @@ A deterministic local end-to-end scenario exercises fixture ingestion, worker li
 make thesis-scenario
 ```
 
-The command writes `reports/thesis_scenario_report.json`.
+The command writes `reports/thesis/deterministic/thesis_scenario_report.json`.
 
 For reproducible thesis artifact generation and validation, see [`docs/thesis_reproducibility.md`](docs/thesis_reproducibility.md). For conservative thesis claim boundaries, see [`docs/thesis_limitations.md`](docs/thesis_limitations.md). For claim-to-evidence mapping, see [`docs/thesis_claim_evidence_map.md`](docs/thesis_claim_evidence_map.md). For a chapter-by-chapter English writing plan, see [`docs/thesis_chapter_blueprint.md`](docs/thesis_chapter_blueprint.md). For the experimental learned-calibration analysis, see [`docs/learned_calibration.md`](docs/learned_calibration.md).
 
@@ -174,9 +174,9 @@ The demo flow regenerates the deterministic thesis fixture artifacts, runs the a
 
 Open these files first:
 
-- `reports/thesis/demo_walkthrough.md`
-- `reports/thesis/thesis_defense_pack.md`
-- `reports/thesis/manifest.json`
+- `reports/thesis/deterministic/demo_walkthrough.md`
+- `reports/thesis/deterministic/thesis_defense_pack.md`
+- `reports/thesis/deterministic/manifest.json`
 
 After a live local re-analysis, `make thesis-runtime-diagnostics` writes read-only operational diagnostics to `reports/runtime/`, including confidence distribution, EPSS/KEV coverage, and URLhaus raw/ignored/rejected/accepted candidate accounting. This is an operational sanity check, not the deterministic thesis benchmark.
 
@@ -188,7 +188,7 @@ Run the read-only learned-calibration export:
 make thesis-learned-calibration
 ```
 
-This writes experimental proxy-label, baseline, optional model, leakage-check, and narrative artifacts under `reports/thesis/`. Proxy labels are not ground truth, production `risk_score` is unchanged, evidence gates are unchanged, Dread live crawling is not used, and confidence remains separate from risk. These artifacts are diagnostic thesis material, not proof of real-world exploit prediction.
+This writes experimental proxy-label, baseline, optional model, leakage-check, and narrative artifacts under `reports/thesis/learned_calibration/`. Proxy labels are not ground truth, production `risk_score` is unchanged, evidence gates are unchanged, Dread live crawling is not used, and confidence remains separate from risk. These artifacts are diagnostic thesis material, not proof of real-world exploit prediction.
 
 ## Production-like E2E Scenario
 

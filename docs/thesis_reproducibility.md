@@ -55,7 +55,7 @@ git status --short
 Expected result:
 
 - The Python test suite passes.
-- `make thesis-artifacts` regenerates `reports/thesis/`.
+- `make thesis-artifacts` regenerates `reports/thesis/deterministic/`.
 - `make thesis-artifact-quality` returns a passing JSON summary.
 - `git status --short` shows only intentional working-tree changes, if any.
 
@@ -86,16 +86,17 @@ This reads existing analyzed CVE records and writes proxy-label, baseline, optio
 Generated report outputs use root-level directories:
 
 ```text
-reports/thesis/          thesis fixture and learned-calibration artifacts
-reports/runtime/         read-only runtime diagnostics
-reports/real_benchmark/  optional real/curated benchmark experiments
+reports/thesis/deterministic/          deterministic thesis fixture artifacts
+reports/thesis/learned_calibration/    optional learned-calibration artifacts
+reports/runtime/                       read-only runtime diagnostics
+reports/real_benchmark/                optional real/curated benchmark experiments
 ```
 
 The `agent-python/.cache/real_benchmark/` directory is reserved for ignored local official-format input caches used by optional real/curated benchmark commands.
 
 ## Generated Artifact Inventory
 
-The two bundles share the same root-level `reports/thesis/` directory, but they are produced by different Makefile targets.
+The two bundles use separate subdirectories under root-level `reports/thesis/`, and they are produced by different Makefile targets.
 
 ### A. Deterministic Thesis Bundle
 
@@ -109,32 +110,32 @@ make thesis-demo
 Output:
 
 ```text
-reports/thesis/
+reports/thesis/deterministic/
 ```
 
 Contains deterministic fixture outputs only:
 
 ```text
-reports/thesis/manifest.json
-reports/thesis/scoring_summary.md
-reports/thesis/scoring_distribution.csv
-reports/thesis/scoring_distribution.md
-reports/thesis/scoring_sensitivity.csv
-reports/thesis/scoring_sensitivity.md
-reports/thesis/benchmark_summary.csv
-reports/thesis/benchmark_summary.md
-reports/thesis/ablation_summary.csv
-reports/thesis/ablation_summary.md
-reports/thesis/correlation_decisions.csv
-reports/thesis/case_studies.json
-reports/thesis/risk_explanation_traces.json
-reports/thesis/risk_explanation_traces.md
-reports/thesis/demo_walkthrough.md
-reports/thesis/results_summary.md
-reports/thesis/thesis_results_section.md
-reports/thesis/limitations_and_validity.md
-reports/thesis/thesis_defense_pack.md
-reports/thesis/methodology_summary.md
+reports/thesis/deterministic/manifest.json
+reports/thesis/deterministic/scoring_summary.md
+reports/thesis/deterministic/scoring_distribution.csv
+reports/thesis/deterministic/scoring_distribution.md
+reports/thesis/deterministic/scoring_sensitivity.csv
+reports/thesis/deterministic/scoring_sensitivity.md
+reports/thesis/deterministic/benchmark_summary.csv
+reports/thesis/deterministic/benchmark_summary.md
+reports/thesis/deterministic/ablation_summary.csv
+reports/thesis/deterministic/ablation_summary.md
+reports/thesis/deterministic/correlation_decisions.csv
+reports/thesis/deterministic/case_studies.json
+reports/thesis/deterministic/risk_explanation_traces.json
+reports/thesis/deterministic/risk_explanation_traces.md
+reports/thesis/deterministic/demo_walkthrough.md
+reports/thesis/deterministic/results_summary.md
+reports/thesis/deterministic/thesis_results_section.md
+reports/thesis/deterministic/limitations_and_validity.md
+reports/thesis/deterministic/thesis_defense_pack.md
+reports/thesis/deterministic/methodology_summary.md
 ```
 
 `manifest.json` lists the generated deterministic files, record count, and correlation-decision count. It is the first file to inspect when checking that the deterministic bundle is complete.
@@ -151,39 +152,39 @@ make thesis-learned-calibration-quality
 Output:
 
 ```text
-reports/thesis/
+reports/thesis/learned_calibration/
 ```
 
 Contains experimental learned-calibration, no-overclaim, appendix, reviewer, runtime-snapshot, and legacy diagnostic artifacts:
 
 ```text
-reports/thesis/learned_calibration_dataset.csv
-reports/thesis/learned_calibration_labels.csv
-reports/thesis/learned_calibration_report.json
-reports/thesis/learned_calibration_summary.md
-reports/thesis/learned_calibration_baseline_metrics.json
-reports/thesis/learned_calibration_baseline_metrics.md
-reports/thesis/learned_calibration_predictions.csv
-reports/thesis/learned_calibration_model_report.json
-reports/thesis/learned_calibration_model_summary.md
-reports/thesis/learned_vs_heuristic_comparison.json
-reports/thesis/learned_vs_heuristic_comparison.md
-reports/thesis/learned_calibration_disagreements.csv
-reports/thesis/learned_calibration_disagreements.md
-reports/thesis/learned_calibration_feature_importance.csv
-reports/thesis/learned_calibration_feature_importance.md
-reports/thesis/learned_calibration_ablation.csv
-reports/thesis/learned_calibration_ablation.md
-reports/thesis/learned_calibration_leakage_checks.json
-reports/thesis/learned_calibration_leakage_checks.md
-reports/thesis/learned_calibration_thesis_section.md
-reports/thesis/learned_calibration_limitations.md
-reports/thesis/legacy_high_risk_diagnostics.csv
-reports/thesis/legacy_high_risk_diagnostics.json
-reports/thesis/legacy_high_risk_diagnostics.md
-reports/thesis/legacy_dampening_counterfactual.csv
-reports/thesis/legacy_dampening_counterfactual.json
-reports/thesis/legacy_dampening_counterfactual.md
+reports/thesis/learned_calibration/learned_calibration_dataset.csv
+reports/thesis/learned_calibration/learned_calibration_labels.csv
+reports/thesis/learned_calibration/learned_calibration_report.json
+reports/thesis/learned_calibration/learned_calibration_summary.md
+reports/thesis/learned_calibration/learned_calibration_baseline_metrics.json
+reports/thesis/learned_calibration/learned_calibration_baseline_metrics.md
+reports/thesis/learned_calibration/learned_calibration_predictions.csv
+reports/thesis/learned_calibration/learned_calibration_model_report.json
+reports/thesis/learned_calibration/learned_calibration_model_summary.md
+reports/thesis/learned_calibration/learned_vs_heuristic_comparison.json
+reports/thesis/learned_calibration/learned_vs_heuristic_comparison.md
+reports/thesis/learned_calibration/learned_calibration_disagreements.csv
+reports/thesis/learned_calibration/learned_calibration_disagreements.md
+reports/thesis/learned_calibration/learned_calibration_feature_importance.csv
+reports/thesis/learned_calibration/learned_calibration_feature_importance.md
+reports/thesis/learned_calibration/learned_calibration_ablation.csv
+reports/thesis/learned_calibration/learned_calibration_ablation.md
+reports/thesis/learned_calibration/learned_calibration_leakage_checks.json
+reports/thesis/learned_calibration/learned_calibration_leakage_checks.md
+reports/thesis/learned_calibration/learned_calibration_thesis_section.md
+reports/thesis/learned_calibration/learned_calibration_limitations.md
+reports/thesis/learned_calibration/legacy_high_risk_diagnostics.csv
+reports/thesis/learned_calibration/legacy_high_risk_diagnostics.json
+reports/thesis/learned_calibration/legacy_high_risk_diagnostics.md
+reports/thesis/learned_calibration/legacy_dampening_counterfactual.csv
+reports/thesis/learned_calibration/legacy_dampening_counterfactual.json
+reports/thesis/learned_calibration/legacy_dampening_counterfactual.md
 ```
 
 ## Artifact Roles
@@ -260,7 +261,7 @@ The quality gate validates structure and formatting of the generated bundle. It 
 A passing run prints a JSON summary similar to:
 
 ```json
-{"artifact_dir":"reports/thesis","checked_files":20,"checked_markdown_files":12,"status":"passed"}
+{"artifact_dir":"reports/thesis/deterministic","checked_files":20,"checked_markdown_files":12,"status":"passed"}
 ```
 
 The quality gate does not validate statistical correctness, does not prove real-world generalization, and does not change model behavior.

@@ -40,7 +40,8 @@ def test_thesis_reproducibility_doc_contains_required_commands_and_artifacts():
         "no live network",
     ):
         assert required in text
-    assert "reports/thesis/" in text
+    assert "reports/thesis/deterministic/" in text
+    assert "reports/thesis/learned_calibration/" in text
     assert "reports/runtime/" in text
     assert "agent-python/reports/runtime/" not in text
 
@@ -52,9 +53,12 @@ def test_thesis_reproducibility_doc_splits_artifact_inventories():
     assert "### A. Deterministic Thesis Bundle" in doc
     assert "### B. Optional Learned Calibration Bundle" in doc
     assert "produced by different Makefile targets" in doc
+    assert "reports/thesis/deterministic/" in doc
+    assert "reports/thesis/learned_calibration/" in doc
     assert "Contains deterministic fixture outputs only" in doc
     assert "Contains experimental learned-calibration" in doc
     assert "make thesis-demo produces `learned_calibration_dataset.csv`" not in doc
+    assert "The two bundles share the same root-level `reports/thesis/` directory" not in doc
 
 
 def test_readme_uses_root_level_thesis_report_paths():
@@ -62,11 +66,12 @@ def test_readme_uses_root_level_thesis_report_paths():
     readme = (repo_root / "README.md").read_text(encoding="utf-8")
 
     for required in (
-        "reports/thesis/",
+        "reports/thesis/deterministic/",
+        "reports/thesis/learned_calibration/",
         "reports/runtime/",
         "reports/real_benchmark/",
-        "reports/thesis/demo_walkthrough.md",
-        "reports/thesis/manifest.json",
+        "reports/thesis/deterministic/demo_walkthrough.md",
+        "reports/thesis/deterministic/manifest.json",
     ):
         assert required in readme
 
@@ -84,9 +89,10 @@ def test_thesis_reproducibility_doc_documents_report_roots():
 
     for required in (
         "## Report Root Strategy",
-        "reports/thesis/          thesis fixture and learned-calibration artifacts",
-        "reports/runtime/         read-only runtime diagnostics",
-        "reports/real_benchmark/  optional real/curated benchmark experiments",
+        "reports/thesis/deterministic/          deterministic thesis fixture artifacts",
+        "reports/thesis/learned_calibration/    optional learned-calibration artifacts",
+        "reports/runtime/                       read-only runtime diagnostics",
+        "reports/real_benchmark/                optional real/curated benchmark experiments",
     ):
         assert required in doc
 
@@ -305,12 +311,15 @@ def test_makefile_exposes_thesis_demo_target():
         "thesis-demo:",
         "$(MAKE) thesis-artifacts",
         "$(MAKE) thesis-artifact-quality",
-        "Scenario report: reports/thesis_scenario_report.json",
-        "Artifact directory: reports/thesis",
-        "Manifest: reports/thesis/manifest.json",
-        "Demo walkthrough: reports/thesis/demo_walkthrough.md",
+        "Scenario report: reports/thesis/deterministic/thesis_scenario_report.json",
+        "Artifact directory: reports/thesis/deterministic",
+        "Manifest: reports/thesis/deterministic/manifest.json",
+        "Demo walkthrough: reports/thesis/deterministic/demo_walkthrough.md",
     ):
         assert required in makefile
+
+    assert "--output-dir ../reports/thesis/deterministic" in makefile
+    assert "--output-dir ../reports/thesis/learned_calibration" in makefile
 
 
 def test_makefile_setup_python_creates_expected_virtualenv():

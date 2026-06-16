@@ -4,7 +4,7 @@ This export is an experimental feasibility check for a possible learned calibrat
 
 Optional learned models are diagnostic only. They do not replace the heuristic scorer, they are not written back to MongoDB, and proxy labels are not ground truth. Skipped model training is an expected outcome when labels are not trainable or scikit-learn is unavailable.
 
-The command reads existing analyzed CVE records from MongoDB collection `cve_intel` and writes a flat feature dataset plus a small feasibility report under `reports/thesis/`.
+The command reads existing analyzed CVE records from MongoDB collection `cve_intel` and writes a flat feature dataset plus a small feasibility report under `reports/thesis/learned_calibration/`.
 
 ```bash
 make thesis-learned-calibration
@@ -16,7 +16,7 @@ The underlying CLI also supports:
 ```bash
 cd agent-python
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.learned_calibration \
-  --output-dir ../reports/thesis \
+  --output-dir ../reports/thesis/learned_calibration \
   --limit 0 \
   --strict
 ```
@@ -25,65 +25,65 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m evaluation.learned_
 
 Generated files:
 
-- `reports/thesis/learned_calibration_dataset.csv`
-- `reports/thesis/learned_calibration_labels.csv`
-- `reports/thesis/learned_calibration_report.json`
-- `reports/thesis/learned_calibration_summary.md`
-- `reports/thesis/learned_calibration_baseline_metrics.json`
-- `reports/thesis/learned_calibration_baseline_metrics.md`
-- `reports/thesis/learned_calibration_predictions.csv`
-- `reports/thesis/learned_calibration_model_report.json`
-- `reports/thesis/learned_calibration_model_summary.md`
-- `reports/thesis/learned_vs_heuristic_comparison.json`
-- `reports/thesis/learned_vs_heuristic_comparison.md`
-- `reports/thesis/learned_calibration_disagreements.csv`
-- `reports/thesis/learned_calibration_disagreements.md`
-- `reports/thesis/learned_calibration_feature_importance.csv`
-- `reports/thesis/learned_calibration_feature_importance.md`
-- `reports/thesis/learned_calibration_ablation.csv`
-- `reports/thesis/learned_calibration_ablation.md`
-- `reports/thesis/learned_calibration_leakage_checks.json`
-- `reports/thesis/learned_calibration_leakage_checks.md`
-- `reports/thesis/learned_calibration_thesis_section.md`
-- `reports/thesis/learned_calibration_limitations.md`
-- `reports/thesis/learned_calibration_case_studies.csv`
-- `reports/thesis/learned_calibration_case_studies.md`
-- `reports/thesis/learned_calibration_tables.json`
-- `reports/thesis/learned_calibration_tables.md`
-- `reports/thesis/learned_calibration_manifest.json`
-- `reports/thesis/learned_calibration_manifest.md`
-- `reports/thesis/learned_calibration_proxy_sensitivity.csv`
-- `reports/thesis/learned_calibration_proxy_sensitivity.json`
-- `reports/thesis/learned_calibration_proxy_sensitivity.md`
-- `reports/thesis/learned_calibration_bootstrap_stability.csv`
-- `reports/thesis/learned_calibration_bootstrap_stability.json`
-- `reports/thesis/learned_calibration_bootstrap_stability.md`
-- `reports/thesis/learned_calibration_coverage_strata.csv`
-- `reports/thesis/learned_calibration_coverage_strata.json`
-- `reports/thesis/learned_calibration_coverage_strata.md`
-- `reports/thesis/learned_calibration_negative_controls.json`
-- `reports/thesis/learned_calibration_negative_controls.md`
-- `reports/thesis/learned_calibration_consistency_audit.json`
-- `reports/thesis/learned_calibration_consistency_audit.md`
-- `reports/thesis/learned_calibration_appendix.md`
-- `reports/thesis/learned_calibration_runtime_snapshot.json`
-- `reports/thesis/learned_calibration_runtime_snapshot.md`
-- `reports/thesis/learned_calibration_reviewer_checklist.json`
-- `reports/thesis/learned_calibration_reviewer_checklist.md`
-- `reports/thesis/learned_calibration_defense_qa.md`
-- `reports/thesis/learned_calibration_limitations_matrix.csv`
-- `reports/thesis/learned_calibration_limitations_matrix.json`
-- `reports/thesis/learned_calibration_limitations_matrix.md`
-- `reports/thesis/learned_calibration_no_overclaim_audit.json`
-- `reports/thesis/learned_calibration_no_overclaim_audit.md`
-- `reports/thesis/legacy_high_risk_diagnostics.csv`
-- `reports/thesis/legacy_high_risk_diagnostics.json`
-- `reports/thesis/legacy_high_risk_diagnostics.md`
-- `reports/thesis/legacy_dampening_counterfactual.csv`
-- `reports/thesis/legacy_dampening_counterfactual.json`
-- `reports/thesis/legacy_dampening_counterfactual.md`
-- `reports/thesis/learned_calibration_quality_report.json`
-- `reports/thesis/learned_calibration_quality_report.md`
+- `reports/thesis/learned_calibration/learned_calibration_dataset.csv`
+- `reports/thesis/learned_calibration/learned_calibration_labels.csv`
+- `reports/thesis/learned_calibration/learned_calibration_report.json`
+- `reports/thesis/learned_calibration/learned_calibration_summary.md`
+- `reports/thesis/learned_calibration/learned_calibration_baseline_metrics.json`
+- `reports/thesis/learned_calibration/learned_calibration_baseline_metrics.md`
+- `reports/thesis/learned_calibration/learned_calibration_predictions.csv`
+- `reports/thesis/learned_calibration/learned_calibration_model_report.json`
+- `reports/thesis/learned_calibration/learned_calibration_model_summary.md`
+- `reports/thesis/learned_calibration/learned_vs_heuristic_comparison.json`
+- `reports/thesis/learned_calibration/learned_vs_heuristic_comparison.md`
+- `reports/thesis/learned_calibration/learned_calibration_disagreements.csv`
+- `reports/thesis/learned_calibration/learned_calibration_disagreements.md`
+- `reports/thesis/learned_calibration/learned_calibration_feature_importance.csv`
+- `reports/thesis/learned_calibration/learned_calibration_feature_importance.md`
+- `reports/thesis/learned_calibration/learned_calibration_ablation.csv`
+- `reports/thesis/learned_calibration/learned_calibration_ablation.md`
+- `reports/thesis/learned_calibration/learned_calibration_leakage_checks.json`
+- `reports/thesis/learned_calibration/learned_calibration_leakage_checks.md`
+- `reports/thesis/learned_calibration/learned_calibration_thesis_section.md`
+- `reports/thesis/learned_calibration/learned_calibration_limitations.md`
+- `reports/thesis/learned_calibration/learned_calibration_case_studies.csv`
+- `reports/thesis/learned_calibration/learned_calibration_case_studies.md`
+- `reports/thesis/learned_calibration/learned_calibration_tables.json`
+- `reports/thesis/learned_calibration/learned_calibration_tables.md`
+- `reports/thesis/learned_calibration/learned_calibration_manifest.json`
+- `reports/thesis/learned_calibration/learned_calibration_manifest.md`
+- `reports/thesis/learned_calibration/learned_calibration_proxy_sensitivity.csv`
+- `reports/thesis/learned_calibration/learned_calibration_proxy_sensitivity.json`
+- `reports/thesis/learned_calibration/learned_calibration_proxy_sensitivity.md`
+- `reports/thesis/learned_calibration/learned_calibration_bootstrap_stability.csv`
+- `reports/thesis/learned_calibration/learned_calibration_bootstrap_stability.json`
+- `reports/thesis/learned_calibration/learned_calibration_bootstrap_stability.md`
+- `reports/thesis/learned_calibration/learned_calibration_coverage_strata.csv`
+- `reports/thesis/learned_calibration/learned_calibration_coverage_strata.json`
+- `reports/thesis/learned_calibration/learned_calibration_coverage_strata.md`
+- `reports/thesis/learned_calibration/learned_calibration_negative_controls.json`
+- `reports/thesis/learned_calibration/learned_calibration_negative_controls.md`
+- `reports/thesis/learned_calibration/learned_calibration_consistency_audit.json`
+- `reports/thesis/learned_calibration/learned_calibration_consistency_audit.md`
+- `reports/thesis/learned_calibration/learned_calibration_appendix.md`
+- `reports/thesis/learned_calibration/learned_calibration_runtime_snapshot.json`
+- `reports/thesis/learned_calibration/learned_calibration_runtime_snapshot.md`
+- `reports/thesis/learned_calibration/learned_calibration_reviewer_checklist.json`
+- `reports/thesis/learned_calibration/learned_calibration_reviewer_checklist.md`
+- `reports/thesis/learned_calibration/learned_calibration_defense_qa.md`
+- `reports/thesis/learned_calibration/learned_calibration_limitations_matrix.csv`
+- `reports/thesis/learned_calibration/learned_calibration_limitations_matrix.json`
+- `reports/thesis/learned_calibration/learned_calibration_limitations_matrix.md`
+- `reports/thesis/learned_calibration/learned_calibration_no_overclaim_audit.json`
+- `reports/thesis/learned_calibration/learned_calibration_no_overclaim_audit.md`
+- `reports/thesis/learned_calibration/legacy_high_risk_diagnostics.csv`
+- `reports/thesis/learned_calibration/legacy_high_risk_diagnostics.json`
+- `reports/thesis/learned_calibration/legacy_high_risk_diagnostics.md`
+- `reports/thesis/learned_calibration/legacy_dampening_counterfactual.csv`
+- `reports/thesis/learned_calibration/legacy_dampening_counterfactual.json`
+- `reports/thesis/learned_calibration/legacy_dampening_counterfactual.md`
+- `reports/thesis/learned_calibration/learned_calibration_quality_report.json`
+- `reports/thesis/learned_calibration/learned_calibration_quality_report.md`
 
 The dataset includes exported scoring signals, confidence fields, URLhaus candidate accounting, accepted evidence counts, EPSS/KEV coverage flags, and intrinsic-criticality floor indicators when available.
 

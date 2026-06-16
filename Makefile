@@ -40,33 +40,33 @@ test-python:
 	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m pytest -q -p no:ddtrace
 
 thesis-scenario:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m integration.thesis_scenario --output ../reports/thesis_scenario_report.json
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m integration.thesis_scenario --output ../reports/thesis/deterministic/thesis_scenario_report.json
 
 thesis-artifacts:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m integration.thesis_scenario --output ../reports/thesis_scenario_report.json
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m evaluation.thesis_artifacts --scenario-report ../reports/thesis_scenario_report.json --output-dir ../reports/thesis
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m integration.thesis_scenario --output ../reports/thesis/deterministic/thesis_scenario_report.json
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m evaluation.thesis_artifacts --scenario-report ../reports/thesis/deterministic/thesis_scenario_report.json --output-dir ../reports/thesis/deterministic
 
 thesis-artifact-quality:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m evaluation.thesis_artifact_quality --artifact-dir ../reports/thesis
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m evaluation.thesis_artifact_quality --artifact-dir ../reports/thesis/deterministic
 
 thesis-demo:
 	$(MAKE) thesis-artifacts
 	$(MAKE) thesis-artifact-quality
 	@echo "Thesis demo ready."
-	@echo "Scenario report: reports/thesis_scenario_report.json"
-	@echo "Artifact directory: reports/thesis"
-	@echo "Manifest: reports/thesis/manifest.json"
-	@echo "Demo walkthrough: reports/thesis/demo_walkthrough.md"
+	@echo "Scenario report: reports/thesis/deterministic/thesis_scenario_report.json"
+	@echo "Artifact directory: reports/thesis/deterministic"
+	@echo "Manifest: reports/thesis/deterministic/manifest.json"
+	@echo "Demo walkthrough: reports/thesis/deterministic/demo_walkthrough.md"
 	@echo "Quality gate: passed"
 
 thesis-runtime-diagnostics:
 	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m evaluation.runtime_diagnostics --output-dir ../reports/runtime
 
 thesis-learned-calibration:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m evaluation.learned_calibration --output-dir ../reports/thesis
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m evaluation.learned_calibration --output-dir ../reports/thesis/learned_calibration
 
 thesis-learned-calibration-quality:
-	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m evaluation.learned_calibration_quality --artifact-dir ../reports/thesis
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m evaluation.learned_calibration_quality --artifact-dir ../reports/thesis/learned_calibration
 
 e2e-system:
 	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m integration.e2e_system --output-dir $(HOME)/thesis-artifacts/e2e-system --generated-at 2026-06-10T00:00:00+00:00
