@@ -338,6 +338,11 @@ def test_learned_calibration_doc_contains_safe_experimental_framing():
         "make thesis-learned-calibration",
         "Proxy labels are not ground truth",
         "production `risk_score`",
+        "does not change production `risk_score`",
+        "optional deterministic diagnostic models",
+        "They do not replace the heuristic scorer",
+        "they are not written back to MongoDB",
+        "Skipped model training is an expected outcome",
         "URLhaus/Dread evidence gates",
         "Dread live crawling is not used",
         "confidence remains separate from risk",
@@ -351,3 +356,4 @@ def test_learned_calibration_doc_contains_safe_experimental_framing():
         "future age-aware dampening",
     ):
         assert required in text
+    assert "It does not train a model" not in text

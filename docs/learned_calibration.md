@@ -1,6 +1,8 @@
 # Learned Calibration Feasibility Export
 
-This export is an experimental feasibility check for a possible learned calibration layer. It does not train a model, change production `risk_score`, or change URLhaus/Dread evidence gates.
+This export is an experimental feasibility check for a possible learned calibration layer. It does not change production `risk_score`, confidence, or URLhaus/Dread evidence gates. When scikit-learn and sufficient proxy-label diversity are available, it may train optional deterministic diagnostic models for thesis discussion only.
+
+Optional learned models are diagnostic only. They do not replace the heuristic scorer, they are not written back to MongoDB, and proxy labels are not ground truth. Skipped model training is an expected outcome when labels are not trainable or scikit-learn is unavailable.
 
 The command reads existing analyzed CVE records from MongoDB collection `cve_intel` and writes a flat feature dataset plus a small feasibility report under `reports/thesis/`.
 
