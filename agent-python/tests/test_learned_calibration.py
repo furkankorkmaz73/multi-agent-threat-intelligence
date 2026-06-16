@@ -19,10 +19,12 @@ from evaluation.learned_calibration import (
     LABEL_COLUMNS,
     LIMITATIONS_MATRIX_COLUMNS,
     MODEL_FEATURE_COLUMNS,
+    LEGACY_HIGH_RISK_DIAGNOSTIC_COLUMNS,
     ablation_plan,
     build_proxy_label_row,
     build_proxy_label_rows,
     build_leakage_checks,
+    build_legacy_high_risk_diagnostics,
     build_learned_calibration_manifest,
     build_limitations_matrix,
     build_no_overclaim_audit,
@@ -44,12 +46,14 @@ from evaluation.learned_calibration import (
     export_from_documents,
     extract_feature_importance,
     model_registry,
+    extract_cve_year,
     extract_calibration_row,
     proxy_threshold_grid,
     read_analyzed_cves_from_mongo,
     render_coverage_strata_markdown,
     render_consistency_audit_markdown,
     render_limitations_matrix_markdown,
+    render_legacy_high_risk_diagnostics_markdown,
     render_no_overclaim_audit_markdown,
     render_negative_controls_markdown,
     render_reviewer_checklist_markdown,
@@ -199,6 +203,83 @@ def test_extract_calibration_row_supports_legacy_top_level_shape():
     assert row["coverage_limitations"] == "epss_unavailable;kev_status_unknown"
 
 
+def test_extract_cve_year_handles_valid_and_invalid_ids():
+    assert extract_cve_year("CVE-2008-1447") == 2008
+    assert extract_cve_year("cve-2026-9001") == 2026
+    assert extract_cve_year("not-a-cve") is None
+    assert extract_cve_year("CVE-ABCD-0001") is None
+
+
+def test_legacy_high_risk_diagnostics_group_legacy_and_modern_rows():
+    rows = [
+        _row(
+            cve_id="CVE-2008-0001",
+            cvss_score=10.0,
+            risk_score=7.42,
+            risk_level="HIGH",
+            confidence=0.44,
+            severity_signal=1.0,
+            recency_signal=0.05,
+            nlp_context_signal=0.9,
+            correlation_signal=0.0,
+            coverage_limitations="epss unavailable;kev status unknown",
+        ),
+        _row(
+            cve_id="CVE-2026-9001",
+            cvss_score=10.0,
+            risk_score=8.1,
+            risk_level="HIGH",
+            confidence=0.55,
+            severity_signal=1.0,
+            recency_signal=0.8,
+            nlp_context_signal=1.0,
+            intrinsic_criticality_floor_applied=True,
+        ),
+    ]
+
+    payload = build_legacy_high_risk_diagnostics(rows)
+
+    assert payload["total_analyzed_cves"] == 2
+    assert payload["count_per_diagnostic_group"]["legacy_high_cvss_high_risk"] == 1
+    assert payload["count_per_diagnostic_group"]["legacy_cvss10_high_context"] == 1
+    assert payload["count_per_diagnostic_group"]["low_recency_high_risk"] == 1
+    assert payload["count_per_diagnostic_group"]["modern_intrinsic_floor"] == 1
+    assert payload["count_per_diagnostic_group"]["modern_high_risk_no_external_evidence"] == 1
+    groups = {row["diagnostic_group"] for row in payload["rows"]}
+    assert "legacy_high_cvss_high_risk" in groups
+    assert "modern_intrinsic_floor" in groups
+
+
+def test_legacy_high_risk_diagnostics_interpretation_is_diagnostic_only():
+    payload = build_legacy_high_risk_diagnostics(
+        [
+            _row(
+                cve_id="CVE-2010-0001",
+                cvss_score=10.0,
+                risk_score=7.1,
+                confidence=0.4,
+                recency_signal=0.0,
+                nlp_context_signal=0.9,
+            )
+        ]
+    )
+    text = render_legacy_high_risk_diagnostics_markdown(payload)
+
+    assert "not a production scoring change" in payload["warning"]
+    assert "not evidence of current exploitation" in json.dumps(payload)
+    assert "does not change production `risk_score`" in text
+
+
+def test_legacy_high_risk_diagnostics_empty_input():
+    payload = build_legacy_high_risk_diagnostics([])
+    markdown = render_legacy_high_risk_diagnostics_markdown(payload)
+
+    assert payload["total_analyzed_cves"] == 0
+    assert payload["count_per_diagnostic_group"] == {}
+    assert payload["rows"] == []
+    assert "No CVEs matched the diagnostic groups." in markdown
+
+
 def test_feasibility_report_from_synthetic_rows():
     rows = [extract_calibration_row(_synthetic_doc()) for _ in range(3)]
 
@@ -291,6 +372,9 @@ def test_export_writes_three_output_files(tmp_path):
     limitations_matrix_summary = tmp_path / "learned_calibration_limitations_matrix.md"
     no_overclaim_audit = tmp_path / "learned_calibration_no_overclaim_audit.json"
     no_overclaim_audit_summary = tmp_path / "learned_calibration_no_overclaim_audit.md"
+    legacy_high_risk = tmp_path / "legacy_high_risk_diagnostics.csv"
+    legacy_high_risk_json = tmp_path / "legacy_high_risk_diagnostics.json"
+    legacy_high_risk_summary = tmp_path / "legacy_high_risk_diagnostics.md"
     manifest = tmp_path / "learned_calibration_manifest.json"
     manifest_summary = tmp_path / "learned_calibration_manifest.md"
     assert result["paths"] == {
@@ -343,6 +427,9 @@ def test_export_writes_three_output_files(tmp_path):
         "limitations_matrix_summary": str(limitations_matrix_summary),
         "no_overclaim_audit": str(no_overclaim_audit),
         "no_overclaim_audit_summary": str(no_overclaim_audit_summary),
+        "legacy_high_risk_diagnostics": str(legacy_high_risk),
+        "legacy_high_risk_diagnostics_json": str(legacy_high_risk_json),
+        "legacy_high_risk_diagnostics_summary": str(legacy_high_risk_summary),
         "manifest": str(manifest),
         "manifest_summary": str(manifest_summary),
     }
@@ -395,6 +482,9 @@ def test_export_writes_three_output_files(tmp_path):
     assert limitations_matrix_summary.exists()
     assert no_overclaim_audit.exists()
     assert no_overclaim_audit_summary.exists()
+    assert legacy_high_risk.exists()
+    assert legacy_high_risk_json.exists()
+    assert legacy_high_risk_summary.exists()
     assert manifest.exists()
     assert manifest_summary.exists()
     rows = list(csv.DictReader(dataset.open(encoding="utf-8")))
@@ -471,6 +561,10 @@ def test_export_writes_three_output_files(tmp_path):
     assert matrix_payload["row_count"] >= 11
     no_overclaim_payload = json.loads(no_overclaim_audit.read_text(encoding="utf-8"))
     assert no_overclaim_payload["status"] == "passed"
+    legacy_rows = list(csv.DictReader(legacy_high_risk.open(encoding="utf-8")))
+    assert list(legacy_rows[0].keys()) == LEGACY_HIGH_RISK_DIAGNOSTIC_COLUMNS
+    legacy_payload = json.loads(legacy_high_risk_json.read_text(encoding="utf-8"))
+    assert legacy_payload["warning"].startswith("This diagnostic is not a production scoring change")
     manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert manifest_payload["status"] == "complete"
     assert any(item["group"] == "dataset" for item in manifest_payload["artifacts"])
@@ -1085,6 +1179,9 @@ def test_learned_calibration_manifest_reports_files(tmp_path):
         "learned_calibration_limitations_matrix.md",
         "learned_calibration_no_overclaim_audit.json",
         "learned_calibration_no_overclaim_audit.md",
+        "legacy_high_risk_diagnostics.csv",
+        "legacy_high_risk_diagnostics.json",
+        "legacy_high_risk_diagnostics.md",
     ):
         (tmp_path / name).write_text("x", encoding="utf-8")
 

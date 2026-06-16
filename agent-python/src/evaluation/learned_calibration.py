@@ -199,6 +199,25 @@ LIMITATIONS_MATRIX_COLUMNS = [
     "thesis_safe_wording",
 ]
 
+LEGACY_HIGH_RISK_DIAGNOSTIC_COLUMNS = [
+    "cve_id",
+    "cve_year",
+    "risk_score",
+    "risk_level",
+    "confidence",
+    "cvss_score",
+    "severity_signal",
+    "recency_signal",
+    "nlp_context_signal",
+    "correlation_signal",
+    "intrinsic_criticality_floor_applied",
+    "accepted_urlhaus_count",
+    "accepted_dread_count",
+    "coverage_limitations",
+    "diagnostic_group",
+    "interpretation",
+]
+
 
 def extract_calibration_row(doc: Mapping[str, Any]) -> dict[str, Any] | None:
     source = deepcopy(dict(doc))
@@ -440,6 +459,9 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
     limitations_matrix_summary_path = output / "learned_calibration_limitations_matrix.md"
     no_overclaim_audit_path = output / "learned_calibration_no_overclaim_audit.json"
     no_overclaim_audit_summary_path = output / "learned_calibration_no_overclaim_audit.md"
+    legacy_high_risk_path = output / "legacy_high_risk_diagnostics.csv"
+    legacy_high_risk_json_path = output / "legacy_high_risk_diagnostics.json"
+    legacy_high_risk_summary_path = output / "legacy_high_risk_diagnostics.md"
     label_rows = build_proxy_label_rows(rows)
     baseline_metrics = compute_baseline_metrics(rows, label_rows)
     model_result = train_learned_calibration_models(rows, label_rows)
@@ -554,6 +576,14 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
             writer.writerow({column: row.get(column, "") for column in LIMITATIONS_MATRIX_COLUMNS})
     limitations_matrix_json_path.write_text(json.dumps(limitations_matrix, indent=2, sort_keys=True, default=str), encoding="utf-8")
     limitations_matrix_summary_path.write_text(render_limitations_matrix_markdown(limitations_matrix), encoding="utf-8")
+    legacy_high_risk = build_legacy_high_risk_diagnostics(rows)
+    with legacy_high_risk_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=LEGACY_HIGH_RISK_DIAGNOSTIC_COLUMNS)
+        writer.writeheader()
+        for row in legacy_high_risk["rows"]:
+            writer.writerow({column: row.get(column, "") for column in LEGACY_HIGH_RISK_DIAGNOSTIC_COLUMNS})
+    legacy_high_risk_json_path.write_text(json.dumps(legacy_high_risk, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    legacy_high_risk_summary_path.write_text(render_legacy_high_risk_diagnostics_markdown(legacy_high_risk), encoding="utf-8")
     no_overclaim_audit = build_no_overclaim_audit(output)
     no_overclaim_audit_path.write_text(json.dumps(no_overclaim_audit, indent=2, sort_keys=True, default=str), encoding="utf-8")
     no_overclaim_audit_summary_path.write_text(render_no_overclaim_audit_markdown(no_overclaim_audit), encoding="utf-8")
@@ -649,6 +679,9 @@ def write_outputs(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
         "limitations_matrix_summary": str(limitations_matrix_summary_path),
         "no_overclaim_audit": str(no_overclaim_audit_path),
         "no_overclaim_audit_summary": str(no_overclaim_audit_summary_path),
+        "legacy_high_risk_diagnostics": str(legacy_high_risk_path),
+        "legacy_high_risk_diagnostics_json": str(legacy_high_risk_json_path),
+        "legacy_high_risk_diagnostics_summary": str(legacy_high_risk_summary_path),
         "manifest": str(manifest_path),
         "manifest_summary": str(manifest_summary_path),
     }
@@ -2662,6 +2695,178 @@ def _limitation_row(
     }
 
 
+def build_legacy_high_risk_diagnostics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    diagnostic_rows: list[dict[str, Any]] = []
+    group_values: dict[str, dict[str, list[float]]] = {}
+    for row in rows:
+        cve_year = extract_cve_year(row.get("cve_id"))
+        for group in _legacy_high_risk_groups(row, cve_year):
+            diagnostic = _legacy_high_risk_diagnostic_row(row, cve_year, group)
+            diagnostic_rows.append(diagnostic)
+            values = group_values.setdefault(group, {"risk": [], "confidence": []})
+            values["risk"].append(_safe_float(row.get("risk_score")))
+            values["confidence"].append(_safe_float(row.get("confidence")))
+    diagnostic_rows = sorted(
+        diagnostic_rows,
+        key=lambda item: (item["diagnostic_group"], -_safe_float(item["risk_score"]), item["cve_id"]),
+    )
+    groups = sorted(group_values)
+    return {
+        "status": "available",
+        "total_analyzed_cves": len(rows),
+        "warning": "This diagnostic is not a production scoring change and does not change risk_score, confidence, or evidence gates.",
+        "count_per_diagnostic_group": {
+            group: sum(1 for item in diagnostic_rows if item["diagnostic_group"] == group)
+            for group in groups
+        },
+        "average_risk_per_group": {
+            group: round(mean(group_values[group]["risk"]), 4) if group_values[group]["risk"] else 0.0
+            for group in groups
+        },
+        "average_confidence_per_group": {
+            group: round(mean(group_values[group]["confidence"]), 4) if group_values[group]["confidence"] else 0.0
+            for group in groups
+        },
+        "highest_risk_examples_per_group": {
+            group: [
+                {
+                    "cve_id": item["cve_id"],
+                    "risk_score": item["risk_score"],
+                    "confidence": item["confidence"],
+                    "interpretation": item["interpretation"],
+                }
+                for item in sorted(
+                    (candidate for candidate in diagnostic_rows if candidate["diagnostic_group"] == group),
+                    key=lambda candidate: (-_safe_float(candidate["risk_score"]), candidate["cve_id"]),
+                )[:5]
+            ]
+            for group in groups
+        },
+        "rows": diagnostic_rows,
+    }
+
+
+def render_legacy_high_risk_diagnostics_markdown(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "# Legacy High-Risk Diagnostics",
+        "",
+        "This artifact identifies old or intrinsic-severity-driven CVEs for diagnostic review only.",
+        "It does not change production `risk_score`, confidence, or URLhaus/Dread evidence gates.",
+        "",
+        f"- Total analyzed CVEs: `{payload.get('total_analyzed_cves', 0)}`",
+        f"- Diagnostic rows: `{len(payload.get('rows') or [])}`",
+        f"- Warning: {payload.get('warning', '')}",
+        "",
+        "## Diagnostic Groups",
+        "",
+        "| Group | Count | Average Risk | Average Confidence |",
+        "| --- | ---: | ---: | ---: |",
+    ]
+    counts = payload.get("count_per_diagnostic_group") or {}
+    average_risk = payload.get("average_risk_per_group") or {}
+    average_confidence = payload.get("average_confidence_per_group") or {}
+    if counts:
+        for group in sorted(counts):
+            lines.append(
+                "| {group} | {count} | {risk} | {confidence} |".format(
+                    group=group,
+                    count=counts.get(group, 0),
+                    risk=_format_metric(average_risk.get(group)),
+                    confidence=_format_metric(average_confidence.get(group)),
+                )
+            )
+    else:
+        lines.append("| none | 0 | 0.0 | 0.0 |")
+    lines.extend(["", "## Highest-Risk Examples", ""])
+    examples = payload.get("highest_risk_examples_per_group") or {}
+    if examples:
+        for group in sorted(examples):
+            lines.extend([f"### {group}", ""])
+            for item in examples.get(group) or []:
+                lines.append(
+                    "- `{cve}` risk `{risk}` confidence `{confidence}`: {interpretation}".format(
+                        cve=item.get("cve_id", ""),
+                        risk=item.get("risk_score", ""),
+                        confidence=item.get("confidence", ""),
+                        interpretation=item.get("interpretation", ""),
+                    )
+                )
+            lines.append("")
+    else:
+        lines.append("No CVEs matched the diagnostic groups.")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def extract_cve_year(cve_id: Any) -> int | None:
+    parts = str(cve_id or "").upper().split("-")
+    if len(parts) >= 3 and parts[0] == "CVE":
+        try:
+            year = int(parts[1])
+        except ValueError:
+            return None
+        if 1999 <= year <= 2100:
+            return year
+    return None
+
+
+def _legacy_high_risk_groups(row: Mapping[str, Any], cve_year: int | None = None) -> list[str]:
+    year = cve_year if cve_year is not None else extract_cve_year(row.get("cve_id"))
+    cvss = _safe_float(row.get("cvss_score"))
+    risk = _safe_float(row.get("risk_score"))
+    recency = _safe_float(row.get("recency_signal"))
+    nlp = _safe_float(row.get("nlp_context_signal"))
+    accepted_urlhaus = _safe_int(row.get("accepted_urlhaus_count"))
+    accepted_dread = _safe_int(row.get("accepted_dread_count"))
+    groups: list[str] = []
+    if year is not None and year <= 2010 and cvss >= 9.0 and risk >= 7.0:
+        groups.append("legacy_high_cvss_high_risk")
+    if year is not None and year <= 2010 and cvss == 10.0 and nlp >= 0.8:
+        groups.append("legacy_cvss10_high_context")
+    if recency <= 0.1 and risk >= 7.0:
+        groups.append("low_recency_high_risk")
+    if _truthy(row.get("intrinsic_criticality_floor_applied")):
+        groups.append("modern_intrinsic_floor")
+    if year is not None and year >= 2024 and risk >= 7.0 and accepted_urlhaus == 0 and accepted_dread == 0:
+        groups.append("modern_high_risk_no_external_evidence")
+    return groups
+
+
+def _legacy_high_risk_diagnostic_row(row: Mapping[str, Any], cve_year: int | None, group: str) -> dict[str, Any]:
+    return {
+        "cve_id": row.get("cve_id", ""),
+        "cve_year": cve_year if cve_year is not None else "",
+        "risk_score": row.get("risk_score", ""),
+        "risk_level": row.get("risk_level", ""),
+        "confidence": row.get("confidence", ""),
+        "cvss_score": row.get("cvss_score", ""),
+        "severity_signal": row.get("severity_signal", ""),
+        "recency_signal": row.get("recency_signal", ""),
+        "nlp_context_signal": row.get("nlp_context_signal", ""),
+        "correlation_signal": row.get("correlation_signal", ""),
+        "intrinsic_criticality_floor_applied": row.get("intrinsic_criticality_floor_applied", ""),
+        "accepted_urlhaus_count": row.get("accepted_urlhaus_count", 0),
+        "accepted_dread_count": row.get("accepted_dread_count", 0),
+        "coverage_limitations": row.get("coverage_limitations", ""),
+        "diagnostic_group": group,
+        "interpretation": _legacy_high_risk_interpretation(group),
+    }
+
+
+def _legacy_high_risk_interpretation(group: str) -> str:
+    if group == "legacy_high_cvss_high_risk":
+        return "Legacy CVE remains high because intrinsic CVSS severity is high; operational interpretation is limited without fresh EPSS, KEV, or accepted external evidence."
+    if group == "legacy_cvss10_high_context":
+        return "Legacy CVSS 10 CVE also has strong intrinsic NLP context; this is retained technical severity, not evidence of current exploitation."
+    if group == "low_recency_high_risk":
+        return "Low recency with high risk highlights retained severity and context; review with asset applicability before operational escalation."
+    if group == "modern_intrinsic_floor":
+        return "Modern CVE received the intrinsic criticality floor; confidence remains separate and external-evidence coverage still limits interpretation."
+    if group == "modern_high_risk_no_external_evidence":
+        return "Modern high-risk CVE has no accepted URLhaus or Dread evidence in this export; risk is intrinsic and should be read with coverage limitations."
+    return "Diagnostic grouping only; this row does not change production scoring."
+
+
 def build_no_overclaim_audit(artifact_dir: str | Path) -> dict[str, Any]:
     root = Path(artifact_dir)
     findings: list[dict[str, str]] = []
@@ -3125,6 +3330,9 @@ def _learned_calibration_artifact_specs() -> list[dict[str, str]]:
         {"group": "limitations matrix", "filename": "learned_calibration_limitations_matrix.md", "description": "Readable limitations matrix", "usage": "Thesis-safe limitations table."},
         {"group": "no-overclaim audit", "filename": "learned_calibration_no_overclaim_audit.json", "description": "No-overclaim audit payload", "usage": "Checks learned-calibration docs and reports for unsafe claims."},
         {"group": "no-overclaim audit", "filename": "learned_calibration_no_overclaim_audit.md", "description": "Readable no-overclaim audit", "usage": "Final thesis claim-safety audit."},
+        {"group": "legacy high-risk diagnostics", "filename": "legacy_high_risk_diagnostics.csv", "description": "Legacy high-risk diagnostic rows", "usage": "Diagnostic review of old or intrinsic-severity-driven high-risk CVEs."},
+        {"group": "legacy high-risk diagnostics", "filename": "legacy_high_risk_diagnostics.json", "description": "Legacy high-risk diagnostic payload", "usage": "Machine-readable summary of legacy high-risk diagnostic groups."},
+        {"group": "legacy high-risk diagnostics", "filename": "legacy_high_risk_diagnostics.md", "description": "Readable legacy high-risk diagnostics", "usage": "Thesis discussion of retained severity versus operational evidence coverage."},
     ]
 
 
