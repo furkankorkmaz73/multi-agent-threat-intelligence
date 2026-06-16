@@ -112,6 +112,17 @@ def test_llm_environment_docs_match_enablement_gate():
         assert required in readme
 
 
+def test_frontend_dockerfile_matches_documented_node_runtime():
+    repo_root = Path(__file__).resolve().parents[2]
+    dockerfile = (repo_root / "agent-python" / "frontend" / "Dockerfile").read_text(encoding="utf-8")
+    workflow = (repo_root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+
+    assert "FROM node:24-alpine" in dockerfile
+    assert 'node-version: "24"' in workflow
+    assert "Node 24.x" in readme
+
+
 def test_readme_does_not_claim_auth_is_absent():
     repo_root = Path(__file__).resolve().parents[2]
     readme = (repo_root / "README.md").read_text(encoding="utf-8")
