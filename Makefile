@@ -4,7 +4,7 @@ SHELL := /bin/bash
 
 help:
 	@echo "Available targets:"
-	@echo "  setup-python    Install Python dependencies"
+	@echo "  setup-python    Create Python venv and install dependencies"
 	@echo "  test-python     Run Python test suite"
 	@echo "  thesis-scenario Run deterministic local thesis scenario"
 	@echo "  thesis-artifacts Generate deterministic thesis artifact bundle"
@@ -29,7 +29,9 @@ help:
 	@echo "  clean           Remove common local caches"
 
 setup-python:
-	cd agent-python && python -m pip install -r requirements.txt
+	cd agent-python && python3 -m venv .venv
+	cd agent-python && .venv/bin/python -m pip install --upgrade pip
+	cd agent-python && .venv/bin/python -m pip install -r requirements.txt
 
 test-python:
 	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m pytest -q -p no:ddtrace

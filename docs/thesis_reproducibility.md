@@ -16,6 +16,16 @@ The thesis artifact bundle is generated from a controlled deterministic fixture.
 - Thesis artifacts have a no live network requirement and are generated without live network calls
 - Dread remains optional, bounded, and disabled for deterministic thesis artifact generation
 
+## Local Python Setup
+
+From the repository root, create the expected Python virtual environment and install dependencies with:
+
+```bash
+make setup-python
+```
+
+This command creates `agent-python/.venv` and installs `agent-python/requirements.txt` into that environment. It is safe to rerun when dependencies change.
+
 ## Final Validation Sequence
 
 Run this sequence from a clean checkout or before freezing thesis artifacts:

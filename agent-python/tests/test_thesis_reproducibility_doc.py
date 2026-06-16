@@ -230,6 +230,23 @@ def test_makefile_exposes_thesis_demo_target():
         assert required in makefile
 
 
+def test_makefile_setup_python_creates_expected_virtualenv():
+    repo_root = Path(__file__).resolve().parents[2]
+    makefile = (repo_root / "Makefile").read_text(encoding="utf-8")
+    doc = (repo_root / "docs" / "thesis_reproducibility.md").read_text(encoding="utf-8")
+
+    for required in (
+        "setup-python:",
+        "python3 -m venv .venv",
+        ".venv/bin/python -m pip install --upgrade pip",
+        ".venv/bin/python -m pip install -r requirements.txt",
+    ):
+        assert required in makefile
+
+    assert "make setup-python" in doc
+    assert "creates `agent-python/.venv`" in doc
+
+
 def test_makefile_exposes_runtime_diagnostics_target():
     repo_root = Path(__file__).resolve().parents[2]
     makefile = (repo_root / "Makefile").read_text(encoding="utf-8")
