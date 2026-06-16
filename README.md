@@ -807,15 +807,12 @@ Known limitations:
 
 High-value next steps:
 
-1. **CISA KEV integration**
-   - Add known-exploited vulnerability signal.
-   - Improve CRITICAL risk decisions.
+1. **Broader EPSS/KEV coverage validation**
+   - Validate with larger local EPSS and CISA KEV exports.
+   - Improve freshness handling and operational coverage reporting.
+   - Keep EPSS/KEV unavailable cases explicit in confidence limitations.
 
-2. **EPSS integration**
-   - Add exploitation probability signal.
-   - Improve CVE prioritization quality.
-
-3. **API robustness**
+2. **API robustness**
    - Return graceful degraded responses when MongoDB is unavailable.
    - Improve frontend degraded-state handling.
 

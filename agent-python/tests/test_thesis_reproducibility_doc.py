@@ -60,6 +60,17 @@ def test_readme_does_not_claim_auth_is_absent():
     assert "MongoDB runs without access control in local development" in readme
 
 
+def test_readme_roadmap_frames_epss_kev_as_coverage_validation():
+    repo_root = Path(__file__).resolve().parents[2]
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+
+    assert "**CISA KEV integration**" not in readme
+    assert "**EPSS integration**" not in readme
+    assert "Broader EPSS/KEV coverage validation" in readme
+    assert "Validate with larger local EPSS and CISA KEV exports" in readme
+    assert "Keep EPSS/KEV unavailable cases explicit in confidence limitations" in readme
+
+
 def test_thesis_limitations_doc_contains_required_sections():
     repo_root = Path(__file__).resolve().parents[2]
     doc_path = repo_root / "docs" / "thesis_limitations.md"
