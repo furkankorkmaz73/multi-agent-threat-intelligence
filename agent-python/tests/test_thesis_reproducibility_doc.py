@@ -64,6 +64,7 @@ def test_readme_uses_root_level_thesis_report_paths():
     for required in (
         "reports/thesis/",
         "reports/runtime/",
+        "reports/real_benchmark/",
         "reports/thesis/demo_walkthrough.md",
         "reports/thesis/manifest.json",
     ):
@@ -72,8 +73,22 @@ def test_readme_uses_root_level_thesis_report_paths():
     for stale in (
         "agent-python/reports/thesis/",
         "agent-python/reports/runtime/",
+        "agent-python/reports/real_benchmark/",
     ):
         assert stale not in readme
+
+
+def test_thesis_reproducibility_doc_documents_report_roots():
+    repo_root = Path(__file__).resolve().parents[2]
+    doc = (repo_root / "docs" / "thesis_reproducibility.md").read_text(encoding="utf-8")
+
+    for required in (
+        "## Report Root Strategy",
+        "reports/thesis/          thesis fixture and learned-calibration artifacts",
+        "reports/runtime/         read-only runtime diagnostics",
+        "reports/real_benchmark/  optional real/curated benchmark experiments",
+    ):
+        assert required in doc
 
 
 def test_readme_docker_section_documents_env_file_setup():

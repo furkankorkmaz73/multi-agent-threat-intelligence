@@ -81,6 +81,18 @@ make thesis-learned-calibration
 
 This reads existing analyzed CVE records and writes proxy-label, baseline, optional model, leakage-check, and narrative artifacts. It does not change production `risk_score`, does not alter evidence gates, does not use live Dread crawling, and does not treat proxy labels as ground truth.
 
+## Report Root Strategy
+
+Generated report outputs use root-level directories:
+
+```text
+reports/thesis/          thesis fixture and learned-calibration artifacts
+reports/runtime/         read-only runtime diagnostics
+reports/real_benchmark/  optional real/curated benchmark experiments
+```
+
+The `agent-python/.cache/real_benchmark/` directory is reserved for ignored local official-format input caches used by optional real/curated benchmark commands.
+
 ## Generated Artifact Inventory
 
 The two bundles share the same root-level `reports/thesis/` directory, but they are produced by different Makefile targets.

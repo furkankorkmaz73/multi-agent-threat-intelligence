@@ -230,7 +230,7 @@ Generate model results and immediately run the KEV/EPSS benchmark with local off
 make real-cve-export REAL_CVE_FLAGS="--cve-file .cache/real_benchmark/nvd_curated_cves.json --offline --run-benchmark --kev-file .cache/real_benchmark/cisa_kev.json --epss-file .cache/real_benchmark/first_epss.csv"
 ```
 
-The model export writes `model_results.json`, `model_results.csv`, `analysis_failures.json`, and `run_metadata.json` under `agent-python/reports/real_benchmark/model_export/`.
+The model export writes `model_results.json`, `model_results.csv`, `analysis_failures.json`, and `run_metadata.json` under `reports/real_benchmark/model_export/`.
 
 Build and evaluate the expanded balanced benchmark from local official-format NVD, KEV, and EPSS files:
 
@@ -238,21 +238,21 @@ Build and evaluate the expanded balanced benchmark from local official-format NV
 make balanced-benchmark BALANCED_FLAGS="--nvd-file .cache/real_benchmark/nvd_candidates.json --kev-file .cache/real_benchmark/cisa_kev.json --epss-file .cache/real_benchmark/first_epss.csv --model-results reports/real_benchmark/model_export/model_results.json"
 ```
 
-The balanced runner writes `balanced_benchmark_definition.json`, `benchmark_summary.json`, `benchmark_records.csv`, `baseline_metrics.csv`, `ablation_metrics.csv`, `ablation_records.csv`, `benchmark_diagnostics.json`, and `case_candidates.json` under `agent-python/reports/real_benchmark/balanced/`.
+The balanced runner writes `balanced_benchmark_definition.json`, `benchmark_summary.json`, `benchmark_records.csv`, `baseline_metrics.csv`, `ablation_metrics.csv`, `ablation_records.csv`, `benchmark_diagnostics.json`, and `case_candidates.json` under `reports/real_benchmark/balanced/`.
 
 Online refresh:
 
 ```bash
-make real-benchmark MODEL_RESULTS=reports/model_results.json REAL_BENCHMARK_FLAGS=--refresh
+make real-benchmark MODEL_RESULTS=reports/real_benchmark/model_export/model_results.json REAL_BENCHMARK_FLAGS=--refresh
 ```
 
 Offline cached run:
 
 ```bash
-make real-benchmark MODEL_RESULTS=reports/model_results.json REAL_BENCHMARK_FLAGS=--offline
+make real-benchmark MODEL_RESULTS=reports/real_benchmark/model_export/model_results.json REAL_BENCHMARK_FLAGS=--offline
 ```
 
-The runner writes `benchmark_summary.json`, `benchmark_records.csv`, and `baseline_metrics.csv` under `agent-python/reports/real_benchmark/`. Official datasets are cached under `agent-python/.cache/real_benchmark/`; both locations are ignored local outputs.
+The runner writes `benchmark_summary.json`, `benchmark_records.csv`, and `baseline_metrics.csv` under `reports/real_benchmark/`. Official datasets are cached under `agent-python/.cache/real_benchmark/`; both locations are ignored local outputs.
 
 ---
 
