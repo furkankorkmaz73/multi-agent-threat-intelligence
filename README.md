@@ -418,13 +418,15 @@ The project includes optional OpenAI-compatible LLM support.
 
 LLM usage is not required for the pipeline to work.
 
-If `OPENAI_API_KEY` is configured, the Python analyzer can use the LLM helper for:
+LLM calls are disabled by default. To enable assistive extraction, set `LLM_ENABLED=1` and provide either `LLM_API_KEY` or the backward-compatible `OPENAI_API_KEY` alias. An API key alone does not enable LLM calls.
+
+When enabled, the Python analyzer can use the LLM helper for:
 
 - CVE structured field extraction
 - Dread post classification
 - short analyst-style explanation generation
 
-If no API key is configured:
+If LLM support is disabled or no API key is configured:
 
 - the LLM client is disabled
 - LLM helper functions return empty values
@@ -433,9 +435,13 @@ If no API key is configured:
 Environment variables:
 
 ```bash
-OPENAI_API_KEY=your_key_here
-OPENAI_BASE_URL=
+LLM_ENABLED=1
+LLM_API_KEY=your_key_here
+LLM_BASE_URL=
 LLM_MODEL=gpt-4o-mini
+# Backward-compatible aliases:
+OPENAI_API_KEY=
+OPENAI_BASE_URL=
 ```
 
 This makes the project:

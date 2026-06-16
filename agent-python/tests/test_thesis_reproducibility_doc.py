@@ -89,6 +89,29 @@ def test_agent_python_env_example_matches_current_scoring_default():
     assert f"BASE_CVSS_MULTIPLIER={expected}" in env_text
 
 
+def test_llm_environment_docs_match_enablement_gate():
+    repo_root = Path(__file__).resolve().parents[2]
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+    root_env = (repo_root / ".env.example").read_text(encoding="utf-8")
+    python_env = (repo_root / "agent-python" / ".env.example").read_text(encoding="utf-8")
+
+    for env_text in (root_env, python_env):
+        assert "LLM_ENABLED=0" in env_text
+        assert "LLM_API_KEY=" in env_text
+        assert "LLM_BASE_URL" in env_text
+        assert "OPENAI_API_KEY=" in env_text
+        assert "OPENAI_BASE_URL=" in env_text
+        assert "API keys alone do not enable LLM calls" in env_text
+
+    for required in (
+        "LLM_ENABLED=1",
+        "LLM_API_KEY",
+        "OPENAI_API_KEY",
+        "An API key alone does not enable LLM calls",
+    ):
+        assert required in readme
+
+
 def test_readme_does_not_claim_auth_is_absent():
     repo_root = Path(__file__).resolve().parents[2]
     readme = (repo_root / "README.md").read_text(encoding="utf-8")
