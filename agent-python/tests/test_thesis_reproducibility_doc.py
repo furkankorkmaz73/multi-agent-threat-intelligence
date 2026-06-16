@@ -370,6 +370,23 @@ def test_makefile_uses_venv_interpreter_for_python_targets():
     assert " uvicorn " not in run_api.group(1)
 
 
+def test_optional_sklearn_tests_are_explicitly_gated():
+    repo_root = Path(__file__).resolve().parents[2]
+    makefile = (repo_root / "Makefile").read_text(encoding="utf-8")
+    learned_tests = (repo_root / "agent-python" / "tests" / "test_learned_calibration.py").read_text(encoding="utf-8")
+    learned_doc = (repo_root / "docs" / "learned_calibration.md").read_text(encoding="utf-8")
+    repro_doc = (repo_root / "docs" / "thesis_reproducibility.md").read_text(encoding="utf-8")
+
+    assert "test-python-optional-ml:" in makefile
+    assert "SKLEARN_OPTIONAL_TESTS=1" in makefile
+    assert "tests/test_learned_calibration.py" in makefile
+    assert "SKLEARN_OPTIONAL_TESTS" in learned_tests
+    assert "set SKLEARN_OPTIONAL_TESTS=1 to run optional sklearn tests" in learned_tests
+    for doc in (learned_doc, repro_doc):
+        assert "Default `make test-python` does not require scikit-learn" in doc
+        assert "make test-python-optional-ml" in doc
+
+
 def test_makefile_exposes_runtime_diagnostics_target():
     repo_root = Path(__file__).resolve().parents[2]
     makefile = (repo_root / "Makefile").read_text(encoding="utf-8")

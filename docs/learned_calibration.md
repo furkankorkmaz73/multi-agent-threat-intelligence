@@ -4,6 +4,12 @@ This export is an experimental feasibility check for a possible learned calibrat
 
 Optional learned models are diagnostic only. They do not replace the heuristic scorer, they are not written back to MongoDB, and proxy labels are not ground truth. Skipped model training is an expected outcome when labels are not trainable or scikit-learn is unavailable.
 
+Default `make test-python` does not require scikit-learn. Optional learned-calibration ML tests require `SKLEARN_OPTIONAL_TESTS=1` and scikit-learn installed, and can be run with:
+
+```bash
+make test-python-optional-ml
+```
+
 The command reads existing analyzed CVE records from MongoDB collection `cve_intel` and writes a flat feature dataset plus a small feasibility report under `reports/thesis/learned_calibration/`.
 
 ```bash

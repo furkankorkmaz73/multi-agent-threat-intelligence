@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from copy import deepcopy
 
 import pytest
@@ -65,6 +66,12 @@ from evaluation.learned_calibration import (
     summarize_bootstrap_metrics,
     train_learned_calibration_models,
 )
+
+
+def _require_optional_sklearn_tests():
+    if os.getenv("SKLEARN_OPTIONAL_TESTS") != "1":
+        pytest.skip("set SKLEARN_OPTIONAL_TESTS=1 to run optional sklearn tests")
+    return pytest.importorskip("sklearn")
 
 
 def _synthetic_doc() -> dict:
@@ -879,7 +886,7 @@ def test_model_registry_uses_fixed_random_seed_for_available_models():
 
 
 def test_model_training_single_class_skip_if_sklearn_available():
-    pytest.importorskip("sklearn")
+    _require_optional_sklearn_tests()
     rows = [_row(cve_id=f"CVE-{index}", cvss_score=5.0 + index) for index in range(12)]
     labels = [
         {**build_proxy_label_row(row), "proxy_binary_high_strategy_a": 0, "proxy_label_strategy_a": "low"}
@@ -893,7 +900,7 @@ def test_model_training_single_class_skip_if_sklearn_available():
 
 
 def test_model_training_is_deterministic_if_sklearn_available():
-    pytest.importorskip("sklearn")
+    _require_optional_sklearn_tests()
     rows = [
         _row(
             cve_id=f"CVE-{index:04d}",

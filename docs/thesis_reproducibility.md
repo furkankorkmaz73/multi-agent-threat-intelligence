@@ -59,6 +59,12 @@ Expected result:
 - `make thesis-artifact-quality` returns a passing JSON summary.
 - `git status --short` shows only intentional working-tree changes, if any.
 
+Default `make test-python` does not require scikit-learn. Optional learned-calibration ML tests require `SKLEARN_OPTIONAL_TESTS=1` and scikit-learn installed:
+
+```bash
+make test-python-optional-ml
+```
+
 For a demo-oriented flow that runs artifact generation and the quality gate together, use:
 
 ```bash
