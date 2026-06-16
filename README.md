@@ -4,6 +4,8 @@ An explainable threat intelligence platform for collecting, analyzing, prioritiz
 
 The project combines a Go-based collector, a Python analysis engine, MongoDB persistence, FastAPI APIs, and a React analyst console. It demonstrates practical security engineering patterns: multi-source ingestion, explainable risk scoring, evidence-quality confidence, model diagnostics, and analyst-oriented triage workflows.
 
+For thesis use, the architecture should be read as multi-agent-inspired / agent-supported and modular, not as a fully autonomous LLM-agent system. Scoring, confidence estimation, and evidence-gate decisions are deterministic and explainable. The deterministic fixture supports behavioral validation, not real-world statistical validation. This repository is a research prototype, not a production SOC platform.
+
 ---
 
 ## What This Project Does

@@ -60,6 +60,20 @@ def test_readme_does_not_claim_auth_is_absent():
     assert "MongoDB runs without access control in local development" in readme
 
 
+def test_readme_front_matter_has_thesis_claim_boundaries():
+    repo_root = Path(__file__).resolve().parents[2]
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+
+    for required in (
+        "multi-agent-inspired / agent-supported",
+        "not as a fully autonomous LLM-agent system",
+        "Scoring, confidence estimation, and evidence-gate decisions are deterministic and explainable",
+        "behavioral validation, not real-world statistical validation",
+        "research prototype, not a production SOC platform",
+    ):
+        assert required in readme
+
+
 def test_readme_roadmap_frames_epss_kev_as_coverage_validation():
     repo_root = Path(__file__).resolve().parents[2]
     readme = (repo_root / "README.md").read_text(encoding="utf-8")
