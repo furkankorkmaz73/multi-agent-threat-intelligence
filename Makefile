@@ -96,7 +96,9 @@ build-frontend:
 	cd agent-python/frontend && npm run build
 
 test-go:
-	cd agent-go && go test ./...
+	cd agent-go && GOTOOLCHAIN=$(GOTOOLCHAIN) go mod verify
+	cd agent-go && GOTOOLCHAIN=$(GOTOOLCHAIN) go test ./...
+	cd agent-go && GOTOOLCHAIN=$(GOTOOLCHAIN) go vet ./...
 
 docker-up:
 	docker compose up --build

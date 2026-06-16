@@ -346,6 +346,22 @@ def test_makefile_exposes_runtime_diagnostics_target():
         assert required in makefile
 
 
+def test_makefile_go_target_matches_ci_toolchain_commands():
+    repo_root = Path(__file__).resolve().parents[2]
+    makefile = (repo_root / "Makefile").read_text(encoding="utf-8")
+
+    assert "GOTOOLCHAIN ?= go1.24.0" in makefile
+    test_go = re.search(r"^test-go:\n((?:\t.*\n)+)", makefile, flags=re.MULTILINE)
+    assert test_go is not None
+    block = test_go.group(1)
+    for required in (
+        "GOTOOLCHAIN=$(GOTOOLCHAIN) go mod verify",
+        "GOTOOLCHAIN=$(GOTOOLCHAIN) go test ./...",
+        "GOTOOLCHAIN=$(GOTOOLCHAIN) go vet ./...",
+    ):
+        assert required in block
+
+
 def test_learned_calibration_doc_contains_safe_experimental_framing():
     repo_root = Path(__file__).resolve().parents[2]
     doc_path = repo_root / "docs" / "learned_calibration.md"
