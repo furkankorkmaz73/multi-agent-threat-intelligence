@@ -155,6 +155,10 @@ Rows are sorted deterministically by CVE identifier. The exporter accepts the cu
 
 The JSON report includes both legacy top-level counts and structured sections for coverage, evidence counts, dataset columns, and missing-feature accounting. Missing EPSS/KEV or accepted external evidence should be interpreted as coverage limitations, not as proof that learned calibration is valid or invalid by itself.
 
+## Maintainability Future Work
+
+The learned-calibration evaluation module is intentionally kept as a single artifact-generation module for thesis freeze stability. A future engineering refactor could split dataset extraction, proxy labels, feature construction, model diagnostics, leakage checks, reporting, and CLI orchestration into separate modules.
+
 ## Interpretation
 
 The export is only a feasibility artifact. Proxy labels are not ground truth, Dread live crawling is not used, and confidence remains separate from risk. A future learned calibration layer would require defensible labels, stronger EPSS/KEV coverage, careful train/test separation, and validation that it does not weaken deterministic evidence gates.

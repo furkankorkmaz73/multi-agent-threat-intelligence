@@ -411,6 +411,22 @@ def test_optional_sklearn_tests_are_explicitly_gated():
         assert "make test-python-optional-ml" in doc
 
 
+def test_learned_calibration_maintainability_future_work_is_documented():
+    repo_root = Path(__file__).resolve().parents[2]
+    doc = (repo_root / "docs" / "learned_calibration.md").read_text(encoding="utf-8")
+
+    assert "## Maintainability Future Work" in doc
+    assert (
+        "The learned-calibration evaluation module is intentionally kept as a single "
+        "artifact-generation module for thesis freeze stability."
+    ) in doc
+    assert (
+        "A future engineering refactor could split dataset extraction, proxy labels, "
+        "feature construction, model diagnostics, leakage checks, reporting, and CLI "
+        "orchestration into separate modules."
+    ) in doc
+
+
 def test_makefile_exposes_runtime_diagnostics_target():
     repo_root = Path(__file__).resolve().parents[2]
     makefile = (repo_root / "Makefile").read_text(encoding="utf-8")
