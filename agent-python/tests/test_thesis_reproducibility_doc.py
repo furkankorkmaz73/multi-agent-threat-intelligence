@@ -45,6 +45,18 @@ def test_thesis_reproducibility_doc_contains_required_commands_and_artifacts():
     assert "agent-python/reports/runtime/" not in text
 
 
+def test_thesis_reproducibility_doc_splits_artifact_inventories():
+    repo_root = Path(__file__).resolve().parents[2]
+    doc = (repo_root / "docs" / "thesis_reproducibility.md").read_text(encoding="utf-8")
+
+    assert "### A. Deterministic Thesis Bundle" in doc
+    assert "### B. Optional Learned Calibration Bundle" in doc
+    assert "produced by different Makefile targets" in doc
+    assert "Contains deterministic fixture outputs only" in doc
+    assert "Contains experimental learned-calibration" in doc
+    assert "make thesis-demo produces `learned_calibration_dataset.csv`" not in doc
+
+
 def test_readme_uses_root_level_thesis_report_paths():
     repo_root = Path(__file__).resolve().parents[2]
     readme = (repo_root / "README.md").read_text(encoding="utf-8")
