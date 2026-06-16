@@ -160,6 +160,8 @@ The command writes `agent-python/reports/thesis_scenario_report.json`.
 
 For reproducible thesis artifact generation and validation, see [`docs/thesis_reproducibility.md`](docs/thesis_reproducibility.md). For conservative thesis claim boundaries, see [`docs/thesis_limitations.md`](docs/thesis_limitations.md). For claim-to-evidence mapping, see [`docs/thesis_claim_evidence_map.md`](docs/thesis_claim_evidence_map.md). For a chapter-by-chapter English writing plan, see [`docs/thesis_chapter_blueprint.md`](docs/thesis_chapter_blueprint.md). For the experimental learned-calibration analysis, see [`docs/learned_calibration.md`](docs/learned_calibration.md).
 
+Tested thesis-reproducibility assumptions are Python 3.11, Go 1.24.x, Node 24.x, MongoDB 7.x, `agent-python/.venv`, and `PYTHONPATH=src`.
+
 ## Reproducible Thesis Demo
 
 Run the deterministic thesis demo flow:

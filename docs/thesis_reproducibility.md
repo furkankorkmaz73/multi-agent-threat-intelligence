@@ -7,6 +7,10 @@ The thesis artifact bundle is generated from a controlled deterministic fixture.
 ## Environment Assumptions
 
 - Repository root: `~/Coding/multi-agent-threat-intelligence`
+- Tested Python runtime: Python 3.11
+- Tested Go runtime: Go 1.24.x
+- Tested Node runtime: Node 24.x
+- Tested local database: MongoDB 7.x
 - Python virtual environment: `agent-python/.venv`
 - Python imports use `PYTHONPATH=src`
 - Thesis artifacts have a no live network requirement and are generated without live network calls
