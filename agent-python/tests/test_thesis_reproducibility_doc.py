@@ -339,6 +339,30 @@ def test_makefile_setup_python_creates_expected_virtualenv():
     assert "creates `agent-python/.venv`" in doc
 
 
+def test_makefile_setup_python_locked_uses_requirements_lock():
+    repo_root = Path(__file__).resolve().parents[2]
+    makefile = (repo_root / "Makefile").read_text(encoding="utf-8")
+    repro_doc = (repo_root / "docs" / "thesis_reproducibility.md").read_text(encoding="utf-8")
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+
+    setup_target = re.search(r"setup-python-locked:\n((?:\t.+\n)+)", makefile)
+    assert setup_target is not None
+    body = setup_target.group(1)
+    assert "python3 -m venv .venv" in body
+    assert ".venv/bin/python -m pip install --upgrade pip" in body
+    assert ".venv/bin/python -m pip install -r requirements.lock" in body
+    assert ".venv/bin/python -m pip check" in body
+    assert ".venv/bin/python -m pip install -r requirements.txt" not in body
+
+    assert "setup-python` is the normal development setup from" in repro_doc
+    assert "setup-python-locked` is the thesis reproducibility setup from" in repro_doc
+    for doc in (repro_doc, readme):
+        assert "make setup-python" in doc
+        assert "make setup-python-locked" in doc
+        assert "requirements.txt" in doc
+        assert "requirements.lock" in doc
+
+
 def test_python_dependency_lock_snapshot_is_documented():
     repo_root = Path(__file__).resolve().parents[2]
     lock_path = repo_root / "agent-python" / "requirements.lock"

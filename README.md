@@ -162,6 +162,8 @@ For reproducible thesis artifact generation and validation, see [`docs/thesis_re
 
 Tested thesis-reproducibility assumptions are Python 3.11, Go 1.24.x, Node 24.x, MongoDB 7.x, `agent-python/.venv`, and `PYTHONPATH=src`.
 
+Use `make setup-python` for normal development setup from `agent-python/requirements.txt`. Use `make setup-python-locked` when recreating the thesis environment from the pinned `agent-python/requirements.lock` snapshot.
+
 ## Reproducible Thesis Demo
 
 Run the deterministic thesis demo flow:

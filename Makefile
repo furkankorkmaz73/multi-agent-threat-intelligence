@@ -3,11 +3,12 @@ PYTHON ?= .venv/bin/python
 UVICORN ?= .venv/bin/uvicorn
 GOTOOLCHAIN ?= go1.24.0
 
-.PHONY: help setup-python test-python test-python-optional-ml thesis-scenario thesis-artifacts thesis-artifact-quality thesis-demo thesis-runtime-diagnostics thesis-learned-calibration thesis-learned-calibration-quality e2e-system real-cve-export real-benchmark balanced-benchmark run-api run-worker setup-frontend run-frontend build-frontend test-go docker-up docker-worker docker-down clean
+.PHONY: help setup-python setup-python-locked test-python test-python-optional-ml thesis-scenario thesis-artifacts thesis-artifact-quality thesis-demo thesis-runtime-diagnostics thesis-learned-calibration thesis-learned-calibration-quality e2e-system real-cve-export real-benchmark balanced-benchmark run-api run-worker setup-frontend run-frontend build-frontend test-go docker-up docker-worker docker-down clean
 
 help:
 	@echo "Available targets:"
 	@echo "  setup-python    Create Python venv and install dependencies"
+	@echo "  setup-python-locked Create Python venv from requirements.lock"
 	@echo "  test-python     Run Python test suite"
 	@echo "  test-python-optional-ml Run optional sklearn learned-calibration tests"
 	@echo "  thesis-scenario Run deterministic local thesis scenario"
@@ -36,6 +37,12 @@ setup-python:
 	cd agent-python && python3 -m venv .venv
 	cd agent-python && .venv/bin/python -m pip install --upgrade pip
 	cd agent-python && .venv/bin/python -m pip install -r requirements.txt
+
+setup-python-locked:
+	cd agent-python && python3 -m venv .venv
+	cd agent-python && .venv/bin/python -m pip install --upgrade pip
+	cd agent-python && .venv/bin/python -m pip install -r requirements.lock
+	cd agent-python && .venv/bin/python -m pip check
 
 test-python:
 	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m pytest -q -p no:ddtrace

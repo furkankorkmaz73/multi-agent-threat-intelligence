@@ -26,6 +26,14 @@ make setup-python
 
 This command creates `agent-python/.venv` and installs `agent-python/requirements.txt` into that environment. It is safe to rerun when dependencies change.
 
+For thesis reproducibility from the pinned snapshot, use:
+
+```bash
+make setup-python-locked
+```
+
+`setup-python` is the normal development setup from `requirements.txt`. `setup-python-locked` is the thesis reproducibility setup from `requirements.lock` and runs `pip check` after installation.
+
 `agent-python/requirements.txt` is the human-maintained dependency input used by setup and CI. `agent-python/requirements.lock` is a thesis reproducibility snapshot generated from the tested Python 3.11 virtual environment with:
 
 ```bash
