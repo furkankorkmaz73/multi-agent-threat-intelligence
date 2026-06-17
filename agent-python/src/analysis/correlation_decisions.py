@@ -273,7 +273,7 @@ def _accepted_reason(
     min_lexical_overlap: float,
     min_semantic_support: float,
 ) -> str:
-    if exact_cve:
+    if exact_cve and source != "dread":
         return "exact_cve"
 
     if source == "urlhaus":
@@ -313,6 +313,8 @@ def _accepted_reason(
 
 
 def _requires_manual_review(candidate: CorrelationCandidate) -> bool:
+    if candidate.source == "dread" and candidate.exact_cve:
+        return True
     if candidate.exact_cve:
         return False
     if candidate.source == "urlhaus":

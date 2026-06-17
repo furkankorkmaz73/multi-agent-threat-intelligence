@@ -934,7 +934,7 @@ def _limitations_and_validity_markdown() -> str:
             "",
             "## Dread Evidence Limitation",
             "",
-            "Dread is optional, experimental, bounded, default-off, and not treated as ground truth. Dread-only evidence does not imply high confidence or CRITICAL risk by itself. Corroborated Dread can support explanations modestly but does not override CVSS, EPSS, KEV, or accepted structured evidence.",
+            "Dread is optional, experimental, bounded, default-off, and not treated as ground truth. Dread-only evidence does not imply high confidence or CRITICAL risk by itself. Dread remains diagnostic/manual-review evidence around stronger signals and does not override CVSS, EPSS, KEV, or accepted structured evidence.",
             "",
             "## Asset-Aware Operational Risk Limitation",
             "",
@@ -1461,7 +1461,10 @@ def _case_note(case: Mapping[str, Any]) -> str:
     if case.get("case") == "dread_only_manual_review":
         return f"Dread-only evidence remains manual review ({case.get('manual_review_decisions', 0)} decision) with cap {case.get('confidence_cap_reason', '')}."
     if case.get("case") == "dread_corroborated_by_urlhaus_or_kev":
-        return f"Corroborated Dread support is bounded by {case.get('confidence_cap_reason', '')}."
+        return (
+            f"Dread exact-CVE support remains manual review "
+            f"({case.get('manual_review_dread_decisions', 0)} decision) with cap {case.get('confidence_cap_reason', '')}."
+        )
     if case.get("case") == "weak_dread_rejected":
         return f"Weak Dread mention rejected ({case.get('rejected_dread_decisions', 0)} decision)."
     if case.get("case") == "keyword_only_false_positive_rejected":
