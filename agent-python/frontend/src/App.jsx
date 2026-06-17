@@ -35,7 +35,7 @@ const ANALYZE_SOURCES = ["cve", "urlhaus", "dread"];
 const TABS = [
   { id: "findings", label: "Findings" },
   { id: "evaluation", label: "Evaluation" },
-  { id: "status", label: "Status" },
+  { id: "operations", label: "Operations" },
   { id: "adhoc", label: "Ad-hoc analysis" },
 ];
 
@@ -335,7 +335,15 @@ function Overview({ health, status, evaluationDiagnostics }) {
   );
 }
 
-export function StatusPanel({ status, error, onRefresh }) {
+export function StatusPanel({ status, error, onRefresh, health, loading = false }) {
+  if (loading && !status && !error) {
+    return (
+      <Section title="Operational status" description="Pipeline health and source backlog from existing API status endpoints.">
+        <div className="empty-state large">Loading operations status...</div>
+      </Section>
+    );
+  }
+
   if (error) {
     return (
       <Section title="Operational status" description="Operator or admin role required." actions={<button className="secondary-button" onClick={onRefresh}>Retry</button>}>
@@ -349,28 +357,40 @@ export function StatusPanel({ status, error, onRefresh }) {
   return (
     <Section title="Operational status" description="Worker and persistence status exposed by the authenticated FastAPI backend." actions={<button className="secondary-button" onClick={onRefresh}>Refresh status</button>}>
       <div className="overview-grid compact-overview">
+        <MetricCard label="API health" value={health?.status || "-"} note={health?.database ? `Database ${health.database}` : "Health endpoint"} tone={health?.database === "ok" ? "good" : health ? "bad" : undefined} />
         <MetricCard label="Total records" value={totals.total ?? "-"} />
         <MetricCard label="Processed" value={totals.processed ?? "-"} />
         <MetricCard label="Unprocessed" value={totals.unprocessed ?? "-"} />
         <MetricCard label="Analyzed" value={totals.analyzed ?? "-"} />
       </div>
-      <div className="compact-table-shell">
-        <table className="compact-table">
-          <thead><tr><th>Source</th><th>Total</th><th>Processed</th><th>Unprocessed</th><th>Analyzed</th><th>Coverage</th><th>Avg risk</th></tr></thead>
-          <tbody>
-            {Object.entries(sources).map(([source, row]) => (
-              <tr key={source}>
-                <td className="mono">{source}</td>
-                <td>{row.total}</td>
-                <td>{row.processed}</td>
-                <td>{row.unprocessed}</td>
-                <td>{row.analyzed}</td>
-                <td>{formatPercent(row.analysis_coverage)}</td>
-                <td>{formatNumber(row.avg_risk_score)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="operations-grid">
+        <div className="compact-table-shell">
+          <table className="compact-table">
+            <thead><tr><th>Source</th><th>Total</th><th>Processed</th><th>Unprocessed</th><th>Analyzed</th><th>Coverage</th><th>Avg risk</th></tr></thead>
+            <tbody>
+              {Object.entries(sources).map(([source, row]) => (
+                <tr key={source}>
+                  <td className="mono">{source}</td>
+                  <td>{row.total}</td>
+                  <td>{row.processed}</td>
+                  <td>{row.unprocessed}</td>
+                  <td>{row.analyzed}</td>
+                  <td>{formatPercent(row.analysis_coverage)}</td>
+                  <td>{formatNumber(row.avg_risk_score)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <section className="panel-card operations-side-panel">
+          <div className="panel-title-row">
+            <div>
+              <h3>Performance metrics</h3>
+              <p className="panel-subtitle">No persisted worker or benchmark metrics endpoint is available.</p>
+            </div>
+          </div>
+          <p className="empty-state">Run-time benchmark output is available from the local benchmark script, but this UI only shows metrics returned by the API.</p>
+        </section>
       </div>
     </Section>
   );
@@ -636,6 +656,9 @@ export default function App() {
   useEffect(() => {
     if (activeTab === "evaluation") loadEvaluation();
   }, [activeTab]);
+  useEffect(() => {
+    if (activeTab === "operations") loadOverview();
+  }, [activeTab]);
 
   const globalError = useMemo(() => health.error || findings.error, [health.error, findings.error]);
 
@@ -690,7 +713,7 @@ export default function App() {
             </Section>
           ) : null}
 
-          {activeTab === "status" ? <StatusPanel status={status.value} error={status.error} onRefresh={loadOverview} /> : null}
+          {activeTab === "operations" ? <StatusPanel status={status.value} error={status.error} onRefresh={loadOverview} health={health.value} loading={status.loading || health.loading} /> : null}
 
           {activeTab === "adhoc" ? <AnalyzeSandbox /> : null}
         </section>

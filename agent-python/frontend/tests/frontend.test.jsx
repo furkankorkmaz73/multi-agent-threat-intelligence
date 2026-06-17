@@ -168,6 +168,17 @@ test("status panel renders unauthorized API state", () => {
   assert.match(html, /Authentication required/);
 });
 
+test("status panel renders operations health and unavailable metrics state", () => {
+  const html = renderToStaticMarkup(
+    <StatusPanel status={statusOverview} error={null} onRefresh={() => {}} health={{ status: "ok", database: "ok" }} />,
+  );
+
+  assert.match(html, /API health/);
+  assert.match(html, /Unprocessed/);
+  assert.match(html, /Performance metrics/);
+  assert.match(html, /No persisted worker or benchmark metrics endpoint is available/);
+});
+
 test("status overview fixture preserves operator fields", async () => {
   const client = createApiClient({
     baseUrl: "http://api.test",

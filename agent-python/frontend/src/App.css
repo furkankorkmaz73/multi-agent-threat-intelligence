@@ -347,6 +347,17 @@ tbody tr:hover,
 .distribution-track span { display: block; height: 100%; background: var(--blue); }
 .compact-table { min-width: 640px; }
 
+.operations-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.35fr);
+  gap: 14px;
+  align-items: start;
+}
+.operations-side-panel {
+  min-width: 0;
+  box-shadow: none;
+}
+
 .dashboard-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -496,7 +507,8 @@ tbody tr:hover,
   .detail-hero { grid-template-columns: 1fr; flex-direction: column; }
   .overview-grid,
   .evaluation-grid,
-  .sandbox-grid { grid-template-columns: 1fr; }
+  .sandbox-grid,
+  .operations-grid { grid-template-columns: 1fr; }
   .control-grid,
   .auth-panel,
   .auth-form { grid-template-columns: 1fr; }
