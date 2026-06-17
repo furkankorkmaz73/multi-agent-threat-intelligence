@@ -216,6 +216,10 @@ Deterministic thesis bundle:
 - `ablation_summary.md`: readable ablation summary with unsupported variants documented.
 - `correlation_decisions.csv`: accepted, manual_review, and rejected evidence decisions with gate metadata.
 - `case_studies.json`: selected thesis case studies for scoring, Dread, false-positive resistance, and asset-aware risk.
+- `evidence_policy_matrix.md`: thesis-facing matrix describing URLhaus and Dread evidence policy, scoring effects, confidence effects, and claim boundaries.
+- `evidence_diagnostics_summary.md`: deterministic summary of URLhaus and Dread candidate status counts, reason-code distributions, and absent/future fixture coverage.
+- `urlhaus_dread_case_studies.md`: readable case-study table for accepted URLhaus, URLhaus false-positive controls, Dread manual-review handling, and weak Dread rejection.
+- `weak_source_handling_table.json`: machine-readable weak-source policy table used by the artifact quality gate.
 - `risk_explanation_traces.json`: structured end-to-end traces from raw inputs to risk, confidence, and operational risk.
 - `risk_explanation_traces.md`: readable appendix-style explanation traces.
 - `demo_walkthrough.md`: concise defense-demo walkthrough for reading generated outputs.

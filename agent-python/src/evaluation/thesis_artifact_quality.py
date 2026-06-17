@@ -19,6 +19,10 @@ EXPECTED_MANIFEST_KEYS = {
     "ablation_summary_md",
     "correlation_decisions",
     "case_studies",
+    "evidence_policy_matrix",
+    "evidence_diagnostics_summary",
+    "urlhaus_dread_case_studies",
+    "weak_source_handling_table",
     "risk_explanation_traces",
     "risk_explanation_traces_md",
     "demo_walkthrough",
@@ -187,6 +191,25 @@ DEMO_WALKTHROUGH_HEADINGS = (
     "## Claim Boundaries",
 )
 
+EVIDENCE_POLICY_MATRIX_HEADINGS = (
+    "# Evidence Policy Matrix",
+    "## Policy Matrix",
+    "## Claim Boundaries",
+)
+
+EVIDENCE_DIAGNOSTICS_SUMMARY_HEADINGS = (
+    "# Evidence Diagnostics Summary",
+    "## Candidate Status Distribution",
+    "## Coverage Notes",
+    "## Absent Or Future Fixture Work",
+)
+
+URLHAUS_DREAD_CASE_STUDIES_HEADINGS = (
+    "# URLhaus and Dread Case Studies",
+    "## Case Study Table",
+    "## Interpretation",
+)
+
 METHODOLOGY_SAFE_FRAMING = (
     "deterministic controlled fixture",
     "behavioral validation",
@@ -235,6 +258,10 @@ def validate_thesis_artifacts(artifact_dir: str | Path) -> dict[str, Any]:
     _validate_required_markdown_sections(root / "limitations_and_validity.md", LIMITATIONS_AND_VALIDITY_HEADINGS, errors)
     _validate_required_markdown_sections(root / "thesis_defense_pack.md", THESIS_DEFENSE_PACK_HEADINGS, errors)
     _validate_required_markdown_sections(root / "demo_walkthrough.md", DEMO_WALKTHROUGH_HEADINGS, errors)
+    _validate_required_markdown_sections(root / "evidence_policy_matrix.md", EVIDENCE_POLICY_MATRIX_HEADINGS, errors)
+    _validate_required_markdown_sections(root / "evidence_diagnostics_summary.md", EVIDENCE_DIAGNOSTICS_SUMMARY_HEADINGS, errors)
+    _validate_required_markdown_sections(root / "urlhaus_dread_case_studies.md", URLHAUS_DREAD_CASE_STUDIES_HEADINGS, errors)
+    _validate_weak_source_handling_table(root, errors)
     _validate_methodology_framing(root / "methodology_summary.md", errors)
     checked_markdown = _validate_markdown_files(root, errors)
 
@@ -317,6 +344,34 @@ def _validate_traces(root: Path, errors: list[str]) -> None:
         missing_fields = sorted(field for field in REQUIRED_TRACE_FIELDS if field not in trace)
         if missing_fields:
             errors.append(f"risk trace {cve_id} missing fields: {', '.join(missing_fields)}")
+
+
+def _validate_weak_source_handling_table(root: Path, errors: list[str]) -> None:
+    path = root / "weak_source_handling_table.json"
+    payload = _load_json(path, errors)
+    rows = payload.get("rows") if isinstance(payload, Mapping) else None
+    if not isinstance(rows, list):
+        errors.append("weak_source_handling_table.json must contain a rows list")
+        return
+    required = {"source", "candidate_status", "risk_score_effect", "confidence_effect", "observed_decision_count", "case_available", "case_note"}
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            errors.append(f"weak_source_handling_table row {index} must be an object")
+            continue
+        missing = sorted(required - set(row))
+        if missing:
+            errors.append(f"weak_source_handling_table row {index} missing fields: {', '.join(missing)}")
+    accepted_dread = [
+        row
+        for row in rows
+        if isinstance(row, Mapping)
+        and row.get("source") == "dread"
+        and row.get("candidate_status") == "accepted"
+    ]
+    if not accepted_dread:
+        errors.append("weak_source_handling_table.json must include the disabled Dread accepted policy row")
+    elif any(row.get("risk_score_effect") != "not_enabled" for row in accepted_dread):
+        errors.append("Dread accepted policy row must keep risk_score_effect as not_enabled")
 
 
 def _load_json(path: Path, errors: list[str]) -> Mapping[str, Any]:

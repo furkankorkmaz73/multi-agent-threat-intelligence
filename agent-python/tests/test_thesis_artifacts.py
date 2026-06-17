@@ -174,6 +174,10 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
         "ablation_summary.md",
         "correlation_decisions.csv",
         "case_studies.json",
+        "evidence_policy_matrix.md",
+        "evidence_diagnostics_summary.md",
+        "urlhaus_dread_case_studies.md",
+        "weak_source_handling_table.json",
         "risk_explanation_traces.json",
         "risk_explanation_traces.md",
         "demo_walkthrough.md",
@@ -191,6 +195,10 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
     assert "scoring_sensitivity" in first["generated_files"]
     assert "scoring_sensitivity_md" in first["generated_files"]
     assert "results_summary" in first["generated_files"]
+    assert "evidence_policy_matrix" in first["generated_files"]
+    assert "evidence_diagnostics_summary" in first["generated_files"]
+    assert "urlhaus_dread_case_studies" in first["generated_files"]
+    assert "weak_source_handling_table" in first["generated_files"]
     assert "risk_explanation_traces" in first["generated_files"]
     assert "risk_explanation_traces_md" in first["generated_files"]
     assert "demo_walkthrough" in first["generated_files"]
@@ -204,6 +212,17 @@ def test_thesis_artifact_generation_produces_deterministic_files(tmp_path):
     assert "Top 10 Model-Risk CVEs" in (tmp_path / "first" / "scoring_summary.md").read_text(encoding="utf-8")
     assert "# Scoring Sensitivity Analysis" in (tmp_path / "first" / "scoring_sensitivity.md").read_text(encoding="utf-8")
     assert "# Risk Explanation Traces" in (tmp_path / "first" / "risk_explanation_traces.md").read_text(encoding="utf-8")
+    assert "# Evidence Policy Matrix" in (tmp_path / "first" / "evidence_policy_matrix.md").read_text(encoding="utf-8")
+    assert "# Evidence Diagnostics Summary" in (tmp_path / "first" / "evidence_diagnostics_summary.md").read_text(encoding="utf-8")
+    assert "# URLhaus and Dread Case Studies" in (tmp_path / "first" / "urlhaus_dread_case_studies.md").read_text(encoding="utf-8")
+    weak_table = json.loads((tmp_path / "first" / "weak_source_handling_table.json").read_text(encoding="utf-8"))
+    assert weak_table["claim_boundary"].startswith("Diagnostics explain current evidence handling")
+    assert any(
+        row["source"] == "dread"
+        and row["candidate_status"] == "accepted"
+        and row["risk_score_effect"] == "not_enabled"
+        for row in weak_table["rows"]
+    )
     assert "# Thesis Demo Walkthrough" in (tmp_path / "first" / "demo_walkthrough.md").read_text(encoding="utf-8")
     assert "| Strategy | Top 5 CVEs | Precision@5 | Recall@5 | NDCG@5 | Mean KEV Rank |" in (
         tmp_path / "first" / "benchmark_summary.md"
@@ -275,6 +294,21 @@ def test_real_thesis_scenario_artifacts_meet_acceptance_criteria(tmp_path):
     assert "UH-FP-STALE" in correlation_csv
     assert "UH-FP-PRODUCT" in correlation_csv
     cases = json.loads((tmp_path / "out" / "case_studies.json").read_text(encoding="utf-8"))["cases"]
+    policy_md = (tmp_path / "out" / "evidence_policy_matrix.md").read_text(encoding="utf-8")
+    diagnostics_md = (tmp_path / "out" / "evidence_diagnostics_summary.md").read_text(encoding="utf-8")
+    source_case_md = (tmp_path / "out" / "urlhaus_dread_case_studies.md").read_text(encoding="utf-8")
+    weak_table = json.loads((tmp_path / "out" / "weak_source_handling_table.json").read_text(encoding="utf-8"))
+    assert Path(manifest["generated_files"]["evidence_policy_matrix"]) == tmp_path / "out" / "evidence_policy_matrix.md"
+    assert Path(manifest["generated_files"]["evidence_diagnostics_summary"]) == tmp_path / "out" / "evidence_diagnostics_summary.md"
+    assert Path(manifest["generated_files"]["urlhaus_dread_case_studies"]) == tmp_path / "out" / "urlhaus_dread_case_studies.md"
+    assert Path(manifest["generated_files"]["weak_source_handling_table"]) == tmp_path / "out" / "weak_source_handling_table.json"
+    assert "Accepted Dread scoring evidence is not enabled" in policy_md
+    assert "Dread accepted scoring evidence count is expected to be zero" in diagnostics_md
+    assert "No accepted Dread scoring-evidence case is present" in source_case_md
+    assert weak_table["status_counts"]["dread"]["manual_review"] >= 1
+    assert weak_table["status_counts"]["urlhaus"]["accepted"] >= 1
+    assert any(row["source"] == "dread" and row["candidate_status"] == "accepted" and row["observed_decision_count"] == 0 for row in weak_table["rows"])
+    assert any(row["source"] == "urlhaus" and row["candidate_status"] == "accepted" and row["case_available"] is True for row in weak_table["rows"])
     case_names = {case["case"] for case in cases}
     assert {
         "high_risk_correlated",
