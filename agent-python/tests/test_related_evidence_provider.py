@@ -17,8 +17,8 @@ class RecordingCollection:
         self.rows = rows or []
         self.queries = []
 
-    def find(self, query):
-        self.queries.append(query)
+    def find(self, query, projection=None):
+        self.queries.append({"query": query, "projection": projection})
         return FakeCursor(self.rows)
 
 
@@ -94,10 +94,26 @@ def test_urlhaus_strong_terms_still_query_mongodb():
     )
 
     assert result == [row]
-    query = manager.collections["urlhaus"].queries[0]
+    indexed_query = manager.collections["urlhaus"].queries[0]["query"]
+    assert indexed_query == {"normalized_fields.keywords": {"$in": ["cve-2026-1234", "examplevpn", "loader"]}}
+
+    query = manager.collections["urlhaus"].queries[1]["query"]
     regex_values = [clause[field]["$regex"].lower() for clause in query["$or"] for field in clause]
     assert re.escape("cve-2026-1234") in regex_values
     assert "examplevpn" in regex_values
     assert "loader" in regex_values
     assert "remote" not in regex_values
     assert re.escape("1.2.3") not in regex_values
+
+
+def test_indexed_keyword_lookup_can_satisfy_related_evidence_without_regex_fallback():
+    row = {"url": "https://payload.example/CVE-2026-1234/examplevpn-loader"}
+    manager = _database_manager_with_urlhaus_rows([row])
+
+    result = manager.find_related_urlhaus(["CVE-2026-1234", "examplevpn", "loader"], limit=1)
+
+    assert result == [row]
+    assert len(manager.collections["urlhaus"].queries) == 1
+    assert manager.collections["urlhaus"].queries[0]["query"] == {
+        "normalized_fields.keywords": {"$in": ["cve-2026-1234", "examplevpn", "loader"]}
+    }

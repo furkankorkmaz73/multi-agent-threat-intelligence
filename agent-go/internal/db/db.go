@@ -69,16 +69,19 @@ func EnsureIndexes(appInstance *app.App) {
 		"cve_intel": {
 			{Keys: bson.D{{Key: "processed", Value: 1}, {Key: "_id", Value: 1}}},
 			{Keys: bson.D{{Key: "normalized_fields.search_text", Value: 1}}},
+			{Keys: bson.D{{Key: "normalized_fields.keywords", Value: 1}}},
 			{Keys: bson.D{{Key: "metadata.source_ref", Value: 1}}},
 		},
 		"urlhaus_intel": {
 			{Keys: bson.D{{Key: "processed", Value: 1}, {Key: "url", Value: 1}}},
 			{Keys: bson.D{{Key: "normalized_fields.search_text", Value: 1}}},
+			{Keys: bson.D{{Key: "normalized_fields.keywords", Value: 1}}},
 			{Keys: bson.D{{Key: "url", Value: 1}}, Options: options.Index().SetUnique(true)},
 		},
 		"dread_intel": {
 			{Keys: bson.D{{Key: "processed", Value: 1}, {Key: "url", Value: 1}}},
 			{Keys: bson.D{{Key: "normalized_fields.search_text", Value: 1}}},
+			{Keys: bson.D{{Key: "normalized_fields.keywords", Value: 1}}},
 			{Keys: bson.D{{Key: "url", Value: 1}}, Options: options.Index().SetUnique(true)},
 		},
 	}

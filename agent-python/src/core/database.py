@@ -88,6 +88,9 @@ class DatabaseManager:
             self.collections["cve"].create_index("normalized_fields.search_text")
             self.collections["urlhaus"].create_index("normalized_fields.search_text")
             self.collections["dread"].create_index("normalized_fields.search_text")
+            self.collections["cve"].create_index("normalized_fields.keywords")
+            self.collections["urlhaus"].create_index("normalized_fields.keywords")
+            self.collections["dread"].create_index("normalized_fields.keywords")
             self.collections["cve"].create_index("analysis.risk_score")
             self.collections["urlhaus"].create_index("analysis.risk_score")
             self.collections["dread"].create_index("analysis.risk_score")
@@ -390,6 +393,22 @@ class DatabaseManager:
         if not terms:
             return []
 
+        projection = _related_projection(source, fields)
+        indexed_terms = _indexed_keyword_terms(terms)
+        results: List[Dict[str, Any]] = []
+        if indexed_terms:
+            try:
+                cursor = _find_with_projection(
+                    self.collections[source],
+                    {"normalized_fields.keywords": {"$in": indexed_terms}},
+                    projection,
+                ).limit(limit)
+                results = list(cursor)
+                if len(results) >= limit:
+                    return results[:limit]
+            except PyMongoError:
+                results = []
+
         regex_clauses = []
         for term in terms:
             escaped = re.escape(term)
@@ -397,10 +416,10 @@ class DatabaseManager:
                 regex_clauses.append({field: {"$regex": escaped, "$options": "i"}})
 
         try:
-            cursor = self.collections[source].find({"$or": regex_clauses}).limit(limit)
-            return list(cursor)
+            cursor = _find_with_projection(self.collections[source], {"$or": regex_clauses}, projection).limit(limit)
+            return _dedupe_related([*results, *list(cursor)], limit=limit)
         except PyMongoError:
-            return []
+            return results[:limit]
 
 
 def _urlhaus_retrieval_terms(keywords: List[str]) -> List[str]:
@@ -417,6 +436,93 @@ def _urlhaus_retrieval_terms(keywords: List[str]) -> List[str]:
             if len(terms) >= SETTINGS.retrieval.search_field_limit:
                 return terms
     return terms
+
+
+def _indexed_keyword_terms(keywords: List[str]) -> List[str]:
+    terms: List[str] = []
+    seen: set[str] = set()
+    for keyword in keywords:
+        for token in _keyword_tokens(keyword):
+            normalized = token.lower().strip("._-")
+            if not _is_indexed_keyword_term(normalized):
+                continue
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            terms.append(normalized)
+            if len(terms) >= SETTINGS.retrieval.search_field_limit:
+                return terms
+    return terms
+
+
+def _is_indexed_keyword_term(term: str) -> bool:
+    if not term:
+        return False
+    if CVE_ID_RE.fullmatch(term):
+        return True
+    if term in URLHAUS_RETRIEVAL_STRONG_TERMS:
+        return True
+    if len(term) < 4:
+        return False
+    if term in URLHAUS_RETRIEVAL_WEAK_TERMS:
+        return False
+    if term.isdigit() or VERSION_LIKE_RE.fullmatch(term):
+        return False
+    return len(term) >= 5
+
+
+def _related_projection(source: str, fields: List[str]) -> Dict[str, int]:
+    projection = {"_id": 1, "normalized_fields.keywords": 1, "normalized_fields.search_text": 1}
+    for field in fields:
+        projection[field] = 1
+    if source == "urlhaus":
+        projection.update({
+            "urlhaus_id": 1,
+            "url": 1,
+            "threat": 1,
+            "tags": 1,
+            "url_status": 1,
+            "date_added": 1,
+            "urlhaus_link": 1,
+        })
+    elif source == "dread":
+        projection.update({
+            "title": 1,
+            "content": 1,
+            "category": 1,
+            "author": 1,
+            "url": 1,
+            "created_at": 1,
+        })
+    elif source == "cve":
+        projection.update({
+            "descriptions": 1,
+            "published": 1,
+            "last_modified": 1,
+            "metrics": 1,
+        })
+    return projection
+
+
+def _dedupe_related(rows: List[Dict[str, Any]], *, limit: int) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        key = str(row.get("_id") or row.get("urlhaus_id") or row.get("url") or row.get("title") or id(row))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+        if len(deduped) >= limit:
+            break
+    return deduped
+
+
+def _find_with_projection(collection: Any, query: Dict[str, Any], projection: Dict[str, int]) -> Any:
+    try:
+        return collection.find(query, projection)
+    except TypeError:
+        return collection.find(query)
 
 
 def _keyword_tokens(value: Any) -> List[str]:
