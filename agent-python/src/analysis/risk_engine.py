@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Protocol
 
-from agents.llm_helper import generate_explanation
 from analysis.correlator import DREAD_CLASSIFIERS
 from analysis.evidence import coerce_related_evidence_provider
 from analysis.graph_builder import GraphBuilder
@@ -49,10 +48,20 @@ from config import get_settings
 SETTINGS = get_settings()
 
 
+class ExplanationGenerator(Protocol):
+    def __call__(self, context: Dict[str, Any]) -> str:
+        ...
+
+
+def _no_llm_explanation(_context: Dict[str, Any]) -> str:
+    return ""
+
+
 class RiskEngine:
-    def __init__(self) -> None:
+    def __init__(self, *, explanation_generator: Optional[ExplanationGenerator] = None) -> None:
         self.graph_builder = GraphBuilder()
         self.weights = SETTINGS.scoring
+        self.explanation_generator = explanation_generator or _no_llm_explanation
 
     def evaluate_cve(
         self,
@@ -63,7 +72,7 @@ class RiskEngine:
     ) -> Dict[str, Any]:
         scorer = CveRiskScorer(
             graph_builder=self.graph_builder,
-            explanation_generator=generate_explanation,
+            explanation_generator=self.explanation_generator,
             age_calculator=calculate_age_days,
         )
         kwargs = {

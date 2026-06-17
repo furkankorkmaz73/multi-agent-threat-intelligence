@@ -1,3 +1,8 @@
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 from analysis.evidence import RelatedEvidenceAdapter, coerce_related_evidence_provider
 from analysis.graph_builder import GraphBuilder
 from analysis.risk_engine import RiskEngine
@@ -82,6 +87,37 @@ def test_risk_engine_delegates_cve_to_source_specific_scorer(monkeypatch):
     assert calls[1][1]["_id"] == "CVE-2026-7777"
     assert isinstance(calls[1][2], RelatedEvidenceAdapter)
     assert calls[1][3] == {"products": ["Example VPN"]}
+    assert calls[0][1]["explanation_generator"]({}) == ""
+
+
+def test_analysis_risk_engine_import_does_not_load_llm_helper():
+    src_path = Path(__file__).resolve().parents[1] / "src"
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(src_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import analysis.risk_engine; print('agents.llm_helper' in sys.modules)",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.stdout.strip() == "False"
+
+
+def test_risk_engine_uses_injected_explanation_generator():
+    result = RiskEngine(explanation_generator=lambda _context: "Injected analyst explanation.").evaluate_cve(
+        _cve_payload(),
+        db=ShapeDB(),
+        llm_info={"products": ["Example VPN"]},
+    )
+
+    assert result["explanation"][0] == "Injected analyst explanation."
 
 
 def test_risk_engine_delegates_urlhaus_to_source_specific_scorer(monkeypatch):

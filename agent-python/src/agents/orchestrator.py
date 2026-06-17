@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from agents import llm_helper
 from agents.correlation import CorrelationAgent
 from agents.critic import CriticAgent
 from agents.graph import GraphAnalysisAgent
@@ -29,7 +30,7 @@ class ThreatAnalysisOrchestrator:
         self.risk_agent = RiskAssessmentAgent()
         self.critic = critic or CriticAgent()
         self.recommender = RecommenderAgent()
-        self.risk_engine = risk_engine or RiskEngine()
+        self.risk_engine = risk_engine or RiskEngine(explanation_generator=llm_helper.generate_explanation)
         self.engine = OrchestrationEngine(
             planner=DynamicPlanner(),
             risk_engine=self.risk_engine,
