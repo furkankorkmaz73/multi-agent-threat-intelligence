@@ -182,7 +182,7 @@ Open these files first:
 - `reports/thesis/deterministic/thesis_defense_pack.md`
 - `reports/thesis/deterministic/manifest.json`
 
-After a live local re-analysis, `make thesis-runtime-diagnostics` writes read-only operational diagnostics to `reports/runtime/`, including confidence distribution, EPSS/KEV coverage, and URLhaus raw/ignored/rejected/accepted candidate accounting. This is an operational sanity check, not the deterministic thesis benchmark.
+After a live local re-analysis, `make thesis-runtime-diagnostics` writes read-only operational diagnostics to `reports/runtime/`, including confidence distribution, EPSS/KEV coverage, URLhaus raw/ignored/rejected/manual-review/accepted candidate accounting, reason-code distributions, and Dread diagnostic candidate accounting. This is an operational sanity check, not the deterministic thesis benchmark. Generated report outputs remain local artifacts and should not be committed.
 
 ## Experimental Learned Calibration
 

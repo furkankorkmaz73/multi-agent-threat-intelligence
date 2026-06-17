@@ -28,9 +28,9 @@ Dread is not treated as ground truth. The reliability order used by the determin
 CISA KEV / exact CVE match / URLhaus IOC > EPSS probability > structured correlation > Dread mention > keyword-only match
 ```
 
-Dread-only evidence normally routes to manual review or weak diagnostic state. It is capped to low or medium confidence and cannot create CRITICAL risk by itself. Rejected or manual-review Dread candidates remain diagnostic and do not increase risk, graph bonus, or confidence.
+Dread-only evidence routes to manual review or weak diagnostic state. It is capped to low confidence and cannot create CRITICAL risk, `patch_now`, or confirmed-exploitation claims by itself. Rejected or manual-review Dread candidates remain diagnostic and do not increase risk, graph bonus, or confidence.
 
-Corroborated Dread evidence can support confidence modestly when paired with stronger evidence such as an exact CVE reference, accepted URLhaus IOC evidence, or CISA KEV listing. This support remains bounded and does not override CVSS, EPSS, KEV, or accepted structured evidence.
+Stronger evidence such as CISA KEV, EPSS, or accepted URLhaus IOC evidence should carry the operational priority. Dread can explain early-warning chatter around that context, but the deterministic CVE scorer does not count Dread candidates as accepted evidence.
 
 ## Reproducibility
 
