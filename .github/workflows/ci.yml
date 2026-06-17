@@ -17,9 +17,9 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: agent-python/requirements.txt
+          cache-dependency-path: agent-python/requirements.lock
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.lock
       - name: Dependency sanity
         run: python -m pip check
       - name: Run tests
