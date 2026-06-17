@@ -29,6 +29,32 @@ URLHAUS_RETRIEVAL_STRONG_TERMS = {
     "webshell", "zeroday",
 }
 VERSION_LIKE_RE = re.compile(r"^v?\d+(?:[._-]\d+){0,4}$", re.I)
+FINDING_SUMMARY_PROJECTION = {
+    "_id": 1,
+    "urlhaus_id": 1,
+    "url": 1,
+    "title": 1,
+    "published": 1,
+    "date_added": 1,
+    "created_at": 1,
+    "analysis.entity_id": 1,
+    "analysis.risk_level": 1,
+    "analysis.risk_score": 1,
+    "analysis.confidence": 1,
+    "analysis.diagnosis": 1,
+    "analysis.analyzed_at": 1,
+    "analysis.pipeline_version": 1,
+    "analysis.persistence_meta": 1,
+    "analysis.evidence.cvss_score": 1,
+    "analysis.evidence.age_days": 1,
+    "analysis.evidence.related_dread_count": 1,
+    "analysis.evidence.related_urlhaus_count": 1,
+    "analysis.evidence.urlhaus_match_stats.accepted_match_count": 1,
+    "analysis.evidence.urlhaus_match_stats.rejected_match_count": 1,
+    "analysis.evidence.urlhaus_match_stats.exact_cve_hits": 1,
+    "analysis.evidence.urlhaus_match_stats.high_signal_hits": 1,
+    "analysis.evidence.urlhaus_match_stats.shared_terms": 1,
+}
 
 
 def _object_id_candidate(value: Any) -> Optional[ObjectId]:
@@ -329,7 +355,8 @@ class DatabaseManager:
                     {"analysis.diagnosis": {"$regex": escaped, "$options": "i"}},
                     {"normalized_fields.search_text": {"$regex": escaped, "$options": "i"}},
                 ],
-            }
+            },
+            FINDING_SUMMARY_PROJECTION,
         ).sort([("analysis.risk_score", pymongo.DESCENDING), ("_id", pymongo.DESCENDING)]).limit(limit)
         return list(cursor)
 

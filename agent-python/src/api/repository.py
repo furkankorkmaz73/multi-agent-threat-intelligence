@@ -10,6 +10,35 @@ from config import DB_NAME, MONGO_URI, get_settings
 
 
 SETTINGS = get_settings()
+TOP_FINDINGS_CANDIDATE_MIN = 100
+TOP_FINDINGS_CANDIDATE_MAX = 500
+
+FINDING_SUMMARY_PROJECTION = {
+    "_id": 1,
+    "urlhaus_id": 1,
+    "url": 1,
+    "title": 1,
+    "published": 1,
+    "date_added": 1,
+    "created_at": 1,
+    "analysis.entity_id": 1,
+    "analysis.risk_level": 1,
+    "analysis.risk_score": 1,
+    "analysis.confidence": 1,
+    "analysis.diagnosis": 1,
+    "analysis.analyzed_at": 1,
+    "analysis.pipeline_version": 1,
+    "analysis.persistence_meta": 1,
+    "analysis.evidence.cvss_score": 1,
+    "analysis.evidence.age_days": 1,
+    "analysis.evidence.related_dread_count": 1,
+    "analysis.evidence.related_urlhaus_count": 1,
+    "analysis.evidence.urlhaus_match_stats.accepted_match_count": 1,
+    "analysis.evidence.urlhaus_match_stats.rejected_match_count": 1,
+    "analysis.evidence.urlhaus_match_stats.exact_cve_hits": 1,
+    "analysis.evidence.urlhaus_match_stats.high_signal_hits": 1,
+    "analysis.evidence.urlhaus_match_stats.shared_terms": 1,
+}
 
 
 class APIRepository:
@@ -36,7 +65,7 @@ class APIRepository:
     def get_recent_findings(self, source: str, limit: int = 10) -> List[Dict[str, Any]]:
         return list(
             self.collections[source]
-            .find({"analysis": {"$exists": True}})
+            .find({"analysis": {"$exists": True}}, FINDING_SUMMARY_PROJECTION)
             .sort([("analysis.analyzed_at", pymongo.DESCENDING), ("_id", pymongo.DESCENDING)])
             .limit(limit)
         )
@@ -86,9 +115,11 @@ class APIRepository:
         collection = self.collections[source]
         query = {"analysis": {"$exists": True}}
         sort_spec = _mongo_sort_for_top_mode(source, mode)
-        if not sort_spec:
-            return list(collection.find(query))
-        return list(collection.find(query).sort(sort_spec).limit(limit))
+        candidate_limit = _candidate_limit(limit, mode)
+        cursor = collection.find(query, FINDING_SUMMARY_PROJECTION)
+        if sort_spec:
+            cursor = cursor.sort(sort_spec)
+        return list(cursor.limit(candidate_limit))
 
     def get_cve_analysis_docs(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         projection = {
@@ -164,7 +195,20 @@ def _mongo_sort_for_top_mode(source: str, mode: str) -> List[tuple[str, int]]:
             ("analysis.risk_score", pymongo.DESCENDING),
             ("analysis.confidence", pymongo.DESCENDING),
         ]
+    if mode in {"active_evidence", "needs_review"}:
+        return [
+            ("analysis.risk_score", pymongo.DESCENDING),
+            ("analysis.confidence", pymongo.DESCENDING),
+            ("analysis.analyzed_at", pymongo.DESCENDING),
+        ]
     return []
+
+
+def _candidate_limit(limit: int, mode: str) -> int:
+    requested = max(1, int(limit or 1))
+    if mode in {"active_evidence", "needs_review"}:
+        return min(max(requested * 10, TOP_FINDINGS_CANDIDATE_MIN), TOP_FINDINGS_CANDIDATE_MAX)
+    return requested
 
 
 def _published_sort_field(source: str) -> str:
