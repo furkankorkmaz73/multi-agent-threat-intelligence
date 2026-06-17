@@ -47,11 +47,11 @@ services:
   frontend:
     build:
       context: ./agent-python/frontend
+      args:
+        VITE_API_BASE: http://localhost:8000
     container_name: threat-agent-frontend
-    environment:
-      VITE_API_BASE: http://localhost:8000
     ports:
-      - "5173:5173"
+      - "5173:80"
     depends_on:
       - api
 
