@@ -10,7 +10,7 @@ from core.database import DatabaseManager
 from worker.executor import WorkerJobExecutor
 from worker.job_lifecycle import RetryPolicy
 from worker.job_repository import JobRepository, build_job_repository
-from worker.observability import StructuredJobLogger, WorkerMetrics
+from worker.observability import StructuredJobLogger, WorkerMetrics, summarize_processing_metrics
 
 
 def setup_logging() -> None:
@@ -89,11 +89,15 @@ def process_source(
     logging.info("Pending records for source=%s: %d", source, len(pending))
     processed_count = 0
     repository = job_repository or build_job_repository(db)
+    run_metrics = metrics or WorkerMetrics()
+    metric_start_index = len(run_metrics.processing_durations_ms)
+    failed_start = run_metrics.failed_jobs
+    source_started = time.perf_counter()
     executor = WorkerJobExecutor(
         repository=repository,
         retry_policy=retry_policy,
         event_logger=event_logger,
-        metrics=metrics,
+        metrics=run_metrics,
         clock=clock,
         analysis_version=APP_VERSION,
         force=force,
@@ -110,6 +114,22 @@ def process_source(
         elif outcome.skipped_duplicate:
             logging.info("Skipped duplicate source=%s doc_id=%s", source, doc_id)
 
+    summary = summarize_processing_metrics(
+        processed_count=processed_count,
+        failed_count=run_metrics.failed_jobs - failed_start,
+        elapsed_seconds=time.perf_counter() - source_started,
+        latency_ms=run_metrics.processing_durations_ms[metric_start_index:],
+    )
+    logging.info(
+        "Worker metrics source=%s processed=%s failed=%s elapsed_seconds=%.4f docs_per_second=%.4f avg_latency_ms=%.4f p95_latency_ms=%.4f",
+        source,
+        summary["processed"],
+        summary["failed"],
+        summary["elapsed_seconds"],
+        summary["docs_per_second"],
+        summary["avg_latency_ms"],
+        summary["p95_latency_ms"],
+    )
     return processed_count
 
 

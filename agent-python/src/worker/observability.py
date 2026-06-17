@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from math import ceil
 from typing import Any, Dict, List, Mapping
 
 from worker.job_lifecycle import JobMetadata
@@ -83,3 +84,33 @@ def _sanitize(value: Any) -> Any:
 def _is_secret_key(key: str) -> bool:
     lowered = key.lower()
     return any(marker in lowered for marker in ("secret", "token", "password", "api_key", "apikey", "authorization"))
+
+
+def summarize_processing_metrics(
+    *,
+    processed_count: int,
+    failed_count: int,
+    elapsed_seconds: float,
+    latency_ms: List[int] | List[float],
+) -> Dict[str, Any]:
+    processed = max(0, int(processed_count))
+    failed = max(0, int(failed_count))
+    elapsed = max(0.0, float(elapsed_seconds or 0.0))
+    latencies = sorted(max(0.0, float(value)) for value in latency_ms)
+    avg_latency = sum(latencies) / len(latencies) if latencies else 0.0
+    p95_latency = _percentile(latencies, 0.95)
+    return {
+        "processed": processed,
+        "failed": failed,
+        "elapsed_seconds": round(elapsed, 4),
+        "docs_per_second": round(processed / elapsed, 4) if elapsed > 0 else 0.0,
+        "avg_latency_ms": round(avg_latency, 4),
+        "p95_latency_ms": round(p95_latency, 4),
+    }
+
+
+def _percentile(sorted_values: List[float], percentile: float) -> float:
+    if not sorted_values:
+        return 0.0
+    rank = max(1, ceil(len(sorted_values) * percentile))
+    return sorted_values[min(rank - 1, len(sorted_values) - 1)]
