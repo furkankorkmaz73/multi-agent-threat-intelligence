@@ -1,14 +1,6 @@
 import { compactDate, formatNumber } from "../utils/format";
 import { RiskBadge, SourceBadge } from "./Badges";
-import { evidenceCounts } from "../viewModels";
-
-function confidenceBand(value) {
-  const n = Number(value || 0);
-  if (n >= 0.85) return "high";
-  if (n >= 0.7) return "elevated";
-  if (n >= 0.5) return "medium";
-  return "low";
-}
+import { confidenceBand, evidenceCounts } from "../viewModels";
 
 function EvidenceMini({ finding }) {
   const summary = finding.evidence_summary || {};

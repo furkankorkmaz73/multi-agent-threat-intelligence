@@ -20,7 +20,14 @@ import MetricCard from "./components/MetricCard";
 import JsonBlock from "./components/JsonBlock";
 import { RiskBadge, StatusPill } from "./components/Badges";
 import { formatNumber, formatPercent } from "./utils/format";
-import { filterAndSortFindings } from "./viewModels";
+import {
+  confidenceDistribution,
+  filterAndSortFindings,
+  riskDistribution,
+  sourceCoverageRows,
+  topTagFamilies,
+  urlhausStatusDistribution,
+} from "./viewModels";
 import "./App.css";
 
 const SOURCES = ["", "cve", "urlhaus", "dread"];
@@ -87,13 +94,131 @@ function TabNav({ activeTab, setActiveTab }) {
   );
 }
 
-function Alert({ error, fallbackTitle = "Request failed" }) {
+export function Alert({ error, fallbackTitle = "Request failed" }) {
   if (!error) return null;
   const detail = describeApiError(error);
   return (
     <div className="error-banner" data-kind={detail.kind}>
       <strong>{detail.title || fallbackTitle}</strong>
       <span>{detail.message}</span>
+    </div>
+  );
+}
+
+function BarList({ rows, emptyLabel, valueLabel, widthForRow, toneForRow }) {
+  const max = Math.max(1, ...rows.map((row) => Number(row.count || 0)));
+  if (!rows.length) return <p className="empty-state">{emptyLabel}</p>;
+
+  return (
+    <div className="chart-bar-list">
+      {rows.map((row) => {
+        const width = widthForRow ? widthForRow(row) : (Number(row.count || 0) / max) * 100;
+        return (
+          <div className="chart-bar-row" data-tone={toneForRow?.(row) || row.id} key={row.id || row.label}>
+            <span>{row.label}</span>
+            <div className="chart-track"><span style={{ width: `${Math.min(100, Math.max(0, width))}%` }} /></div>
+            <strong>{valueLabel ? valueLabel(row) : row.count}</strong>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ChartPanel({ title, note, children }) {
+  return (
+    <section className="panel-card chart-panel">
+      <div className="panel-title-row">
+        <div>
+          <h3>{title}</h3>
+          {note ? <p className="panel-subtitle">{note}</p> : null}
+        </div>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+export function AnalystDashboard({ findings, status, diagnostics, loading = false }) {
+  const riskRows = riskDistribution(findings, diagnostics);
+  const confidenceRows = confidenceDistribution(findings);
+  const coverageRows = sourceCoverageRows(status, findings);
+  const urlhausRows = urlhausStatusDistribution(findings);
+  const tagRows = topTagFamilies(findings);
+  const riskSource = diagnostics?.risk_level_distribution ? "Diagnostics sample" : "Current result set";
+
+  return (
+    <div className="dashboard-grid" aria-label="Analyst dashboard">
+      <ChartPanel title="Risk distribution" note={`${riskSource}${loading ? " while refreshing" : ""}`}>
+        <BarList rows={riskRows} emptyLabel="No risk levels available." />
+      </ChartPanel>
+      <ChartPanel title="Confidence distribution" note="Current result set">
+        <BarList rows={confidenceRows} emptyLabel="No confidence scores available." toneForRow={(row) => `confidence-${row.id}`} />
+      </ChartPanel>
+      <ChartPanel title="Source coverage" note={status?.sources ? "Corpus coverage from status overview" : "Current result set fallback"}>
+        <BarList
+          rows={coverageRows}
+          emptyLabel="No source coverage available."
+          valueLabel={(row) => `${formatPercent(row.coverage)} (${row.analyzed}/${row.total})`}
+          widthForRow={(row) => Number(row.coverage || 0) * 100}
+          toneForRow={() => "coverage"}
+        />
+      </ChartPanel>
+      <ChartPanel title="URLhaus status" note="Online/offline split from URLhaus rows">
+        <BarList rows={urlhausRows} emptyLabel="No URLhaus status fields in the current rows." />
+      </ChartPanel>
+      <ChartPanel title="Top malware/tags" note="Families, threats, signatures, and tags">
+        <BarList rows={tagRows} emptyLabel="No malware family or tag fields in the current rows." toneForRow={() => "tag"} />
+      </ChartPanel>
+    </div>
+  );
+}
+
+function SystemNotices({ healthState, statusError, evaluationError, diagnosticsError }) {
+  const notices = [];
+  if (healthState.error) {
+    notices.push({
+      key: "health",
+      tone: "bad",
+      title: "API health unavailable",
+      message: describeApiError(healthState.error).message,
+    });
+  } else if (healthState.value?.database && healthState.value.database !== "ok") {
+    notices.push({
+      key: "database",
+      tone: "bad",
+      title: "MongoDB degraded",
+      message: `Database status is ${healthState.value.database}; persisted findings and status counts may be stale or unavailable.`,
+    });
+  }
+  if (statusError) {
+    const detail = describeApiError(statusError);
+    notices.push({
+      key: "status",
+      tone: detail.kind === "unauthorized" || detail.kind === "forbidden" ? "warn" : "bad",
+      title: "Status overview unavailable",
+      message: `${detail.title}: ${detail.message}`,
+    });
+  }
+  if (evaluationError || diagnosticsError) {
+    const detail = describeApiError(evaluationError || diagnosticsError);
+    notices.push({
+      key: "evaluation",
+      tone: "warn",
+      title: "Evaluation diagnostics unavailable",
+      message: detail.message,
+    });
+  }
+  if (!notices.length) return null;
+
+  return (
+    <div className="notice-stack">
+      {notices.map((notice) => (
+        <div className="state-notice" data-tone={notice.tone} key={notice.key}>
+          <strong>{notice.title}</strong>
+          <span>{notice.message}</span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -193,7 +318,7 @@ function Overview({ health, status, evaluationDiagnostics }) {
   );
 }
 
-function StatusPanel({ status, error, onRefresh }) {
+export function StatusPanel({ status, error, onRefresh }) {
   if (error) {
     return (
       <Section title="Operational status" description="Operator or admin role required." actions={<button className="secondary-button" onClick={onRefresh}>Retry</button>}>
@@ -452,7 +577,7 @@ export default function App() {
   useEffect(() => { loadOverview(); }, []);
   useEffect(() => { loadFindings(); }, [source, limit, mode]);
 
-  const globalError = useMemo(() => health.error || findings.error || detail.error, [health.error, findings.error, detail.error]);
+  const globalError = useMemo(() => health.error || findings.error, [health.error, findings.error]);
 
   return (
     <main className="app-shell">
@@ -470,6 +595,7 @@ export default function App() {
       <Alert error={globalError} />
 
       <Overview health={health.value} status={status.value} evaluationDiagnostics={diagnostics.value} />
+      <SystemNotices healthState={health} statusError={status.error} evaluationError={evaluation.error} diagnosticsError={diagnostics.error} />
 
       <div className="workspace-grid">
         <section className="main-column">
@@ -481,7 +607,14 @@ export default function App() {
               description="Prioritized records from persisted analysis results. Select a row to inspect evidence and scoring details."
               actions={<SourceControls source={source} setSource={setSource} limit={limit} setLimit={setLimit} mode={mode} setMode={setMode} query={query} setQuery={setQuery} riskLevel={riskLevel} setRiskLevel={setRiskLevel} sortBy={sortBy} setSortBy={setSortBy} onRefresh={loadFindings} />}
             >
-              {findings.loading ? <div className="empty-state large">Loading findings...</div> : findings.error ? <Alert error={findings.error} /> : <FindingTable findings={displayedFindings} selectedKey={selectedKey} onSelect={selectFinding} />}
+              {findings.error ? (
+                <Alert error={findings.error} />
+              ) : (
+                <>
+                  <AnalystDashboard findings={displayedFindings} status={status.value} diagnostics={diagnostics.value} loading={findings.loading} />
+                  {findings.loading ? <div className="empty-state large">Loading findings...</div> : <FindingTable findings={displayedFindings} selectedKey={selectedKey} onSelect={selectFinding} />}
+                </>
+              )}
             </Section>
           ) : null}
 
@@ -496,7 +629,7 @@ export default function App() {
           {activeTab === "adhoc" ? <AnalyzeSandbox /> : null}
         </section>
 
-        <FindingDetail detail={detail.value} loading={detail.loading} />
+        <FindingDetail detail={detail.value} loading={detail.loading} error={detail.error} />
       </div>
     </main>
   );

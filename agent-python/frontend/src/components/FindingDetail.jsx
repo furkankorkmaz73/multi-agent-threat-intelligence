@@ -3,7 +3,7 @@ import { RiskBadge, SourceBadge } from "./Badges";
 import MetricCard from "./MetricCard";
 import BreakdownPanel from "./BreakdownPanel";
 import JsonBlock from "./JsonBlock";
-import { detailEvidenceGroups } from "../viewModels";
+import { detailEvidenceGroups, operationalRiskRows } from "../viewModels";
 
 function ChipList({ label, values }) {
   const items = Array.isArray(values) ? values.filter(Boolean) : [];
@@ -57,8 +57,13 @@ function EvidenceDecisionList({ title, items, count }) {
               <div className="decision-meta">
                 {item.acceptance_reason ? <span>reason: {item.acceptance_reason}</span> : null}
                 {item.rejection_reason ? <span>reason: {item.rejection_reason}</span> : null}
+                {item.manual_review_reason ? <span>review: {item.manual_review_reason}</span> : null}
+                {item.primary_reason ? <span>primary: {item.primary_reason}</span> : null}
+                {item.evidence_type ? <span>type: {item.evidence_type}</span> : null}
+                {item.provenance ? <span>provenance: {item.provenance}</span> : null}
                 {item.url_status ? <span>status: {item.url_status}</span> : null}
                 {item.threat ? <span>threat: {item.threat}</span> : null}
+                {item.confidence_cap_reason ? <span>cap: {item.confidence_cap_reason}</span> : null}
               </div>
               <ChipList label="tags" values={item.tags} />
             </div>
@@ -81,10 +86,46 @@ function EvidenceDecisions({ detail }) {
         <div><span>Shared terms</span><strong>{groups.sharedTerms.length}</strong></div>
       </div>
       <ChipList label="acceptance_reasons" values={groups.reasons} />
+      <ChipList label="manual_review_reasons" values={groups.manualReviewReasons} />
+      <ChipList label="rejection_reasons" values={groups.rejectionReasons} />
       <ChipList label="shared_terms" values={groups.sharedTerms} />
       <EvidenceDecisionList title="Accepted evidence" items={groups.accepted} count={groups.counts.accepted} />
       <EvidenceDecisionList title="Rejected evidence" items={groups.rejected} count={groups.counts.rejected} />
       <EvidenceDecisionList title="Manual-review evidence" items={groups.manualReview} count={groups.counts.manualReview} />
+    </section>
+  );
+}
+
+function EvidenceDiagnostics({ detail }) {
+  const evidence = detail?.evidence || {};
+  const stats = evidence.urlhaus_match_stats || {};
+  const rows = [
+    ["URLhaus candidates", evidence.candidate_urlhaus_count],
+    ["Dread candidates", evidence.candidate_dread_count],
+    ["Raw URLhaus candidates", stats.raw_candidate_count],
+    ["Ignored low-signal", stats.ignored_low_signal_count],
+    ["Accepted matches", stats.accepted_match_count],
+    ["Manual-review matches", stats.manual_review_match_count ?? stats.manual_review_count],
+    ["Rejected matches", stats.rejected_match_count],
+    ["Confidence cap", stats.confidence_cap_reason || detail?.confidence_cap_reason],
+    ["False-positive control", stats.false_positive_control],
+  ].filter(([, value]) => value !== undefined && value !== null && value !== "");
+
+  if (!rows.length) return null;
+
+  return (
+    <section className="panel-card">
+      <div className="panel-title-row">
+        <div>
+          <h3>Evidence diagnostics</h3>
+          <p className="panel-subtitle">Rejected and manual-review evidence is diagnostic; it is not verified evidence by itself.</p>
+        </div>
+      </div>
+      <div className="kv-grid">
+        {rows.map(([label, value]) => (
+          <div key={label}><span>{label}</span><strong>{formatCellValue(value)}</strong></div>
+        ))}
+      </div>
     </section>
   );
 }
@@ -101,6 +142,63 @@ function ObjectMetrics({ title, data = {}, keys = [] }) {
           ))}
         </div>
       ) : <p className="empty-state">No metrics available.</p>}
+    </section>
+  );
+}
+
+function ObjectSummaryPanel({ title, data = {} }) {
+  const entries = Object.entries(data || {}).filter(([, value]) => value !== undefined && value !== null && value !== "");
+  if (!entries.length) return null;
+
+  return (
+    <section className="panel-card">
+      <div className="panel-title-row"><h3>{title}</h3></div>
+      <div className="kv-grid">
+        {entries.map(([key, value]) => (
+          <div key={key}><span>{titleCase(key)}</span><strong>{formatCellValue(value)}</strong></div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function OperationalRiskPanel({ detail }) {
+  const rows = operationalRiskRows(detail);
+  if (!rows.length) return null;
+
+  return (
+    <section className="panel-card operational-risk-panel">
+      <div className="panel-title-row">
+        <div>
+          <h3>Operational risk by asset</h3>
+          <p className="panel-subtitle">Generic risk remains separate from asset-specific applicability and controls.</p>
+        </div>
+      </div>
+      <div className="operational-risk-list">
+        {rows.slice(0, 5).map((row) => (
+          <div className="operational-risk-item" key={`${row.assetId}-${row.operationalRisk}-${row.matchReason}`}>
+            <div className="operational-risk-head">
+              <strong>{row.assetId}</strong>
+              {row.finalRiskLevel ? <RiskBadge level={row.finalRiskLevel} /> : null}
+            </div>
+            <div className="score-compare-grid">
+              <div><span>Generic risk</span><strong>{formatNumber(row.genericRisk)}</strong></div>
+              <div><span>Operational risk</span><strong>{formatNumber(row.operationalRisk)}</strong></div>
+              <div><span>Delta</span><strong>{formatSigned(row.delta)}</strong></div>
+              <div><span>Confidence</span><strong>{formatNumber(row.confidence, 3)}</strong></div>
+            </div>
+            <div className="kv-grid asset-context-grid">
+              <div><span>Applicability</span><strong>{formatCellValue(row.applicable)}</strong></div>
+              <div><span>Asset match</span><strong>{formatCellValue(row.matchReason)}</strong></div>
+              <div><span>Exposure</span><strong>{formatCellValue(row.exposure)}</strong></div>
+              <div><span>Patch state</span><strong>{formatCellValue(row.patchState)}</strong></div>
+              <div><span>Criticality</span><strong>{formatCellValue(row.criticality)}</strong></div>
+              <div><span>Compensating controls</span><strong>{formatControls(row.controls, row.controlReduction)}</strong></div>
+            </div>
+            {row.explanation ? <p className="panel-copy">{row.explanation}</p> : null}
+          </div>
+        ))}
+      </div>
     </section>
   );
 }
@@ -199,9 +297,45 @@ function InlineTextList({ title, items }) {
   );
 }
 
-export default function FindingDetail({ detail, loading }) {
+function formatCellValue(value) {
+  if (value === undefined || value === null || value === "") return "-";
+  if (typeof value === "number") return formatNumber(value, 4);
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (Array.isArray(value)) return value.length ? value.map(formatCellValue).join(", ") : "-";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value).replace(/_/g, " ");
+}
+
+function formatSigned(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "-";
+  if (numeric > 0) return `+${formatNumber(numeric)}`;
+  return formatNumber(numeric);
+}
+
+function formatControls(controls, reduction) {
+  const items = Array.isArray(controls) ? controls : [];
+  const names = items.map((item) => (typeof item === "string" ? item : item?.name || item?.control_type)).filter(Boolean);
+  if (names.length) return names.join(", ");
+  if (Number(reduction || 0) > 0) return `Reduction ${formatNumber(reduction)}`;
+  return "None recorded";
+}
+
+export default function FindingDetail({ detail, loading, error }) {
   if (loading) {
     return <aside className="detail-pane"><div className="empty-state large">Loading finding detail…</div></aside>;
+  }
+
+  if (error) {
+    return (
+      <aside className="detail-pane">
+        <div className="error-banner">
+          <strong>Detail unavailable</strong>
+          <span>{error?.message || String(error)}</span>
+        </div>
+        <div className="empty-state large">Select another finding or retry after the API request succeeds.</div>
+      </aside>
+    );
   }
 
   if (!detail) {
@@ -228,9 +362,12 @@ export default function FindingDetail({ detail, loading }) {
       <div className="detail-grid">
         <BreakdownPanel title="Primary score drivers" data={detail.feature_breakdown} type="risk" />
         <BreakdownPanel title="Confidence breakdown" data={confidenceBreakdown} type="confidence" emptyLabel="No source-specific confidence breakdown available. Re-run analysis with the latest model to generate it." />
+        <OperationalRiskPanel detail={detail} />
         <EvidenceQuality evidence={evidence} />
         <EvidenceDecisions detail={detail} />
+        <EvidenceDiagnostics detail={detail} />
         <ObjectMetrics title="Graph summary" data={detail.graph_summary} keys={["node_count", "edge_count", "cross_source_edge_count", "centrality_score", "graph_density", "average_edge_confidence", "structural_strength"]} />
+        <ObjectSummaryPanel title="Relation summary" data={detail.relation_summary} />
         <DistributionPanel title="Graph relations" data={detail.graph_summary?.relation_distribution} />
         <DistributionPanel title="Graph provenance" data={detail.graph_summary?.provenance_distribution} />
         <BreakdownPanel title="Source contributions" data={detail.source_contributions} />

@@ -4,6 +4,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { ApiError, createApiClient, describeApiError } from "../src/api.js";
+import { AnalystDashboard, StatusPanel } from "../src/App.jsx";
 import FindingTable from "../src/components/FindingTable.jsx";
 import FindingDetail from "../src/components/FindingDetail.jsx";
 import { filterAndSortFindings, detailEvidenceGroups } from "../src/viewModels.js";
@@ -11,8 +12,10 @@ import {
   criticalCorrelatedCveDetail,
   criticalCorrelatedCveSummary,
   emptyFindingsResponse,
+  evaluationDiagnostics,
   forbiddenResponse,
   mediumCveSummary,
+  offlineUrlhausIocSummary,
   statusOverview,
   unauthorizedResponse,
   urlhausIocSummary,
@@ -94,6 +97,12 @@ test("finding detail renders evidence, graph, critic, trace, and recommendations
   assert.match(html, /Correlation decisions/);
   assert.match(html, /Accepted evidence/);
   assert.match(html, /Rejected evidence/);
+  assert.match(html, /Manual-review evidence/);
+  assert.match(html, /Evidence diagnostics/);
+  assert.match(html, /Operational risk by asset/);
+  assert.match(html, /Generic risk/);
+  assert.match(html, /asset-vpn-prod/);
+  assert.match(html, /Relation summary/);
   assert.match(html, /Graph summary/);
   assert.match(html, /Critic review/);
   assert.match(html, /Execution plan/);
@@ -105,7 +114,58 @@ test("detail evidence groups preserve accepted and rejected counts", () => {
 
   assert.equal(groups.counts.accepted, 1);
   assert.equal(groups.counts.rejected, 1);
+  assert.equal(groups.counts.manualReview, 1);
   assert.equal(groups.accepted[0].acceptance_reason, "exact_cve");
+});
+
+test("analyst dashboard renders distribution and URLhaus charts from existing rows", () => {
+  const html = renderToStaticMarkup(
+    <AnalystDashboard
+      findings={[criticalCorrelatedCveSummary, mediumCveSummary, urlhausIocSummary, offlineUrlhausIocSummary]}
+      status={statusOverview}
+      diagnostics={evaluationDiagnostics}
+    />,
+  );
+
+  assert.match(html, /Risk distribution/);
+  assert.match(html, /Confidence distribution/);
+  assert.match(html, /Source coverage/);
+  assert.match(html, /URLhaus status/);
+  assert.match(html, /ONLINE/);
+  assert.match(html, /OFFLINE/);
+  assert.match(html, /Top malware\/tags/);
+  assert.match(html, /ExampleLoader/);
+});
+
+test("finding detail handles missing optional fields and failed detail fetches", () => {
+  const minimalDetail = {
+    source: "cve",
+    entity_id: "CVE-2026-EMPTY",
+    risk_level: "LOW",
+    risk_score: 2.1,
+    confidence: 0.33,
+    diagnosis: "Sparse finding.",
+    evidence: {},
+    feature_breakdown: {},
+    graph_summary: {},
+    explanation: [],
+    recommendations: [],
+  };
+  const sparseHtml = renderToStaticMarkup(<FindingDetail detail={minimalDetail} loading={false} />);
+  assert.match(sparseHtml, /No source-specific confidence breakdown available/);
+  assert.match(sparseHtml, /No extracted entities/);
+
+  const errorHtml = renderToStaticMarkup(<FindingDetail detail={null} loading={false} error={new Error("detail request failed")} />);
+  assert.match(errorHtml, /Detail unavailable/);
+  assert.match(errorHtml, /detail request failed/);
+});
+
+test("status panel renders unauthorized API state", () => {
+  const error = new ApiError("Authentication required", { status: 401 });
+  const html = renderToStaticMarkup(<StatusPanel status={null} error={error} onRefresh={() => {}} />);
+
+  assert.match(html, /Operational status/);
+  assert.match(html, /Authentication required/);
 });
 
 test("status overview fixture preserves operator fields", async () => {
