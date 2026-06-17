@@ -62,7 +62,7 @@ def test_dread_high_signal_overlap_routes_to_manual_review_without_exact_cve():
     assert decisions[0].confidence_cap_reason == "dread_manual_review_cap"
 
 
-def test_dread_exact_cve_can_be_accepted_but_confidence_is_capped():
+def test_dread_exact_cve_routes_to_manual_review_without_scoring_acceptance():
     decisions = build_correlation_decisions(
         [
             {
@@ -78,12 +78,14 @@ def test_dread_exact_cve_can_be_accepted_but_confidence_is_capped():
     )
 
     decision = decisions[0]
-    assert decision.status is CorrelationDecisionStatus.ACCEPTED
-    assert decision.primary_reason == "exact_cve"
-    assert decision.final_confidence <= 0.62
-    assert decision.evidence_reliability < 0.7
-    assert decision.corroborated_dread_evidence is True
-    assert decision.confidence_cap_reason == "dread_source_reliability_cap"
+    assert decision.status is CorrelationDecisionStatus.MANUAL_REVIEW
+    assert decision.primary_reason == "ambiguous_support"
+    assert decision.final_confidence <= 0.35
+    assert decision.evidence_reliability < 0.4
+    assert decision.corroborated_dread_evidence is False
+    assert decision.accepted_evidence_count == 0
+    assert decision.manual_review_evidence_count == 1
+    assert decision.confidence_cap_reason == "dread_manual_review_cap"
 
 
 def test_weak_dread_candidate_does_not_increase_score_or_confidence():

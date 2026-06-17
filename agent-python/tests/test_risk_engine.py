@@ -187,6 +187,38 @@ class NoEvidenceDB:
         return []
 
 
+class AcceptedUrlhausExactCveDB:
+    def find_related_urlhaus(self, keywords, limit=10):
+        return [
+            {
+                "url": "https://malware.example/dropper/CVE-2026-20104.exe",
+                "threat": "malware_download",
+                "tags": ["CVE-2026-20104", "loader"],
+                "url_status": "online",
+                "date_added": "2026-03-04T10:00:00+00:00",
+            }
+        ]
+
+    def find_related_dread(self, keywords, limit=10):
+        return []
+
+
+class KeywordOnlyUrlhausDB:
+    def find_related_urlhaus(self, keywords, limit=10):
+        return [
+            {
+                "url": "https://payload.example/vpn-loader.exe",
+                "threat": "malware_download",
+                "tags": ["vpn", "gateway"],
+                "url_status": "online",
+                "date_added": "2026-03-04T10:00:00+00:00",
+            }
+        ]
+
+    def find_related_dread(self, keywords, limit=10):
+        return []
+
+
 class IgnoredUrlhausNoiseDB:
     def find_related_urlhaus(self, keywords, limit=10):
         return [
@@ -354,3 +386,51 @@ def test_cve_generic_terms_do_not_accumulate_raw_urlhaus_candidates_from_databas
     assert result["evidence"]["urlhaus_match_stats"]["ignored_low_signal_count"] == 0
     assert result["feature_breakdown"]["urlhaus_correlation_bonus"] == 0
     assert result["feature_breakdown"]["correlation_signal"] == 0
+
+
+def test_urlhaus_match_stats_explain_accepted_reason_distribution():
+    engine = RiskEngine()
+    data = {
+        "_id": "CVE-2026-20104",
+        "published": "2026-03-04T10:00:00+00:00",
+        "descriptions": [
+            {
+                "lang": "en",
+                "value": "Remote code execution vulnerability in Example VPN Gateway exploited by malware loader.",
+            }
+        ],
+        "metrics": {"cvss_metric_v31": [{"cvss_data": {"base_score": 9.0}}]},
+    }
+
+    result = engine.evaluate_cve(data=data, db=AcceptedUrlhausExactCveDB())
+    stats = result["evidence"]["urlhaus_match_stats"]
+
+    assert stats["accepted_match_count"] == 1
+    assert stats["status_distribution"]["accepted"] == 1
+    assert stats["accepted_reason_distribution"] == {"exact_cve": 1}
+    assert stats["reason_code_distribution"]["exact_cve"] == 1
+
+
+def test_urlhaus_keyword_only_match_remains_non_accepted_diagnostic_evidence():
+    engine = RiskEngine()
+    data = {
+        "_id": "CVE-2026-20105",
+        "published": "2026-03-04T10:00:00+00:00",
+        "descriptions": [
+            {
+                "lang": "en",
+                "value": "Remote code execution vulnerability in Example VPN Gateway allows command execution.",
+            }
+        ],
+        "metrics": {"cvss_metric_v31": [{"cvss_data": {"base_score": 9.0}}]},
+    }
+
+    result = engine.evaluate_cve(data=data, db=KeywordOnlyUrlhausDB())
+    stats = result["evidence"]["urlhaus_match_stats"]
+
+    assert result["evidence"]["related_urlhaus_count"] == 0
+    assert stats["accepted_match_count"] == 0
+    assert stats["status_distribution"]["accepted"] == 0
+    assert stats["signal_candidate_count"] == 1
+    assert stats["manual_review_match_count"] + stats["rejected_match_count"] == 1
+    assert result["feature_breakdown"]["urlhaus_correlation_bonus"] == 0
