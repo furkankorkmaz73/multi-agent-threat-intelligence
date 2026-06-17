@@ -110,6 +110,10 @@ def generate_thesis_artifacts(
         "ablation_summary_md": output / "ablation_summary.md",
         "correlation_decisions": output / "correlation_decisions.csv",
         "case_studies": output / "case_studies.json",
+        "evidence_policy_matrix": output / "evidence_policy_matrix.md",
+        "evidence_diagnostics_summary": output / "evidence_diagnostics_summary.md",
+        "urlhaus_dread_case_studies": output / "urlhaus_dread_case_studies.md",
+        "weak_source_handling_table": output / "weak_source_handling_table.json",
         "risk_explanation_traces": output / "risk_explanation_traces.json",
         "risk_explanation_traces_md": output / "risk_explanation_traces.md",
         "demo_walkthrough": output / "demo_walkthrough.md",
@@ -152,6 +156,11 @@ def generate_thesis_artifacts(
         files["correlation_decisions"],
     )
     write_report_json({"cases": scenario.get("notable_cases") or []}, files["case_studies"])
+    evidence_pack = _evidence_diagnostics_pack(scenario)
+    files["evidence_policy_matrix"].write_text(evidence_pack["policy_matrix_markdown"], encoding="utf-8")
+    files["evidence_diagnostics_summary"].write_text(evidence_pack["diagnostics_summary_markdown"], encoding="utf-8")
+    files["urlhaus_dread_case_studies"].write_text(evidence_pack["case_studies_markdown"], encoding="utf-8")
+    write_report_json(evidence_pack["weak_source_handling_table"], files["weak_source_handling_table"])
     explanation_traces = _risk_explanation_traces(scenario, records)
     write_report_json({"traces": explanation_traces}, files["risk_explanation_traces"])
     files["risk_explanation_traces_md"].write_text(
@@ -547,6 +556,329 @@ def _risk_explanation_traces(
             }
         )
     return traces
+
+
+def _evidence_diagnostics_pack(scenario: Mapping[str, Any]) -> dict[str, Any]:
+    decisions = list(scenario.get("correlation_decisions") or [])
+    cases = list(scenario.get("notable_cases") or [])
+    weak_table = _weak_source_handling_table(decisions, cases)
+    return {
+        "policy_matrix_markdown": _evidence_policy_matrix_markdown(weak_table),
+        "diagnostics_summary_markdown": _evidence_diagnostics_summary_markdown(decisions, cases, weak_table),
+        "case_studies_markdown": _urlhaus_dread_case_studies_markdown(decisions, cases),
+        "weak_source_handling_table": weak_table,
+    }
+
+
+def _weak_source_handling_table(
+    decisions: Sequence[Mapping[str, Any]],
+    cases: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    status_counts = _source_status_counts(decisions)
+    reason_counts = _source_reason_counts(decisions)
+    case_map = {str(item.get("case")): item for item in cases if isinstance(item, Mapping)}
+    rows = [
+        _policy_row(
+            source="urlhaus",
+            status="accepted",
+            policy="Accepted URLhaus evidence can contribute to correlation risk, confidence, and graph context when the deterministic evidence gate passes.",
+            scoring_effect="accepted_evidence_only",
+            confidence_effect="accepted_source_reliability_visible",
+            case_name="high_risk_correlated",
+            case_map=case_map,
+            status_counts=status_counts,
+            reason_counts=reason_counts,
+        ),
+        _policy_row(
+            source="urlhaus",
+            status="manual_review",
+            policy="Manual-review URLhaus candidates are retained for analyst review and diagnostics, but are not accepted scoring evidence.",
+            scoring_effect="no_risk_boost",
+            confidence_effect="manual_review_cap",
+            case_name="manual_review_not_risk_boost",
+            case_map=case_map,
+            status_counts=status_counts,
+            reason_counts=reason_counts,
+        ),
+        _policy_row(
+            source="urlhaus",
+            status="rejected",
+            policy="Rejected URLhaus candidates remain false-positive diagnostics and do not increase risk, confidence, or graph support.",
+            scoring_effect="no_risk_boost",
+            confidence_effect="rejected_confidence_cap",
+            case_name="keyword_only_false_positive_rejected",
+            case_map=case_map,
+            status_counts=status_counts,
+            reason_counts=reason_counts,
+        ),
+        _policy_row(
+            source="urlhaus",
+            status="ignored_low_signal",
+            policy="Ignored URLhaus candidates are raw retrieval noise, not rejected evidence. They are tracked only when present in scored match statistics.",
+            scoring_effect="no_risk_boost",
+            confidence_effect="no_confidence_penalty",
+            case_name="urlhaus_ignored_low_signal_fixture",
+            case_map=case_map,
+            status_counts=status_counts,
+            reason_counts=reason_counts,
+        ),
+        _policy_row(
+            source="dread",
+            status="accepted",
+            policy="Accepted Dread scoring evidence is disabled for CVE correlation. Dread exact-CVE chatter routes to manual review instead.",
+            scoring_effect="not_enabled",
+            confidence_effect="not_accepted_evidence",
+            case_name="accepted_dread_scoring_evidence",
+            case_map=case_map,
+            status_counts=status_counts,
+            reason_counts=reason_counts,
+        ),
+        _policy_row(
+            source="dread",
+            status="manual_review",
+            policy="Manual-review Dread candidates are weak chatter / early-warning evidence only and do not directly escalate risk.",
+            scoring_effect="no_risk_boost",
+            confidence_effect="dread_manual_review_cap",
+            case_name="dread_only_manual_review",
+            case_map=case_map,
+            status_counts=status_counts,
+            reason_counts=reason_counts,
+        ),
+        _policy_row(
+            source="dread",
+            status="rejected",
+            policy="Rejected Dread candidates remain diagnostic and are not treated as confirmed exploitation.",
+            scoring_effect="no_risk_boost",
+            confidence_effect="rejected_dread_no_confidence",
+            case_name="weak_dread_rejected",
+            case_map=case_map,
+            status_counts=status_counts,
+            reason_counts=reason_counts,
+        ),
+    ]
+    return {
+        "artifact": "weak_source_handling_table",
+        "version": "weak-source-handling-v1",
+        "scope": "deterministic thesis scenario",
+        "claim_boundary": "Diagnostics explain current evidence handling only; they do not change production risk_score, confidence semantics, or evidence gates.",
+        "status_counts": {source: dict(counts) for source, counts in sorted(status_counts.items())},
+        "reason_code_distributions": {
+            source: {
+                status: dict(counts)
+                for status, counts in sorted(statuses.items())
+            }
+            for source, statuses in sorted(reason_counts.items())
+        },
+        "rows": rows,
+    }
+
+
+def _policy_row(
+    *,
+    source: str,
+    status: str,
+    policy: str,
+    scoring_effect: str,
+    confidence_effect: str,
+    case_name: str,
+    case_map: Mapping[str, Mapping[str, Any]],
+    status_counts: Mapping[str, Mapping[str, int]],
+    reason_counts: Mapping[str, Mapping[str, Mapping[str, int]]],
+) -> dict[str, Any]:
+    observed_count = int(status_counts.get(source, {}).get(status, 0))
+    case = case_map.get(case_name)
+    return {
+        "source": source,
+        "candidate_status": status,
+        "policy": policy,
+        "risk_score_effect": scoring_effect,
+        "confidence_effect": confidence_effect,
+        "observed_decision_count": observed_count,
+        "reason_code_distribution": dict(reason_counts.get(source, {}).get(status, {})),
+        "fixture_case": case_name if case else "",
+        "case_available": bool(case),
+        "case_note": _case_note(case) if case else "Absent from the deterministic scenario; future fixture work can add this case without inventing current evidence.",
+    }
+
+
+def _source_status_counts(decisions: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for decision in decisions:
+        source = str(decision.get("source") or decision.get("evidence_source") or "unknown")
+        status = str(decision.get("decision") or decision.get("status") or "unknown")
+        counts.setdefault(source, {})
+        counts[source][status] = counts[source].get(status, 0) + 1
+    return counts
+
+
+def _source_reason_counts(decisions: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, dict[str, int]]]:
+    counts: dict[str, dict[str, dict[str, int]]] = {}
+    for decision in decisions:
+        source = str(decision.get("source") or decision.get("evidence_source") or "unknown")
+        status = str(decision.get("decision") or decision.get("status") or "unknown")
+        reason = str(decision.get("primary_reason") or decision.get("rejection_reason") or decision.get("manual_review_reason") or "unspecified")
+        counts.setdefault(source, {}).setdefault(status, {})
+        counts[source][status][reason] = counts[source][status].get(reason, 0) + 1
+    return counts
+
+
+def _evidence_policy_matrix_markdown(table: Mapping[str, Any]) -> str:
+    rows = list(table.get("rows") or [])
+    return "\n".join(
+        [
+            "# Evidence Policy Matrix",
+            "",
+            "This deterministic thesis artifact summarizes the current URLhaus and Dread evidence policy. It is generated from the thesis scenario and does not change scoring behavior.",
+            "",
+            "## Policy Matrix",
+            "",
+            _markdown_table(
+                ["Source", "Candidate Status", "Risk Score Effect", "Confidence Effect", "Observed", "Fixture Case"],
+                [
+                    [
+                        row.get("source"),
+                        row.get("candidate_status"),
+                        row.get("risk_score_effect"),
+                        row.get("confidence_effect"),
+                        row.get("observed_decision_count"),
+                        row.get("fixture_case") or "absent",
+                    ]
+                    for row in rows
+                ],
+                align=["left", "left", "left", "left", "right", "left"],
+            ),
+            "",
+            "## Claim Boundaries",
+            "",
+            "- Accepted URLhaus evidence can support risk only when the deterministic evidence gate passes.",
+            "- URLhaus keyword-only, stale, and unrelated-product candidates remain diagnostic when rejected or routed to manual review.",
+            "- Dread candidates are weak chatter / early-warning evidence only in CVE correlation.",
+            "- Accepted Dread scoring evidence is not enabled; Dread exact-CVE chatter remains manual review.",
+            "- These artifacts do not alter `risk_score`, confidence semantics, database schema, collectors, API, or frontend behavior.",
+        ]
+    ) + "\n"
+
+
+def _evidence_diagnostics_summary_markdown(
+    decisions: Sequence[Mapping[str, Any]],
+    cases: Sequence[Mapping[str, Any]],
+    table: Mapping[str, Any],
+) -> str:
+    status_counts = table.get("status_counts") or {}
+    reason_counts = table.get("reason_code_distributions") or {}
+    rows = []
+    for source in sorted(status_counts):
+        for status, count in sorted((status_counts.get(source) or {}).items()):
+            rows.append([source, status, count, _format_reason_counts((reason_counts.get(source) or {}).get(status) or {})])
+    absent_rows = [
+        row
+        for row in table.get("rows") or []
+        if not row.get("case_available")
+    ]
+    return "\n".join(
+        [
+            "# Evidence Diagnostics Summary",
+            "",
+            "This artifact summarizes URLhaus and Dread candidate outcomes from the deterministic thesis scenario. Counts describe fixture coverage, not live source prevalence.",
+            "",
+            "## Candidate Status Distribution",
+            "",
+            _markdown_table(
+                ["Source", "Status", "Count", "Reason Codes"],
+                rows or [["none", "none", 0, "none"]],
+                align=["left", "left", "right", "left"],
+            ),
+            "",
+            "## Coverage Notes",
+            "",
+            f"- Correlation decisions reviewed: {len(decisions)}.",
+            f"- Notable cases reviewed: {len(cases)}.",
+            "- Dread accepted scoring evidence count is expected to be zero in the current policy.",
+            "- Manual-review and rejected evidence remains visible for thesis diagnostics but does not become accepted scoring evidence.",
+            "",
+            "## Absent Or Future Fixture Work",
+            "",
+            _markdown_table(
+                ["Source", "Status", "Fixture Case", "Note"],
+                [
+                    [
+                        row.get("source"),
+                        row.get("candidate_status"),
+                        row.get("fixture_case") or "absent",
+                        row.get("case_note"),
+                    ]
+                    for row in absent_rows
+                ]
+                or [["none", "none", "none", "All policy rows have fixture case coverage."]],
+                align=["left", "left", "left", "left"],
+            ),
+        ]
+    ) + "\n"
+
+
+def _urlhaus_dread_case_studies_markdown(
+    decisions: Sequence[Mapping[str, Any]],
+    cases: Sequence[Mapping[str, Any]],
+) -> str:
+    case_map = {str(item.get("case")): item for item in cases if isinstance(item, Mapping)}
+    study_specs = [
+        ("Accepted URLhaus exact-CVE IOC", "UH-9001", "high_risk_correlated"),
+        ("URLhaus manual-review candidate", "UH-9002", "manual_review_not_risk_boost"),
+        ("URLhaus keyword-only false positive", "UH-FP-KEYWORD", "keyword_only_false_positive_rejected"),
+        ("URLhaus stale evidence control", "UH-FP-STALE", "stale_evidence_rejected_or_capped"),
+        ("URLhaus unrelated-product overlap", "UH-FP-PRODUCT", "unrelated_product_overlap_rejected"),
+        ("Dread exact-CVE manual review", "DR-9001", "dread_corroborated_by_urlhaus_or_kev"),
+        ("Dread-only manual review", "DR-9017", "dread_only_manual_review"),
+        ("Weak Dread rejected", "DR-9002", "weak_dread_rejected"),
+        ("Accepted Dread scoring evidence", "DR-ACCEPTED", "accepted_dread_scoring_evidence"),
+    ]
+    rows = []
+    for title, target, case_name in study_specs:
+        decision = _decision_by_target(decisions, target)
+        case = case_map.get(case_name)
+        rows.append(
+            [
+                title,
+                target,
+                decision.get("source", "") if decision else "absent",
+                (decision.get("decision") or decision.get("status")) if decision else "absent",
+                decision.get("primary_reason", "") if decision else "",
+                "yes" if case else "no",
+                _case_note(case) if case else "Absent from the deterministic scenario; future fixture work can add this case without inventing current evidence.",
+            ]
+        )
+    return "\n".join(
+        [
+            "# URLhaus and Dread Case Studies",
+            "",
+            "This artifact maps deterministic fixture cases to URLhaus and Dread evidence outcomes. It uses only existing scenario decisions and explicitly marks absent cases.",
+            "",
+            "## Case Study Table",
+            "",
+            _markdown_table(
+                ["Case", "Target", "Source", "Decision", "Reason", "Fixture Case Present", "Diagnostic Note"],
+                rows,
+                align=["left", "left", "left", "left", "left", "left", "left"],
+            ),
+            "",
+            "## Interpretation",
+            "",
+            "- URLhaus accepted evidence is represented by exact-CVE or otherwise gate-passing IOC support.",
+            "- URLhaus keyword-only and stale/noisy cases are represented as rejected or manual-review diagnostics.",
+            "- Dread exact-CVE and high-signal chatter are represented as manual review or rejected evidence.",
+            "- No accepted Dread scoring-evidence case is present because that behavior is intentionally disabled.",
+        ]
+    ) + "\n"
+
+
+def _decision_by_target(decisions: Sequence[Mapping[str, Any]], target: str) -> Mapping[str, Any]:
+    return next((decision for decision in decisions if str(decision.get("target_identifier")) == target), {})
+
+
+def _format_reason_counts(counts: Mapping[str, Any]) -> str:
+    if not counts:
+        return "none"
+    return "; ".join(f"{key}={value}" for key, value in sorted(counts.items()))
 
 
 def _risk_explanation_traces_markdown(traces: Sequence[Mapping[str, Any]]) -> str:

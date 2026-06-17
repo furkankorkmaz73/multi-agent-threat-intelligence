@@ -148,6 +148,34 @@ def test_quality_gate_fails_when_demo_walkthrough_heading_is_missing(tmp_path):
     assert any("## Output Files" in error for error in errors)
 
 
+def test_quality_gate_fails_when_evidence_policy_heading_is_missing(tmp_path):
+    output_dir = _generate_bundle(tmp_path)
+    markdown_path = output_dir / "evidence_policy_matrix.md"
+    markdown_path.write_text(
+        markdown_path.read_text(encoding="utf-8").replace("## Claim Boundaries\n", ""),
+        encoding="utf-8",
+    )
+
+    errors = _quality_errors(output_dir)
+
+    assert any("evidence_policy_matrix.md missing required headings" in error for error in errors)
+    assert any("## Claim Boundaries" in error for error in errors)
+
+
+def test_quality_gate_fails_when_weak_source_table_enables_accepted_dread(tmp_path):
+    output_dir = _generate_bundle(tmp_path)
+    path = output_dir / "weak_source_handling_table.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    for row in payload["rows"]:
+        if row["source"] == "dread" and row["candidate_status"] == "accepted":
+            row["risk_score_effect"] = "accepted_evidence_only"
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    errors = _quality_errors(output_dir)
+
+    assert any("Dread accepted policy row must keep risk_score_effect as not_enabled" in error for error in errors)
+
+
 def test_quality_gate_fails_when_methodology_safe_framing_is_missing(tmp_path):
     output_dir = _generate_bundle(tmp_path)
     markdown_path = output_dir / "methodology_summary.md"
