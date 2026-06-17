@@ -42,10 +42,10 @@ class CriticAgent:
             warnings.append("Risk is high but confidence remains moderate; analyst review is recommended.")
             recommended_actions.append("Queue for analyst review before escalation.")
         if dread_only and score >= 8.5:
-            issues.append("Dread-only accepted evidence is associated with CRITICAL risk; verify that stronger corroboration is not required.")
-            recommended_actions.append("Require stronger corroboration before treating Dread-only support as critical escalation.")
+            issues.append("Accepted Dread-only evidence is associated with CRITICAL risk; Dread-only support should remain manual review.")
+            recommended_actions.append("Remove Dread-only support from accepted risk evidence and require stronger corroboration before escalation.")
         elif dread_only and score >= 7.0:
-            warnings.append("Dread-only accepted evidence is associated with high risk; keep confidence bounded and review manually.")
+            warnings.append("Accepted Dread-only evidence is associated with high risk; keep it bounded and review manually.")
             recommended_actions.append("Review Dread-only high-risk item for corroborating URLhaus, KEV, EPSS, or exact CVE evidence.")
         if rejected_or_manual_count > 0 and correlation_signal > 0 and correlation_count == 0:
             issues.append("Rejected or manual-review correlation appears to contribute positive correlation_signal.")

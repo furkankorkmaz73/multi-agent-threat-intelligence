@@ -246,7 +246,7 @@ def calculate_cve_confidence(
         raw_confidence = min(raw_confidence, 0.58 if dread_exact_hits or high_signal_hits else 0.52)
         confidence_cap_reason = "dread_only_evidence_cap"
     elif corroborated_dread_evidence:
-        confidence_cap_reason = "corroborated_dread_modest_support"
+        confidence_cap_reason = "dread_context_with_stronger_evidence"
 
     confidence = round(max(0.05, min(raw_confidence, 0.95)), 3)
     breakdown = {

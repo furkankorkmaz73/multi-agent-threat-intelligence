@@ -92,7 +92,7 @@ Confidence is component-level and auditable. It includes metadata quality, CVSS 
 
 Only accepted correlation decisions feed the `correlation_signal`. Rejected and manual-review candidates remain visible in diagnostic exports, but they do not increase accepted-evidence counts, correlation signal, graph context, risk, or confidence as accepted evidence.
 
-Dread-only evidence is capped unless corroborated by stronger evidence because dark-web posts are difficult to reproduce, verify, and attribute. The confidence breakdown exposes `dread_evidence_present`, `dread_only_evidence`, `corroborated_dread_evidence`, `evidence_reliability`, and `confidence_cap_reason` so Dread support remains auditable. A Dread-only manual-review or rejected candidate does not increase accepted-evidence counts, risk, graph context, or confidence.
+Dread evidence is capped because dark-web posts are difficult to reproduce, verify, and attribute. The confidence breakdown exposes `dread_evidence_present`, `dread_only_evidence`, `corroborated_dread_evidence`, `evidence_reliability`, and `confidence_cap_reason` so Dread support remains auditable. Dread-only manual-review or rejected candidates, including exact-CVE chatter, do not increase accepted-evidence counts, risk, graph context, or confidence.
 
 ## Explanation Traces
 

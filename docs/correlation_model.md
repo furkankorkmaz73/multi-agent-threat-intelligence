@@ -16,9 +16,9 @@ URLhaus retrieval also applies a conservative prefilter before querying the data
 
 Exact CVE references are the strongest accepted signal. Generic keyword overlap is not enough for acceptance.
 
-URLhaus records are IOC artifacts, so they require stronger support than ordinary text overlap. Accepted URLhaus evidence normally needs exact CVE reference, strong entity alignment with meaningful support, high-signal exploit/malware terms with enough shared terms and temporal support, or semantic plus temporal support.
+URLhaus records are IOC artifacts, so they require stronger support than ordinary text overlap. Accepted URLhaus evidence normally needs exact CVE reference, strong entity alignment with meaningful support, high-signal exploit/malware terms with enough shared terms and temporal support, or semantic plus temporal support. URLhaus match stats include accepted, manual-review, rejected, and ignored candidate counts plus reason-code distributions so noisy IOC retrievals can be audited without treating every retrieval hit as evidence.
 
-Dread records are stricter because they are optional experimental intelligence. A standalone non-exact Dread mention is not accepted as verified evidence, even when it contains high-signal exploit terminology. Exact CVE references in Dread can be accepted, but their confidence is explicitly capped. Non-exact Dread support is routed to `manual_review` unless stronger corroborating evidence is available elsewhere in the scenario.
+Dread records are stricter because they are optional experimental intelligence. Dread candidates are weak chatter / early-warning indicators only in CVE scoring. A Dread-only mention, including an exact CVE mention, is routed to `manual_review` or `rejected` and is not accepted as verified exploitation evidence.
 
 False-positive controls are deterministic. Keyword-only URLhaus candidates, stale external records outside the temporal support window, unrelated product/vendor overlap, and IOC mentions without vulnerability context are preserved diagnostically but are not accepted evidence.
 
@@ -29,7 +29,7 @@ Rejected and manual-review candidates do not increase:
 - confidence
 - accepted evidence counts
 
-Ignored low-signal candidates also do not increase confidence penalties, graph support, `correlation_signal`, or URLhaus source contributions. They are retained only for retrieval-quality analytics.
+Ignored low-signal candidates also do not increase confidence penalties, graph support, `correlation_signal`, or URLhaus source contributions. They are retained only for retrieval-quality analytics. Manual-review and rejected Dread candidates remain visible in diagnostics but do not increase risk, graph support, accepted evidence counts, or `patch_now`-style recommendations.
 
 ## Provenance
 

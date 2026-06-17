@@ -114,23 +114,24 @@ def test_cve_high_severity_with_strong_external_evidence_is_locked(monkeypatch):
         },
     )
 
-    assert result["risk_score"] == 8.59
+    assert result["risk_score"] == 8.28
     assert result["confidence"] == 0.95
-    assert result["risk_level"] == "CRITICAL"
+    assert result["risk_level"] == "HIGH"
     assert result["evidence"]["related_urlhaus_count"] == 1
-    assert result["evidence"]["related_dread_count"] == 1
+    assert result["evidence"]["related_dread_count"] == 0
     assert result["evidence"]["urlhaus_match_stats"]["accepted_match_count"] == 1
-    assert result["evidence"]["dread_match_stats"]["accepted_match_count"] == 1
-    assert result["confidence_breakdown"]["signals"]["accepted_external_evidence"] == 2
-    assert result["confidence_breakdown"]["signals"]["exact_hits"] == 2
+    assert result["evidence"]["dread_match_stats"]["accepted_match_count"] == 0
+    assert result["evidence"]["dread_match_stats"]["manual_review_match_count"] == 1
+    assert result["confidence_breakdown"]["signals"]["accepted_external_evidence"] == 1
+    assert result["confidence_breakdown"]["signals"]["exact_hits"] == 1
     assert result["feature_breakdown"]["base_cvss_component"] == 7.06
     assert result["feature_breakdown"]["recentness_bonus"] == 0.8
     assert result["feature_breakdown"]["urlhaus_correlation_bonus"] == 1.51
-    assert result["feature_breakdown"]["dread_correlation_bonus"] == 0.92
+    assert result["feature_breakdown"]["dread_correlation_bonus"] == 0.0
     assert result["feature_breakdown"]["nlp_context_bonus"] == 1.2
     assert result["feature_breakdown"]["llm_context_bonus"] == 0.3
     assert result["feature_breakdown"]["graph_bonus"] == 0.19
-    assert result["feature_breakdown"]["risk_score_from_signals"] == 8.59
+    assert result["feature_breakdown"]["risk_score_from_signals"] == 8.28
 
 
 def test_cve_medium_severity_with_limited_evidence_is_locked(monkeypatch):

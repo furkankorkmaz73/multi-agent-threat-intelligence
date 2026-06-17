@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -166,6 +167,12 @@ def _score_matches(
     rejected_count = 0
     manual_review_count = 0
     strongest_match_score = 0.0
+    status_counts: Counter[str] = Counter()
+    reason_counts: Counter[str] = Counter()
+    accepted_reason_counts: Counter[str] = Counter()
+    manual_review_reason_counts: Counter[str] = Counter()
+    rejection_reason_counts: Counter[str] = Counter()
+    ignored_reason_counts: Counter[str] = Counter()
 
     for match in matches[:8]:
         if source == "dread":
@@ -190,17 +197,23 @@ def _score_matches(
 
         if _is_ignored_low_signal_candidate(evaluated):
             ignored_low_signal_count += 1
+            ignored_reason_counts["low_signal_retrieval_noise"] += 1
             continue
 
         signal_candidate_count += 1
+        status_counts[decision.status.value] += 1
+        reason_counts[reason or "unspecified"] += 1
         if decision.status is not CorrelationDecisionStatus.ACCEPTED:
             if decision.status is CorrelationDecisionStatus.MANUAL_REVIEW:
                 manual_review_count += 1
+                manual_review_reason_counts[reason or "unspecified"] += 1
             else:
                 rejected_count += 1
+                rejection_reason_counts[reason or "unspecified"] += 1
             continue
         if source == "dread":
             accepted_dread_categories.extend(_dread_categories_for_match(match))
+        accepted_reason_counts[reason or "unspecified"] += 1
 
         score = (
             lexical * cfg.lexical_weight
@@ -244,6 +257,12 @@ def _score_matches(
             manual_review_count=manual_review_count,
             source=source,
             candidate_dread_categories=candidate_dread_categories,
+            status_counts=status_counts,
+            reason_counts=reason_counts,
+            accepted_reason_counts=accepted_reason_counts,
+            manual_review_reason_counts=manual_review_reason_counts,
+            rejection_reason_counts=rejection_reason_counts,
+            ignored_reason_counts=ignored_reason_counts,
         )
 
     # Diminishing returns: three weak similar posts should not outweigh one strong exact correlation.
@@ -295,6 +314,12 @@ def _score_matches(
         "shared_terms": sorted(set(shared_terms))[:12],
         "acceptance_reasons": sorted(set(reasons))[:8],
         "accepted_matches": accepted_matches[:8],
+        "status_distribution": _counter_dict(status_counts, ("accepted", "manual_review", "rejected")),
+        "reason_code_distribution": _counter_dict(reason_counts),
+        "accepted_reason_distribution": _counter_dict(accepted_reason_counts),
+        "manual_review_reason_distribution": _counter_dict(manual_review_reason_counts),
+        "rejection_reason_distribution": _counter_dict(rejection_reason_counts),
+        "ignored_reason_distribution": _counter_dict(ignored_reason_counts),
         "candidate_count": raw_candidate_count,
         "hybrid_score_cap": cap,
         "evidence_source": source,
@@ -585,11 +610,25 @@ def _empty_match_stats(
     manual_review_count: int = 0,
     source: str = "unknown",
     candidate_dread_categories: Optional[List[str]] = None,
+    status_counts: Optional[Counter[str]] = None,
+    reason_counts: Optional[Counter[str]] = None,
+    accepted_reason_counts: Optional[Counter[str]] = None,
+    manual_review_reason_counts: Optional[Counter[str]] = None,
+    rejection_reason_counts: Optional[Counter[str]] = None,
+    ignored_reason_counts: Optional[Counter[str]] = None,
 ) -> Dict[str, Any]:
     candidate_dread_categories = candidate_dread_categories or []
+    status_counts = status_counts or Counter()
+    reason_counts = reason_counts or Counter()
+    accepted_reason_counts = accepted_reason_counts or Counter()
+    manual_review_reason_counts = manual_review_reason_counts or Counter()
+    rejection_reason_counts = rejection_reason_counts or Counter()
+    ignored_reason_counts = ignored_reason_counts or Counter()
     raw_candidate_count = int(raw_candidate_count if raw_candidate_count else rejected_count + manual_review_count + ignored_low_signal_count)
     ignored_low_signal_count = int(ignored_low_signal_count)
     signal_candidate_count = int(signal_candidate_count if signal_candidate_count else rejected_count + manual_review_count)
+    if not status_counts:
+        status_counts.update({"manual_review": manual_review_count, "rejected": rejected_count})
     return {
         "avg_overlap_ratio": 0.0,
         "avg_lexical_score": 0.0,
@@ -614,6 +653,12 @@ def _empty_match_stats(
         "shared_terms": [],
         "acceptance_reasons": [],
         "accepted_matches": [],
+        "status_distribution": _counter_dict(status_counts, ("accepted", "manual_review", "rejected")),
+        "reason_code_distribution": _counter_dict(reason_counts),
+        "accepted_reason_distribution": _counter_dict(accepted_reason_counts),
+        "manual_review_reason_distribution": _counter_dict(manual_review_reason_counts),
+        "rejection_reason_distribution": _counter_dict(rejection_reason_counts),
+        "ignored_reason_distribution": _counter_dict(ignored_reason_counts),
         "candidate_count": raw_candidate_count,
         "evidence_source": source,
         "evidence_reliability": _source_reliability(source),
@@ -632,6 +677,12 @@ def _source_reliability(source: str) -> float:
     if source == "dread":
         return 0.38
     return 0.0
+
+
+def _counter_dict(counter: Counter[str], keys: Iterable[str] = ()) -> Dict[str, int]:
+    data = {key: int(counter.get(key, 0)) for key in keys}
+    data.update({key: int(value) for key, value in sorted(counter.items()) if int(value) > 0})
+    return data
 
 
 def correlate_keywords(source_keywords=None, candidate_texts=None, **kwargs):

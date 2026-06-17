@@ -477,8 +477,9 @@ def _notable_cases(repository: InMemoryScenarioRepository, operational_risk: Lis
         {
             "case": "dread_corroborated_by_urlhaus_or_kev",
             "entity_id": "CVE-2026-9001",
-            "description": "Dread exact-CVE mention is accepted only as bounded support in a case also supported by URLhaus and KEV evidence.",
+            "description": "Dread exact-CVE mention remains manual-review evidence even in a case also supported by URLhaus and KEV evidence.",
             "accepted_dread_decisions": sum(1 for item in decisions if item["target_identifier"] == "DR-9001" and item["status"] == "accepted"),
+            "manual_review_dread_decisions": sum(1 for item in decisions if item["target_identifier"] == "DR-9001" and item["status"] == "manual_review"),
             "corroborated_by": ["urlhaus", "kev"],
             "confidence_cap_reason": next(
                 (

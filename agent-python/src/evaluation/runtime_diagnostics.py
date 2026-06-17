@@ -29,6 +29,7 @@ def build_runtime_diagnostics(
     risk_levels = Counter(str(_get_nested(doc, "analysis.risk_level", "UNKNOWN")) for doc in analyzed)
 
     urlhaus_stats = [_get_nested(doc, "analysis.evidence.urlhaus_match_stats", {}) or {} for doc in analyzed]
+    dread_stats = [_get_nested(doc, "analysis.evidence.dread_match_stats", {}) or {} for doc in analyzed]
     confidence_breakdowns = [_get_nested(doc, "analysis.confidence_breakdown", {}) or {} for doc in analyzed]
     epss_available = sum(1 for doc in analyzed if _get_nested(doc, "analysis.evidence.epss_available") is True)
     kev_known = sum(1 for doc in analyzed if _get_nested(doc, "analysis.evidence.kev_status_known") is True)
@@ -46,6 +47,32 @@ def build_runtime_diagnostics(
         "accepted_evidence_count": _sum_stat(urlhaus_stats, "accepted_evidence_count"),
         "manual_review_evidence_count": _sum_stat(urlhaus_stats, "manual_review_evidence_count"),
         "rejected_evidence_count": _sum_stat(urlhaus_stats, "rejected_evidence_count"),
+        "status_distribution": _sum_counter_stat(urlhaus_stats, "status_distribution"),
+        "reason_code_distribution": _sum_counter_stat(urlhaus_stats, "reason_code_distribution"),
+        "accepted_reason_distribution": _sum_counter_stat(urlhaus_stats, "accepted_reason_distribution"),
+        "manual_review_reason_distribution": _sum_counter_stat(urlhaus_stats, "manual_review_reason_distribution"),
+        "rejection_reason_distribution": _sum_counter_stat(urlhaus_stats, "rejection_reason_distribution"),
+        "ignored_reason_distribution": _sum_counter_stat(urlhaus_stats, "ignored_reason_distribution"),
+    }
+    dread_diagnostics = {
+        "raw_candidate_count": _sum_stat(dread_stats, "raw_candidate_count", fallback_key="candidate_count"),
+        "ignored_low_signal_count": _sum_stat(dread_stats, "ignored_low_signal_count"),
+        "evaluated_candidate_count": _sum_stat(dread_stats, "evaluated_candidate_count"),
+        "signal_candidate_count": _sum_stat(dread_stats, "signal_candidate_count"),
+        "accepted_match_count": _sum_stat(dread_stats, "accepted_match_count"),
+        "manual_review_match_count": _sum_stat(dread_stats, "manual_review_match_count"),
+        "rejected_match_count": _sum_stat(dread_stats, "rejected_match_count"),
+        "accepted_evidence_count": _sum_stat(dread_stats, "accepted_evidence_count"),
+        "manual_review_evidence_count": _sum_stat(dread_stats, "manual_review_evidence_count"),
+        "rejected_evidence_count": _sum_stat(dread_stats, "rejected_evidence_count"),
+        "status_distribution": _sum_counter_stat(dread_stats, "status_distribution"),
+        "reason_code_distribution": _sum_counter_stat(dread_stats, "reason_code_distribution"),
+        "accepted_reason_distribution": _sum_counter_stat(dread_stats, "accepted_reason_distribution"),
+        "manual_review_reason_distribution": _sum_counter_stat(dread_stats, "manual_review_reason_distribution"),
+        "rejection_reason_distribution": _sum_counter_stat(dread_stats, "rejection_reason_distribution"),
+        "ignored_reason_distribution": _sum_counter_stat(dread_stats, "ignored_reason_distribution"),
+        "observed_dread_category_distribution": _list_value_distribution(dread_stats, "observed_dread_categories"),
+        "accepted_dread_category_distribution": _list_value_distribution(dread_stats, "accepted_dread_categories"),
     }
     high_risk_low_confidence = sorted(
         [
@@ -94,6 +121,7 @@ def build_runtime_diagnostics(
             "kev_listed_count": kev_listed,
         },
         "urlhaus_correlation_diagnostics": urlhaus_diagnostics,
+        "dread_correlation_diagnostics": dread_diagnostics,
         "high_risk_low_confidence_cases": high_risk_low_confidence,
     }
 
@@ -107,6 +135,7 @@ def write_runtime_diagnostics(report: Mapping[str, Any], output_dir: str | Path)
         "confidence_distribution": output / "confidence_distribution.json",
         "risk_distribution": output / "risk_distribution.json",
         "urlhaus_correlation_diagnostics": output / "urlhaus_correlation_diagnostics.json",
+        "dread_correlation_diagnostics": output / "dread_correlation_diagnostics.json",
         "high_risk_low_confidence_cases": output / "high_risk_low_confidence_cases.json",
     }
     paths["live_reanalysis_summary_json"].write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
@@ -114,6 +143,7 @@ def write_runtime_diagnostics(report: Mapping[str, Any], output_dir: str | Path)
     paths["confidence_distribution"].write_text(json.dumps(report.get("confidence_distribution", {}), indent=2), encoding="utf-8")
     paths["risk_distribution"].write_text(json.dumps(report.get("risk_distribution", {}), indent=2), encoding="utf-8")
     paths["urlhaus_correlation_diagnostics"].write_text(json.dumps(report.get("urlhaus_correlation_diagnostics", {}), indent=2), encoding="utf-8")
+    paths["dread_correlation_diagnostics"].write_text(json.dumps(report.get("dread_correlation_diagnostics", {}), indent=2), encoding="utf-8")
     paths["high_risk_low_confidence_cases"].write_text(json.dumps(report.get("high_risk_low_confidence_cases", []), indent=2, default=str), encoding="utf-8")
     return {key: str(value) for key, value in paths.items()}
 
@@ -122,6 +152,7 @@ def render_runtime_summary_markdown(report: Mapping[str, Any]) -> str:
     counts = report.get("processed_counts", {}) or {}
     coverage = report.get("external_signal_coverage", {}) or {}
     urlhaus = report.get("urlhaus_correlation_diagnostics", {}) or {}
+    dread = report.get("dread_correlation_diagnostics", {}) or {}
     confidence = report.get("confidence_distribution", {}) or {}
     risk = report.get("risk_distribution", {}) or {}
     lines = [
@@ -158,8 +189,24 @@ def render_runtime_summary_markdown(report: Mapping[str, Any]) -> str:
         f"- Accepted candidates: `{urlhaus.get('accepted_match_count', 0)}`",
         f"- Manual-review candidates: `{urlhaus.get('manual_review_match_count', 0)}`",
         f"- Rejected signal-bearing candidates: `{urlhaus.get('rejected_match_count', 0)}`",
+        f"- Status distribution: `{_format_distribution(urlhaus.get('status_distribution'))}`",
+        f"- Accepted reason codes: `{_format_distribution(urlhaus.get('accepted_reason_distribution'))}`",
+        f"- Manual-review reason codes: `{_format_distribution(urlhaus.get('manual_review_reason_distribution'))}`",
+        f"- Rejection reason codes: `{_format_distribution(urlhaus.get('rejection_reason_distribution'))}`",
         "",
         "Ignored low-signal candidates are raw retrieval noise, not rejected evidence. They do not increase correlation risk, confidence, or graph support.",
+        "",
+        "## Dread Candidate Accounting",
+        "",
+        f"- Raw candidates: `{dread.get('raw_candidate_count', 0)}`",
+        f"- Accepted candidates: `{dread.get('accepted_match_count', 0)}`",
+        f"- Manual-review candidates: `{dread.get('manual_review_match_count', 0)}`",
+        f"- Rejected signal-bearing candidates: `{dread.get('rejected_match_count', 0)}`",
+        f"- Status distribution: `{_format_distribution(dread.get('status_distribution'))}`",
+        f"- Manual-review reason codes: `{_format_distribution(dread.get('manual_review_reason_distribution'))}`",
+        f"- Rejection reason codes: `{_format_distribution(dread.get('rejection_reason_distribution'))}`",
+        "",
+        "Dread diagnostics are weak chatter / early-warning indicators only. Dread-only candidates remain outside accepted scoring evidence.",
         "",
         "## High-Risk Moderate/Low-Confidence Cases",
         "",
@@ -203,6 +250,35 @@ def _sum_stat(rows: Iterable[Mapping[str, Any]], key: str, *, fallback_key: str 
             value = row.get(fallback_key)
         total += int(value or 0)
     return total
+
+
+def _sum_counter_stat(rows: Iterable[Mapping[str, Any]], key: str) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for row in rows:
+        values = row.get(key) or {}
+        if not isinstance(values, Mapping):
+            continue
+        for item_key, value in values.items():
+            counter[str(item_key)] += int(value or 0)
+    return dict(sorted((key, value) for key, value in counter.items() if value > 0))
+
+
+def _list_value_distribution(rows: Iterable[Mapping[str, Any]], key: str) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for row in rows:
+        values = row.get(key) or []
+        if isinstance(values, str):
+            values = [values]
+        for value in values:
+            if value not in (None, ""):
+                counter[str(value)] += 1
+    return dict(sorted(counter.items()))
+
+
+def _format_distribution(values: Any) -> str:
+    if not isinstance(values, Mapping) or not values:
+        return "none"
+    return ", ".join(f"{key}={value}" for key, value in sorted(values.items()))
 
 
 def _bucket_counts(values: Iterable[float], boundaries: Sequence[float]) -> dict[str, int]:

@@ -24,6 +24,20 @@ def test_runtime_diagnostics_reports_urlhaus_candidate_accounting(tmp_path):
                         "accepted_match_count": 0,
                         "manual_review_match_count": 1,
                         "rejected_match_count": 1,
+                        "status_distribution": {"manual_review": 1, "rejected": 1},
+                        "manual_review_reason_distribution": {"ambiguous_support": 1},
+                        "rejection_reason_distribution": {"weak_support": 1},
+                        "ignored_reason_distribution": {"low_signal_retrieval_noise": 8},
+                    },
+                    "dread_match_stats": {
+                        "raw_candidate_count": 1,
+                        "signal_candidate_count": 1,
+                        "accepted_match_count": 0,
+                        "manual_review_match_count": 1,
+                        "rejected_match_count": 0,
+                        "status_distribution": {"manual_review": 1},
+                        "manual_review_reason_distribution": {"ambiguous_support": 1},
+                        "observed_dread_categories": ["exploit_sale"],
                     },
                 },
                 "confidence_breakdown": {
@@ -44,10 +58,17 @@ def test_runtime_diagnostics_reports_urlhaus_candidate_accounting(tmp_path):
     assert diagnostics["signal_candidate_count"] == 2
     assert diagnostics["manual_review_match_count"] == 1
     assert diagnostics["rejected_match_count"] == 1
+    assert diagnostics["manual_review_reason_distribution"] == {"ambiguous_support": 1}
+    assert diagnostics["rejection_reason_distribution"] == {"weak_support": 1}
+    assert diagnostics["ignored_reason_distribution"] == {"low_signal_retrieval_noise": 8}
+    assert report["dread_correlation_diagnostics"]["manual_review_match_count"] == 1
+    assert report["dread_correlation_diagnostics"]["observed_dread_category_distribution"] == {"exploit_sale": 1}
     assert report["external_signal_coverage"]["epss_missing_count"] == 1
     assert report["high_risk_low_confidence_cases"][0]["cve_id"] == "CVE-2026-1001"
 
     paths = write_runtime_diagnostics(report, tmp_path)
     assert "live_reanalysis_summary_md" in paths
     assert json.loads((tmp_path / "urlhaus_correlation_diagnostics.json").read_text())["ignored_low_signal_count"] == 8
+    assert json.loads((tmp_path / "dread_correlation_diagnostics.json").read_text())["manual_review_match_count"] == 1
     assert "Ignored low-signal candidates are raw retrieval noise" in (tmp_path / "live_reanalysis_summary.md").read_text()
+    assert "Dread diagnostics are weak chatter" in (tmp_path / "live_reanalysis_summary.md").read_text()

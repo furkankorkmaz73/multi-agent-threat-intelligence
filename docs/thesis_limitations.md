@@ -28,7 +28,7 @@ The weights are not learned parameters and are not statistically optimized. Sens
 
 Dread is optional, experimental, bounded, default-off, and not treated as ground truth. Live Dread access is not required for tests, demos, benchmark artifacts, or thesis artifact generation.
 
-Dread-only evidence does not imply high confidence or CRITICAL risk by itself. Dread can remain diagnostically useful when routed to manual review or when modestly corroborated by stronger evidence, but it does not override CVSS, EPSS, KEV, or accepted structured evidence.
+Dread-only evidence does not imply high confidence or CRITICAL risk by itself. Dread can remain diagnostically useful when routed to manual review around stronger evidence, but it does not override CVSS, EPSS, KEV, or accepted structured evidence.
 
 ## Asset-Aware Operational Risk Limitations
 
