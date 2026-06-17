@@ -12,6 +12,7 @@ import (
 )
 
 func FetchURLHaus(appInstance *app.App) ([]models.URLhausResponse, error) {
+	started := time.Now()
 	client := &http.Client{Timeout: 60 * time.Second}
 	url := "https://urlhaus.abuse.ch/downloads/json_recent/"
 
@@ -36,7 +37,8 @@ func FetchURLHaus(appInstance *app.App) ([]models.URLhausResponse, error) {
 		for _, list := range wrapped {
 			allURLs = append(allURLs, list...)
 		}
-		appInstance.LogJSON("INFO", "urlhaus", fmt.Sprintf("Fetched %d URLHaus records", len(allURLs)))
+		elapsed := time.Since(started)
+		appInstance.LogJSON("INFO", "urlhaus", fmt.Sprintf("source=urlhaus fetched=%d elapsed=%.3fs records_per_sec=%.1f", len(allURLs), elapsed.Seconds(), recordsPerSecond(len(allURLs), elapsed)))
 		return allURLs, nil
 	}
 
@@ -44,6 +46,7 @@ func FetchURLHaus(appInstance *app.App) ([]models.URLhausResponse, error) {
 	if err := json.Unmarshal(body, &flat); err != nil {
 		return nil, err
 	}
-	appInstance.LogJSON("INFO", "urlhaus", fmt.Sprintf("Fetched %d URLHaus records", len(flat)))
+	elapsed := time.Since(started)
+	appInstance.LogJSON("INFO", "urlhaus", fmt.Sprintf("source=urlhaus fetched=%d elapsed=%.3fs records_per_sec=%.1f", len(flat), elapsed.Seconds(), recordsPerSecond(len(flat), elapsed)))
 	return flat, nil
 }

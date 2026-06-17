@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/furkankorkmaz309/threat-agent/internal/app"
 	"github.com/furkankorkmaz309/threat-agent/internal/db"
@@ -48,6 +49,7 @@ func main() {
 	switch *source {
 	case "cve":
 		var cveData *models.CVEList
+		fetchStarted := time.Now()
 		if strings.TrimSpace(*fixtureFile) != "" {
 			loaded, loadErr := loadCVEFixture(*fixtureFile)
 			if loadErr != nil {
@@ -56,28 +58,33 @@ func main() {
 			}
 			cveData = loaded
 		} else {
-			loaded, fetchErr := fetch.FetchCVE(appInstance, os.Getenv("CVE_KEY"), *mode, *days)
+			loaded, fetchErr := fetch.FetchCVE(appInstance, os.Getenv("CVE_KEY"), *mode, *days, *limit)
 			if fetchErr != nil {
 				fmt.Printf("[ERROR] CVE: %v\n", fetchErr)
 				os.Exit(2)
 			}
 			cveData = loaded
 		}
+		fetchElapsed := time.Since(fetchStarted)
 
 		toSave := cveData.Vulnerabilities
 		if *limit > 0 && len(toSave) > *limit {
 			toSave = toSave[:*limit]
 		}
 
+		saveStarted := time.Now()
 		if err := db.SaveCVEMany(appInstance, toSave); err != nil {
 			fmt.Printf("[ERROR] Save CVE: %v\n", err)
 			os.Exit(3)
 		}
+		saveElapsed := time.Since(saveStarted)
 
+		fmt.Printf("[METRIC] source=cve fetched=%d saved=%d pages=%d fetch_elapsed=%.3fs save_elapsed=%.3fs elapsed=%.3fs records_per_sec=%.1f\n", len(cveData.Vulnerabilities), len(toSave), cvePages(cveData), fetchElapsed.Seconds(), saveElapsed.Seconds(), (fetchElapsed + saveElapsed).Seconds(), recordsPerSecond(len(toSave), fetchElapsed+saveElapsed))
 		fmt.Printf("[SUCCESS] Saved %d CVE records\n", len(toSave))
 
 	case "urlhaus":
 		var data []models.URLhausResponse
+		fetchStarted := time.Now()
 		if strings.TrimSpace(*fixtureFile) != "" {
 			loaded, loadErr := loadURLhausFixture(*fixtureFile)
 			if loadErr != nil {
@@ -93,13 +100,18 @@ func main() {
 			}
 			data = loaded
 		}
+		fetchElapsed := time.Since(fetchStarted)
+		fetchedCount := len(data)
 		if *limit > 0 && len(data) > *limit {
 			data = data[:*limit]
 		}
+		saveStarted := time.Now()
 		if err := db.SaveURLhausMany(appInstance, data); err != nil {
 			fmt.Printf("[ERROR] Save URLhaus: %v\n", err)
 			os.Exit(3)
 		}
+		saveElapsed := time.Since(saveStarted)
+		fmt.Printf("[METRIC] source=urlhaus fetched=%d saved=%d fetch_elapsed=%.3fs save_elapsed=%.3fs elapsed=%.3fs records_per_sec=%.1f\n", fetchedCount, len(data), fetchElapsed.Seconds(), saveElapsed.Seconds(), (fetchElapsed + saveElapsed).Seconds(), recordsPerSecond(len(data), fetchElapsed+saveElapsed))
 		fmt.Printf("[SUCCESS] Saved %d URLhaus records\n", len(data))
 
 	case "dread":
@@ -113,6 +125,30 @@ func main() {
 		fmt.Printf("[ERROR] Unknown source: %s\n", *source)
 		os.Exit(1)
 	}
+}
+
+func cvePages(cveData *models.CVEList) int {
+	if cveData == nil || len(cveData.Vulnerabilities) == 0 {
+		return 0
+	}
+	if cveData.ResultsPerPage <= 0 {
+		return 1
+	}
+	pages := len(cveData.Vulnerabilities) / cveData.ResultsPerPage
+	if len(cveData.Vulnerabilities)%cveData.ResultsPerPage != 0 {
+		pages++
+	}
+	if pages == 0 {
+		return 1
+	}
+	return pages
+}
+
+func recordsPerSecond(count int, elapsed time.Duration) float64 {
+	if count <= 0 || elapsed <= 0 {
+		return 0
+	}
+	return float64(count) / elapsed.Seconds()
 }
 
 func loadCVEFixture(path string) (*models.CVEList, error) {

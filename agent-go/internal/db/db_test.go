@@ -163,6 +163,28 @@ func TestCollectorUpsertUpdateDropsProtectedFieldsEvenIfPresent(t *testing.T) {
 	}
 }
 
+func TestCollectorBulkChunkSizeUsesDefaultAndBounds(t *testing.T) {
+	t.Setenv("COLLECTOR_BULK_CHUNK_SIZE", "")
+	if got := collectorBulkChunkSize(); got != defaultBulkChunkSize {
+		t.Fatalf("expected default chunk size %d, got %d", defaultBulkChunkSize, got)
+	}
+
+	t.Setenv("COLLECTOR_BULK_CHUNK_SIZE", "250")
+	if got := collectorBulkChunkSize(); got != 250 {
+		t.Fatalf("expected configured chunk size 250, got %d", got)
+	}
+
+	t.Setenv("COLLECTOR_BULK_CHUNK_SIZE", "9000")
+	if got := collectorBulkChunkSize(); got != 5000 {
+		t.Fatalf("expected chunk size cap 5000, got %d", got)
+	}
+
+	t.Setenv("COLLECTOR_BULK_CHUNK_SIZE", "invalid")
+	if got := collectorBulkChunkSize(); got != defaultBulkChunkSize {
+		t.Fatalf("expected invalid chunk size to fall back to %d, got %d", defaultBulkChunkSize, got)
+	}
+}
+
 func requireSet(t *testing.T, update bson.M) bson.M {
 	t.Helper()
 	set, ok := update["$set"].(bson.M)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 )
 
 var tokenPattern = regexp.MustCompile(`[A-Za-z0-9._:/-]+`)
+
+const defaultBulkChunkSize = 500
 
 var pythonOwnedFields = map[string]struct{}{
 	"analysis":              {},
@@ -185,10 +188,10 @@ func SaveCVEMany(appInstance *app.App, cves []struct {
 		return nil
 	}
 	collection := appInstance.MongoClient.Database(appInstance.Database).Collection("cve_intel")
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
 
-	var operations []mongo.WriteModel
+	chunkSize := collectorBulkChunkSize()
+	operations := make([]mongo.WriteModel, 0, minInt(chunkSize, len(cves)))
+	chunkIndex := 1
 	for _, item := range cves {
 		enrichCVE(&item.CVE)
 		filter, update, err := buildCVEUpsert(item.CVE)
@@ -200,9 +203,18 @@ func SaveCVEMany(appInstance *app.App, cves []struct {
 		updateOp.SetUpdate(update)
 		updateOp.SetUpsert(true)
 		operations = append(operations, updateOp)
+		if len(operations) >= chunkSize {
+			if err := writeBulkChunk(appInstance, collection, "cve", chunkIndex, operations, 2*time.Minute); err != nil {
+				return err
+			}
+			chunkIndex++
+			operations = operations[:0]
+		}
 	}
-	_, err := collection.BulkWrite(ctx, operations)
-	return err
+	if len(operations) > 0 {
+		return writeBulkChunk(appInstance, collection, "cve", chunkIndex, operations, 2*time.Minute)
+	}
+	return nil
 }
 
 func SaveURLhausMany(appInstance *app.App, urls []models.URLhausResponse) error {
@@ -210,10 +222,10 @@ func SaveURLhausMany(appInstance *app.App, urls []models.URLhausResponse) error 
 		return nil
 	}
 	collection := appInstance.MongoClient.Database(appInstance.Database).Collection("urlhaus_intel")
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
 
-	var operations []mongo.WriteModel
+	chunkSize := collectorBulkChunkSize()
+	operations := make([]mongo.WriteModel, 0, minInt(chunkSize, len(urls)))
+	chunkIndex := 1
 	for _, item := range urls {
 		enrichURLhaus(&item)
 		filter, update, err := buildURLhausUpsert(item)
@@ -225,8 +237,62 @@ func SaveURLhausMany(appInstance *app.App, urls []models.URLhausResponse) error 
 		op.SetUpdate(update)
 		op.SetUpsert(true)
 		operations = append(operations, op)
+		if len(operations) >= chunkSize {
+			if err := writeBulkChunk(appInstance, collection, "urlhaus", chunkIndex, operations, 3*time.Minute); err != nil {
+				return err
+			}
+			chunkIndex++
+			operations = operations[:0]
+		}
 	}
-	_, err := collection.BulkWrite(ctx, operations)
+	if len(operations) > 0 {
+		return writeBulkChunk(appInstance, collection, "urlhaus", chunkIndex, operations, 3*time.Minute)
+	}
+	return nil
+}
+
+func collectorBulkChunkSize() int {
+	raw := strings.TrimSpace(os.Getenv("COLLECTOR_BULK_CHUNK_SIZE"))
+	if raw == "" {
+		return defaultBulkChunkSize
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed <= 0 {
+		return defaultBulkChunkSize
+	}
+	if parsed > 5000 {
+		return 5000
+	}
+	return parsed
+}
+
+func writeBulkChunk(appInstance *app.App, collection *mongo.Collection, source string, chunkIndex int, operations []mongo.WriteModel, timeout time.Duration) error {
+	started := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	result, err := collection.BulkWrite(ctx, operations, options.BulkWrite().SetOrdered(false))
+	elapsed := time.Since(started)
+	var matched, modified, upserted int64
+	if result != nil {
+		matched = result.MatchedCount
+		modified = result.ModifiedCount
+		upserted = result.UpsertedCount
+	}
+	appInstance.LogJSON(
+		"INFO",
+		source,
+		fmt.Sprintf(
+			"bulk_write_chunk=%d attempted=%d matched=%d modified=%d upserted=%d elapsed=%.3fs records_per_sec=%.1f",
+			chunkIndex,
+			len(operations),
+			matched,
+			modified,
+			upserted,
+			elapsed.Seconds(),
+			recordsPerSecond(len(operations), elapsed),
+		),
+	)
 	return err
 }
 
@@ -267,4 +333,18 @@ func collectorUpsertUpdate(document any, omitSetFields ...string) (bson.M, error
 		"$set":         set,
 		"$setOnInsert": bson.M{"processed": false},
 	}, nil
+}
+
+func recordsPerSecond(count int, elapsed time.Duration) float64 {
+	if count <= 0 || elapsed <= 0 {
+		return 0
+	}
+	return float64(count) / elapsed.Seconds()
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }

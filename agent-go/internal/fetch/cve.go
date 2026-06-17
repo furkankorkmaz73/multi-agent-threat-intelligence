@@ -13,16 +13,22 @@ import (
 	"github.com/furkankorkmaz309/threat-agent/internal/models"
 )
 
-func FetchCVE(appInstance *app.App, apiKey string, mode string, days int) (*models.CVEList, error) {
+var nvdBaseURL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+
+func FetchCVE(appInstance *app.App, apiKey string, mode string, days int, fetchLimit ...int) (*models.CVEList, error) {
 	now := time.Now().UTC()
-	baseURL := "https://services.nvd.nist.gov/rest/json/cves/2.0"
+	started := time.Now()
 	client := &http.Client{Timeout: 45 * time.Second}
 
-	// Optional safety cap. Set NVD_MAX_FETCH=0 to fetch the full matching set.
 	maxFetch := 0
+	if len(fetchLimit) > 0 {
+		maxFetch = fetchLimit[0]
+	}
 	if raw := os.Getenv("NVD_MAX_FETCH"); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil {
-			maxFetch = parsed
+			if parsed > 0 && (maxFetch <= 0 || parsed < maxFetch) {
+				maxFetch = parsed
+			}
 		}
 	}
 	resultsPerPage := 2000
@@ -50,10 +56,11 @@ func FetchCVE(appInstance *app.App, apiKey string, mode string, days int) (*mode
 
 	aggregated := &models.CVEList{}
 	startIndex := 0
+	pages := 0
 
 	for {
 		params.Set("startIndex", strconv.Itoa(startIndex))
-		finalURL := fmt.Sprintf("%s?%s", baseURL, params.Encode())
+		finalURL := fmt.Sprintf("%s?%s", nvdBaseURL, params.Encode())
 
 		req, err := http.NewRequest("GET", finalURL, nil)
 		if err != nil {
@@ -68,6 +75,7 @@ func FetchCVE(appInstance *app.App, apiKey string, mode string, days int) (*mode
 		if err != nil {
 			return nil, fmt.Errorf("nvd request failed: %w", err)
 		}
+		pages++
 
 		var page models.CVEList
 		if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
@@ -96,6 +104,14 @@ func FetchCVE(appInstance *app.App, apiKey string, mode string, days int) (*mode
 		}
 	}
 
-	appInstance.LogJSON("INFO", "cve", fmt.Sprintf("Fetched %d CVEs from NVD", len(aggregated.Vulnerabilities)))
+	elapsed := time.Since(started)
+	appInstance.LogJSON("INFO", "cve", fmt.Sprintf("source=cve fetched=%d pages=%d elapsed=%.3fs records_per_sec=%.1f", len(aggregated.Vulnerabilities), pages, elapsed.Seconds(), recordsPerSecond(len(aggregated.Vulnerabilities), elapsed)))
 	return aggregated, nil
+}
+
+func recordsPerSecond(count int, elapsed time.Duration) float64 {
+	if count <= 0 || elapsed <= 0 {
+		return 0
+	}
+	return float64(count) / elapsed.Seconds()
 }
