@@ -1601,7 +1601,9 @@ def test_consistency_audit_detects_missing_limitation_language(tmp_path):
     assert check["status"] == "failed"
 
 
-def test_runtime_snapshot_generation_from_temp_artifact_dir(tmp_path):
+def test_runtime_snapshot_generation_from_temp_artifact_dir(monkeypatch, tmp_path):
+    monkeypatch.setattr(learned_calibration, "_load_sklearn", lambda: None)
+
     export_from_documents([_synthetic_doc()], tmp_path, generated_at="2026-06-16T00:00:00+03:00")
 
     snapshot = build_runtime_snapshot(
