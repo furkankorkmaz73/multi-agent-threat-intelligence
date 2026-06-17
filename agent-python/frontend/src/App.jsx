@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   analyzeInput,
   clearRuntimeApiKey,
@@ -65,6 +65,23 @@ function useAsyncState(initialValue) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   return { value, setValue, loading, setLoading, error, setError };
+}
+
+function useDebouncedValue(value, delayMs = 300) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return debounced;
+}
+
+async function settleRequest(promise) {
+  try {
+    return { value: await promise, error: null };
+  } catch (error) {
+    return { value: null, error };
+  }
 }
 
 function Section({ title, description, actions, children }) {
@@ -359,64 +376,78 @@ export function StatusPanel({ status, error, onRefresh }) {
   );
 }
 
-function EvaluationPanel({ snapshot, diagnostics }) {
+function EvaluationPanel({ snapshot, diagnostics, loading, error, onRefresh }) {
   const summary = snapshot?.summary;
   const rows = snapshot?.rows || [];
+  const distribution = Object.entries(diagnostics?.risk_level_distribution || {});
+  if (loading && !snapshot && !diagnostics) {
+    return <div className="empty-state large">Loading evaluation diagnostics...</div>;
+  }
+
   return (
-    <div className="evaluation-grid">
-      <section className="panel-card">
-        <div className="panel-title-row">
-          <div>
-            <h3>Diagnostic sample</h3>
-            <p className="panel-subtitle">Sample only, not full corpus.</p>
-          </div>
-        </div>
-        <div className="kv-grid">
-          <div><span>Sample dynamic avg</span><strong>{formatNumber(summary?.avg_final_dynamic_score)}</strong></div>
-          <div><span>Sample CVSS-only avg</span><strong>{formatNumber(summary?.avg_cvss_only_score)}</strong></div>
-          <div><span>Reprioritized</span><strong>{summary?.reprioritized_count_lift_ge_1_5 ?? "-"}</strong></div>
-          <div><span>Graph supported</span><strong>{summary?.graph_supported_count ?? "-"}</strong></div>
-        </div>
-      </section>
-      <section className="panel-card">
-        <div className="panel-title-row">
-          <div>
-            <h3>Sample risk distribution</h3>
-            <p className="panel-subtitle">Computed from diagnostics rows.</p>
-          </div>
-        </div>
-        <div className="risk-distribution">
-          {Object.entries(diagnostics?.risk_level_distribution || {}).map(([level, count]) => (
-            <div key={level} className="distribution-row">
-              <RiskBadge level={level} />
-              <div className="distribution-track"><span style={{ width: `${Math.min(100, count)}%` }} /></div>
-              <strong>{count}</strong>
+    <>
+      {error ? <Alert error={error} /> : null}
+      {loading ? <div className="empty-state">Refreshing evaluation diagnostics...</div> : null}
+      <div className="evaluation-grid">
+        <section className="panel-card">
+          <div className="panel-title-row">
+            <div>
+              <h3>Diagnostic sample</h3>
+              <p className="panel-subtitle">Sample only, not full corpus.</p>
             </div>
-          ))}
-        </div>
-      </section>
-      <section className="panel-card wide-panel">
-        <div className="panel-title-row"><h3>Top reprioritized CVEs</h3></div>
-        {rows.length ? (
-          <div className="compact-table-shell">
-            <table className="compact-table">
-              <thead><tr><th>CVE</th><th>Dynamic</th><th>CVSS baseline</th><th>Lift</th><th>Level</th></tr></thead>
-              <tbody>
-                {rows.slice(0, 8).map((row) => (
-                  <tr key={row.cve_id}>
-                    <td className="mono">{row.cve_id}</td>
-                    <td>{formatNumber(row.final_dynamic_score)}</td>
-                    <td>{formatNumber(row.baseline_cvss_only_score)}</td>
-                    <td>{formatNumber(row.lift_from_cvss_only)}</td>
-                    <td><RiskBadge level={row.risk_level} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
           </div>
-        ) : <p className="empty-state">No evaluation rows.</p>}
-      </section>
-    </div>
+          <div className="kv-grid">
+            <div><span>Sample dynamic avg</span><strong>{formatNumber(summary?.avg_final_dynamic_score)}</strong></div>
+            <div><span>Sample CVSS-only avg</span><strong>{formatNumber(summary?.avg_cvss_only_score)}</strong></div>
+            <div><span>Reprioritized</span><strong>{summary?.reprioritized_count_lift_ge_1_5 ?? "-"}</strong></div>
+            <div><span>Graph supported</span><strong>{summary?.graph_supported_count ?? "-"}</strong></div>
+          </div>
+        </section>
+        <section className="panel-card">
+          <div className="panel-title-row">
+            <div>
+              <h3>Sample risk distribution</h3>
+              <p className="panel-subtitle">Computed from diagnostics rows.</p>
+            </div>
+          </div>
+          {distribution.length ? (
+            <div className="risk-distribution">
+              {distribution.map(([level, count]) => (
+                <div key={level} className="distribution-row">
+                  <RiskBadge level={level} />
+                  <div className="distribution-track"><span style={{ width: `${Math.min(100, count)}%` }} /></div>
+                  <strong>{count}</strong>
+                </div>
+              ))}
+            </div>
+          ) : <p className="empty-state">No evaluation diagnostics loaded.</p>}
+        </section>
+        <section className="panel-card wide-panel">
+          <div className="panel-title-row">
+            <h3>Top reprioritized CVEs</h3>
+            {onRefresh ? <button className="secondary-button" onClick={onRefresh}>Refresh evaluation</button> : null}
+          </div>
+          {rows.length ? (
+            <div className="compact-table-shell">
+              <table className="compact-table">
+                <thead><tr><th>CVE</th><th>Dynamic</th><th>CVSS baseline</th><th>Lift</th><th>Level</th></tr></thead>
+                <tbody>
+                  {rows.slice(0, 8).map((row) => (
+                    <tr key={row.cve_id}>
+                      <td className="mono">{row.cve_id}</td>
+                      <td>{formatNumber(row.final_dynamic_score)}</td>
+                      <td>{formatNumber(row.baseline_cvss_only_score)}</td>
+                      <td>{formatNumber(row.lift_from_cvss_only)}</td>
+                      <td><RiskBadge level={row.risk_level} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : <p className="empty-state">No evaluation rows.</p>}
+        </section>
+      </div>
+    </>
   );
 }
 
@@ -485,6 +516,12 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("findings");
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [authStatus, setAuthStatus] = useState(getAuthStatus());
+  const overviewRequestId = useRef(0);
+  const findingsRequestId = useRef(0);
+  const detailRequestId = useRef(0);
+  const evaluationRequestId = useRef(0);
+  const debouncedQuery = useDebouncedValue(query);
+  const effectiveQuery = mode === "search" ? debouncedQuery : "";
   const selectedKey = detail.value ? `${detail.value.source}:${detail.value.entity_id}` : "";
   const displayedFindings = useMemo(
     () => filterAndSortFindings(findings.value, { riskLevel, sortBy }),
@@ -497,6 +534,7 @@ export default function App() {
     setAuthStatus(getAuthStatus());
     loadOverview();
     loadFindings();
+    if (activeTab === "evaluation") loadEvaluation({ force: true });
   }
 
   function clearApiKey() {
@@ -506,42 +544,54 @@ export default function App() {
     status.setValue(null);
     loadOverview();
     loadFindings();
+    if (activeTab === "evaluation") loadEvaluation({ force: true });
   }
 
   async function loadOverview() {
+    const requestId = ++overviewRequestId.current;
+    health.setLoading(true);
+    status.setLoading(true);
     health.setError("");
     status.setError("");
+
+    const [healthResult, statusResult] = await Promise.all([
+      settleRequest(getHealth()),
+      settleRequest(getStatusOverview()),
+    ]);
+    if (overviewRequestId.current !== requestId) return;
+
+    health.setError(healthResult.error || "");
+    status.setError(statusResult.error || "");
+    if (healthResult.value) health.setValue(healthResult.value);
+    if (statusResult.value) status.setValue(statusResult.value);
+    health.setLoading(false);
+    status.setLoading(false);
+  }
+
+  async function loadEvaluation({ force = false } = {}) {
+    if (!force && (evaluation.loading || diagnostics.loading || evaluation.value || diagnostics.value)) return;
+    const requestId = ++evaluationRequestId.current;
+    evaluation.setLoading(true);
+    diagnostics.setLoading(true);
     evaluation.setError("");
     diagnostics.setError("");
 
-    const [healthPayload, statusResult, evaluationPayload, diagnosticsPayload] = await Promise.all([
-      getHealth().catch((err) => {
-        health.setError(err);
-        return null;
-      }),
-      getStatusOverview().catch((err) => {
-        status.setError(err);
-        return null;
-      }),
-      getEvaluationSnapshot({ limit: 50, topK: 10 }).catch((err) => {
-        evaluation.setError(err);
-        return null;
-      }),
-      getEvaluationDiagnostics({ limit: 500 }).catch((err) => {
-        diagnostics.setError(err);
-        return null;
-      }),
+    const [evaluationResult, diagnosticsResult] = await Promise.all([
+      settleRequest(getEvaluationSnapshot({ limit: 50, topK: 10 })),
+      settleRequest(getEvaluationDiagnostics({ limit: 500 })),
     ]);
+    if (evaluationRequestId.current !== requestId) return;
 
-    if (healthPayload) {
-      health.setValue(healthPayload);
-    }
-    if (statusResult) status.setValue(statusResult);
-    evaluation.setValue(evaluationPayload);
-    diagnostics.setValue(diagnosticsPayload);
+    evaluation.setError(evaluationResult.error || "");
+    diagnostics.setError(diagnosticsResult.error || "");
+    if (evaluationResult.value) evaluation.setValue(evaluationResult.value);
+    if (diagnosticsResult.value) diagnostics.setValue(diagnosticsResult.value);
+    evaluation.setLoading(false);
+    diagnostics.setLoading(false);
   }
 
-  async function loadFindings() {
+  async function loadFindings({ searchQuery = effectiveQuery } = {}) {
+    const requestId = ++findingsRequestId.current;
     findings.setLoading(true);
     findings.setError("");
     try {
@@ -549,33 +599,43 @@ export default function App() {
       if (mode === "recent") {
         payload = await getRecentFindings({ source: source || "cve", limit });
       } else if (mode === "search") {
-        payload = query.trim() ? await searchFindings({ source: source || "cve", query: query.trim(), limit }) : [];
+        payload = searchQuery.trim() ? await searchFindings({ source: source || "cve", query: searchQuery.trim(), limit }) : [];
       } else {
         payload = await getTopFindings({ source, limit, mode });
       }
+      if (findingsRequestId.current !== requestId) return;
       findings.setValue(payload);
-      if (!payload.some((item) => `${item.source}:${item.entity_id}` === selectedKey)) detail.setValue(null);
+      if (!payload.some((item) => `${item.source}:${item.entity_id}` === selectedKey)) {
+        detail.setValue(null);
+        detail.setError("");
+      }
     } catch (err) {
-      findings.setError(err);
+      if (findingsRequestId.current === requestId) findings.setError(err);
     } finally {
-      findings.setLoading(false);
+      if (findingsRequestId.current === requestId) findings.setLoading(false);
     }
   }
 
   async function selectFinding(finding) {
+    const requestId = ++detailRequestId.current;
     detail.setLoading(true);
     detail.setError("");
     try {
-      detail.setValue(await getFindingDetail({ source: finding.source, entityId: finding.entity_id }));
+      const payload = await getFindingDetail({ source: finding.source, entityId: finding.entity_id });
+      if (detailRequestId.current !== requestId) return;
+      detail.setValue(payload);
     } catch (err) {
-      detail.setError(err);
+      if (detailRequestId.current === requestId) detail.setError(err);
     } finally {
-      detail.setLoading(false);
+      if (detailRequestId.current === requestId) detail.setLoading(false);
     }
   }
 
   useEffect(() => { loadOverview(); }, []);
-  useEffect(() => { loadFindings(); }, [source, limit, mode]);
+  useEffect(() => { loadFindings({ searchQuery: effectiveQuery }); }, [source, limit, mode, effectiveQuery]);
+  useEffect(() => {
+    if (activeTab === "evaluation") loadEvaluation();
+  }, [activeTab]);
 
   const globalError = useMemo(() => health.error || findings.error, [health.error, findings.error]);
 
@@ -587,7 +647,7 @@ export default function App() {
           <h1>Multi-source risk triage</h1>
           <p>Review CVE, URLhaus, and dark-web intelligence with explicit risk, confidence, evidence quality, and model diagnostics.</p>
         </div>
-        <button className="secondary-button" onClick={() => { loadOverview(); loadFindings(); }}>Refresh all</button>
+        <button className="secondary-button" onClick={() => { loadOverview(); loadFindings(); if (activeTab === "evaluation") loadEvaluation({ force: true }); }}>Refresh all</button>
       </header>
 
       <AuthPanel authStatus={authStatus} apiKeyInput={apiKeyInput} setApiKeyInput={setApiKeyInput} onApply={applyApiKey} onClear={clearApiKey} />
@@ -620,7 +680,13 @@ export default function App() {
 
           {activeTab === "evaluation" ? (
             <Section title="Evaluation" description="CVE model diagnostics and reprioritization snapshot from the API. Metrics in this tab are sample-scoped unless explicitly labeled corpus-level.">
-              <EvaluationPanel snapshot={evaluation.value} diagnostics={diagnostics.value} />
+              <EvaluationPanel
+                snapshot={evaluation.value}
+                diagnostics={diagnostics.value}
+                loading={evaluation.loading || diagnostics.loading}
+                error={evaluation.error || diagnostics.error}
+                onRefresh={() => loadEvaluation({ force: true })}
+              />
             </Section>
           ) : null}
 
