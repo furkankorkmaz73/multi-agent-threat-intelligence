@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 import os
 from typing import Any, Dict, List
+from urllib.parse import urlsplit
 
 try:
     from dotenv import load_dotenv
@@ -14,6 +15,8 @@ except Exception:
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = BASE_DIR.parent
+REDACTED_VALUE = "***"
+SECRET_KEY_MARKERS = ("api_key", "apikey", "token", "secret", "password", "credential")
 
 # Load local environment files without requiring secrets to be committed.
 # Later files override earlier values only when variables are not already set by the shell.
@@ -185,9 +188,55 @@ class AppSettings:
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
+    def to_public_dict(self) -> Dict[str, Any]:
+        return _redact_public_settings(asdict(self))
+
     @property
     def mongo(self) -> DatabaseConfig:
         return self.database
+
+
+def _redact_public_settings(value: Any, key: str = "") -> Any:
+    if isinstance(value, dict):
+        redacted: Dict[str, Any] = {}
+        for item_key, item_value in value.items():
+            normalized_key = str(item_key)
+            if normalized_key == "mongo_uri":
+                redacted[normalized_key] = REDACTED_VALUE if item_value else None
+                redacted["mongo_uri_configured"] = bool(item_value)
+                continue
+            if _is_secret_setting_key(normalized_key):
+                redacted[normalized_key] = REDACTED_VALUE if item_value else None
+                redacted[f"{normalized_key}_configured"] = bool(item_value)
+                continue
+            if isinstance(item_value, str) and _uri_contains_credentials(item_value):
+                redacted[normalized_key] = REDACTED_VALUE
+                redacted[f"{normalized_key}_configured"] = True
+                continue
+            redacted[normalized_key] = _redact_public_settings(item_value, normalized_key)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_public_settings(item, key) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_public_settings(item, key) for item in value]
+    if isinstance(value, str) and _uri_contains_credentials(value):
+        return REDACTED_VALUE
+    return value
+
+
+def _is_secret_setting_key(key: str) -> bool:
+    lowered = key.lower()
+    if lowered.endswith("_configured"):
+        return False
+    return any(marker in lowered for marker in SECRET_KEY_MARKERS)
+
+
+def _uri_contains_credentials(value: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
+    return bool(parsed.scheme and parsed.netloc and (parsed.username or parsed.password))
 
 
 SETTINGS = AppSettings()

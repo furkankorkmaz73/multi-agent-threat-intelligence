@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 import api.app as app_module
 from api.audit import StructuredAuditLogger
 from api.security import APIKeyAuthenticator, Authorizer
-from config import SecurityConfig
+from config import AppSettings, DatabaseConfig, LLMConfig, SecurityConfig
 from worker.job_lifecycle import JobState, new_job
 from worker.job_repository import DatabaseJobRepositoryAdapter
 
@@ -154,15 +154,53 @@ def test_operator_can_view_job_status_but_viewer_cannot(monkeypatch):
     assert allowed.status_code == 200
 
 
-def test_admin_settings_access_is_audited_and_shape_is_unchanged(monkeypatch):
+def test_viewer_cannot_access_settings(monkeypatch):
+    client, _audit = _secure_client(monkeypatch)
+
+    response = client.get("/settings", headers={"x-api-key": "viewer-key"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Insufficient permissions"
+
+
+def test_admin_settings_access_is_audited_redacted_and_shape_is_unchanged(monkeypatch):
+    raw_mongo_uri = "mongodb://settings-user:settings-pass@mongo.internal:27017/threat_intel"
+    raw_llm_key = "sk-settings-secret"
+    monkeypatch.setattr(
+        app_module,
+        "SETTINGS",
+        AppSettings(
+            database=DatabaseConfig(mongo_uri=raw_mongo_uri, db_name="threat_intel"),
+            llm=LLMConfig(enabled=True, api_key=raw_llm_key, base_url="https://llm.invalid/v1"),
+        ),
+    )
     client, audit = _secure_client(monkeypatch)
 
     response = client.get("/settings", headers={"x-api-key": "admin-key"})
 
     assert response.status_code == 200
+    response_text = response.text
+    assert raw_mongo_uri not in response_text
+    assert "settings-user" not in response_text
+    assert "settings-pass" not in response_text
+    assert raw_llm_key not in response_text
+
     body = response.json()
     assert "database" in body
+    assert body["database"]["mongo_uri"] == "***"
+    assert body["database"]["mongo_uri_configured"] is True
+    assert body["database"]["db_name"] == "threat_intel"
+    assert "llm" in body
+    assert body["llm"]["api_key"] == "***"
+    assert body["llm"]["api_key_configured"] is True
+    assert body["llm"]["model"]
+    assert body["llm"]["enabled"] is True
     assert "runtime" in body
+    assert "default_batch_size" in body["runtime"]
+    assert "scoring" in body
+    assert "critical_threshold" in body["scoring"]
+    assert "retrieval" in body
+    assert "semantic" in body
     assert "security" not in body
     assert any(event.action == "admin_view_settings" for event in audit.events)
 

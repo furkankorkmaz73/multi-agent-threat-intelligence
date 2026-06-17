@@ -199,7 +199,7 @@ def health() -> HealthResponse:
 @app.get("/settings", response_model=SettingsResponse)
 def settings(actor: AuthenticatedActor = ADMINISTER_SYSTEM) -> SettingsResponse:
     _audit(actor, "admin_view_settings", "settings", AuditOutcome.SUCCESS)
-    return SettingsResponse(**SETTINGS.to_dict())
+    return SettingsResponse(**SETTINGS.to_public_dict())
 
 
 @app.get("/sources")

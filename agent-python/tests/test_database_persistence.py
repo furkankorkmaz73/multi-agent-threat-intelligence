@@ -1,8 +1,10 @@
-from datetime import datetime
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
 
 from core.database import DatabaseManager
+from worker.job_lifecycle import JobState, new_job
 
 
 class FakeCursor(list):
@@ -62,19 +64,68 @@ class MatchingCollection(FakeCollection):
         super().update_one(flt, update, upsert=upsert)
         for doc in self.docs:
             if self._matches(doc, flt):
-                for key, value in update.get("$set", {}).items():
-                    doc[key] = value
-                for key, value in update.get("$push", {}).items():
-                    entries = value.get("$each", [value]) if isinstance(value, dict) else [value]
-                    doc.setdefault(key, []).extend(entries)
-                    if isinstance(value, dict) and "$slice" in value:
-                        doc[key] = doc[key][value["$slice"] :]
+                self._apply_update(doc, update)
                 break
 
+    def find_one_and_update(self, flt, update, return_document=None):
+        self.last_update = {"filter": flt, "update": update, "return_document": return_document}
+        for doc in self.docs:
+            if self._matches(doc, flt):
+                before = deepcopy(doc)
+                self._apply_update(doc, update)
+                return before
+        return None
+
+    def _apply_update(self, doc, update):
+        for key, value in update.get("$set", {}).items():
+            self._set_nested(doc, key, value)
+        for key, value in update.get("$push", {}).items():
+            entries = value.get("$each", [value]) if isinstance(value, dict) else [value]
+            target = self._get_nested(doc, key)
+            if target is None:
+                self._set_nested(doc, key, [])
+                target = self._get_nested(doc, key)
+            target.extend(entries)
+            if isinstance(value, dict) and "$slice" in value:
+                self._set_nested(doc, key, target[value["$slice"] :])
+
     def _matches(self, doc, flt):
+        if "$and" in flt:
+            return all(self._matches(doc, clause) for clause in flt["$and"])
         if "$or" in flt:
             return any(self._matches(doc, clause) for clause in flt["$or"])
-        return all(doc.get(key) == value for key, value in flt.items())
+        return all(self._matches_field(doc, key, value) for key, value in flt.items())
+
+    def _matches_field(self, doc, key, expected):
+        actual = self._get_nested(doc, key)
+        if isinstance(expected, dict):
+            for operator, value in expected.items():
+                if operator == "$exists":
+                    exists = actual is not None
+                    if exists is not bool(value):
+                        return False
+                elif operator == "$lte":
+                    if actual is None or actual > value:
+                        return False
+                else:
+                    return False
+            return True
+        return actual == expected
+
+    def _get_nested(self, doc, key):
+        current = doc
+        for part in key.split("."):
+            if not isinstance(current, dict) or part not in current:
+                return None
+            current = current[part]
+        return current
+
+    def _set_nested(self, doc, key, value):
+        current = doc
+        parts = key.split(".")
+        for part in parts[:-1]:
+            current = current.setdefault(part, {})
+        current[parts[-1]] = value
 
 
 def test_update_analysis_persists_history_and_meta():
@@ -130,6 +181,88 @@ def test_update_job_lifecycle_persists_urlhaus_state_by_stable_identifier():
     assert saved["job_lifecycle"]["state"] == "completed"
     assert saved["job_lifecycle"]["idempotency_key"] == "stable-key"
     assert saved["job_lifecycle_history"][-1]["state"] == "completed"
+
+
+def test_update_job_lifecycle_only_successful_analysis_marks_processed():
+    db = FakeDBManager()
+    db.collections["cve"] = MatchingCollection([{"_id": "CVE-2026-9999", "processed": False}])
+
+    for state, expected_processed in [
+        ("completed", True),
+        ("completed_with_warnings", True),
+        ("failed", False),
+        ("retry_scheduled", False),
+        ("dead_letter", False),
+    ]:
+        db.update_job_lifecycle(
+            "cve",
+            "CVE-2026-9999",
+            {
+                "state": state,
+                "attempt_count": 1,
+                "idempotency_key": f"key-{state}",
+            },
+        )
+        assert db.collections["cve"].docs[0]["processed"] is expected_processed
+
+
+def test_claim_job_lifecycle_claims_unclaimed_document_once():
+    now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+    db = FakeDBManager()
+    db.collections["cve"] = MatchingCollection([{"_id": "CVE-2026-9999", "processed": False}])
+    job = new_job("cve", "CVE-2026-9999", "v1", now=now)
+
+    first = db.claim_job_lifecycle("cve", "CVE-2026-9999", job.to_dict(), now=now)
+    second = db.claim_job_lifecycle("cve", "CVE-2026-9999", job.to_dict(), now=now)
+
+    assert first["idempotency_key"] == job.idempotency_key
+    assert second is None
+    assert db.collections["cve"].docs[0]["job_lifecycle"]["state"] == "pending"
+    assert db.collections["cve"].docs[0]["processed"] is False
+
+
+def test_claim_job_lifecycle_rejects_future_retry_and_allows_due_retry():
+    now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+    future_retry = (
+        new_job("cve", "CVE-2026-9999", "v1", now=now)
+        .transition(JobState.RUNNING, now=now)
+        .transition(JobState.RETRY_SCHEDULED, now=now, retry_at=now + timedelta(minutes=5))
+    )
+    db = FakeDBManager()
+    db.collections["cve"] = MatchingCollection([{"_id": "CVE-2026-9999", "processed": False, "job_lifecycle": future_retry.to_dict()}])
+
+    assert db.claim_job_lifecycle("cve", "CVE-2026-9999", future_retry.to_dict(), now=now) is None
+
+    due = future_retry.transition(JobState.RUNNING, now=now + timedelta(minutes=5))
+    retry_scheduled = due.transition(JobState.RETRY_SCHEDULED, now=now + timedelta(minutes=5), retry_at=now)
+    db.collections["cve"].docs[0]["job_lifecycle"] = retry_scheduled.to_dict()
+
+    claimed = db.claim_job_lifecycle("cve", "CVE-2026-9999", retry_scheduled.to_dict(), now=now)
+
+    assert claimed["state"] == "retry_scheduled"
+    assert db.collections["cve"].docs[0]["job_lifecycle"]["state"] == "running"
+    claim_history = db.collections["cve"].docs[0]["job_lifecycle_history"][-1]
+    assert claim_history["state"] == "running"
+    assert claim_history["attempt_count"] == retry_scheduled.attempt_count
+    assert claim_history["updated_at"] == now
+    assert claim_history["last_error"] == retry_scheduled.last_error
+    assert db.collections["cve"].docs[0]["processed"] is False
+
+
+def test_claim_job_lifecycle_rejects_completed_unless_forced():
+    now = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
+    completed = new_job("cve", "CVE-2026-9999", "v1", now=now).transition(JobState.RUNNING, now=now).transition(JobState.COMPLETED, now=now)
+    replacement = new_job("cve", "CVE-2026-9999", "v1", now=now + timedelta(minutes=1))
+    db = FakeDBManager()
+    db.collections["cve"] = MatchingCollection([{"_id": "CVE-2026-9999", "processed": True, "job_lifecycle": completed.to_dict()}])
+
+    assert db.claim_job_lifecycle("cve", "CVE-2026-9999", replacement.to_dict(), now=now) is None
+
+    forced = db.claim_job_lifecycle("cve", "CVE-2026-9999", replacement.to_dict(), now=now, force=True)
+
+    assert forced["state"] == "pending"
+    assert forced["idempotency_key"] == replacement.idempotency_key
+    assert db.collections["cve"].docs[0]["job_lifecycle"]["state"] == "pending"
 
 
 def test_ensure_indexes_runs_for_all_sources():

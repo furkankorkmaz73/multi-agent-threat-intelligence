@@ -2,7 +2,6 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from main import process_source
 from worker.executor import WorkerJobExecutor, resolve_entity_identifier
 from worker.job_lifecycle import InvalidJobTransition, JobState, RetryPolicy, generate_idempotency_key, new_job
 from worker.job_repository import DatabaseJobRepositoryAdapter, InMemoryJobRepository
@@ -74,6 +73,54 @@ class LifecycleDB:
 
     def get_job_lifecycle_by_idempotency(self, idempotency_key):
         return self.saved.get(idempotency_key)
+
+
+class AtomicLifecycleDB(LifecycleDB):
+    def __init__(self):
+        super().__init__()
+        self.claimed = set()
+        self.claim_calls = 0
+
+    def claim_job_lifecycle(self, source, doc_id, job_lifecycle, *, now, force=False):
+        self.claim_calls += 1
+        key = job_lifecycle["idempotency_key"]
+        if key in self.claimed and not force:
+            return None
+        self.claimed.add(key)
+        self.saved[key] = job_lifecycle
+        return job_lifecycle
+
+
+def process_source(
+    source,
+    db,
+    thinker,
+    recommender,
+    batch_size,
+    *,
+    job_repository=None,
+    retry_policy=None,
+    event_logger=None,
+    metrics=None,
+    clock=None,
+    force=False,
+):
+    pending = db.get_unprocessed(source, limit=batch_size)
+    repository = job_repository or InMemoryJobRepository()
+    executor = WorkerJobExecutor(
+        repository=repository,
+        retry_policy=retry_policy,
+        event_logger=event_logger,
+        metrics=metrics,
+        clock=clock,
+        force=force,
+    )
+    processed = 0
+    for doc in pending:
+        outcome = executor.process_document(source, doc, db, thinker, recommender)
+        if outcome.processed:
+            processed += 1
+    return processed
 
 
 def test_valid_and_invalid_transitions():
@@ -164,6 +211,20 @@ def test_database_repository_adapter_preserves_lifecycle_payloads():
     stored = repo.get(job.idempotency_key)
     assert stored.state == JobState.RUNNING
     assert db.saved[job.idempotency_key]["state"] == "running"
+
+
+def test_database_repository_adapter_uses_atomic_claim_boundary():
+    now = datetime(2026, 6, 10, tzinfo=timezone.utc)
+    db = AtomicLifecycleDB()
+    repo = DatabaseJobRepositoryAdapter(db)
+    job = new_job("cve", "CVE-2026-1", "v1", now=now)
+
+    first = repo.claim(job, now=now)
+    second = repo.claim(job, now=now)
+
+    assert first is not None
+    assert second is None
+    assert db.claim_calls == 2
 
 
 def test_force_mode_allows_reprocessing_same_version():

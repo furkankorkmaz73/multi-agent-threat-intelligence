@@ -45,6 +45,14 @@ class DatabaseJobRepositoryAdapter:
         self.fallback = fallback or InMemoryJobRepository()
 
     def claim(self, job: JobMetadata, *, now: datetime, force: bool = False) -> Optional[JobMetadata]:
+        if hasattr(self.db, "claim_job_lifecycle"):
+            payload = self.db.claim_job_lifecycle(job.source, job.entity_identifier, job.to_dict(), now=now, force=force)
+            if not payload:
+                return None
+            claimed = JobMetadata.from_dict(payload)
+            self.fallback.save(claimed)
+            return claimed
+
         existing = self.get(job.idempotency_key)
         if existing and not force:
             if existing.state == JobState.RETRY_SCHEDULED and existing.retry_at and existing.retry_at <= now:

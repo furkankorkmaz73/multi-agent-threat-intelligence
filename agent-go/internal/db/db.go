@@ -18,6 +18,15 @@ import (
 
 var tokenPattern = regexp.MustCompile(`[A-Za-z0-9._:/-]+`)
 
+var pythonOwnedFields = map[string]struct{}{
+	"analysis":              {},
+	"analysis_history":      {},
+	"job_lifecycle":         {},
+	"job_lifecycle_history": {},
+	"analyzed_at":           {},
+	"processed":             {},
+}
+
 func InitDB(uri string) (*mongo.Client, error) {
 	if uri == "" {
 		uri = "mongodb://127.0.0.1:27017"
@@ -158,13 +167,14 @@ func SaveDreadPost(appInstance *app.App, post models.DreadIntel) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	post.Processed = false
 	enrichDread(&post)
 	opts := options.Update().SetUpsert(true)
-	filter := bson.M{"url": post.URL}
-	update := bson.M{"$set": post}
+	filter, update, err := buildDreadUpsert(post)
+	if err != nil {
+		return err
+	}
 
-	_, err := collection.UpdateOne(ctx, filter, update, opts)
+	_, err = collection.UpdateOne(ctx, filter, update, opts)
 	return err
 }
 
@@ -180,13 +190,16 @@ func SaveCVEMany(appInstance *app.App, cves []struct {
 
 	var operations []mongo.WriteModel
 	for _, item := range cves {
-		item.CVE.Processed = false
 		enrichCVE(&item.CVE)
-		op := mongo.NewReplaceOneModel()
-		op.SetFilter(bson.M{"_id": item.CVE.ID})
-		op.SetReplacement(item.CVE)
-		op.SetUpsert(true)
-		operations = append(operations, op)
+		filter, update, err := buildCVEUpsert(item.CVE)
+		if err != nil {
+			return err
+		}
+		updateOp := mongo.NewUpdateOneModel()
+		updateOp.SetFilter(filter)
+		updateOp.SetUpdate(update)
+		updateOp.SetUpsert(true)
+		operations = append(operations, updateOp)
 	}
 	_, err := collection.BulkWrite(ctx, operations)
 	return err
@@ -202,14 +215,56 @@ func SaveURLhausMany(appInstance *app.App, urls []models.URLhausResponse) error 
 
 	var operations []mongo.WriteModel
 	for _, item := range urls {
-		item.Processed = false
 		enrichURLhaus(&item)
+		filter, update, err := buildURLhausUpsert(item)
+		if err != nil {
+			return err
+		}
 		op := mongo.NewUpdateOneModel()
-		op.SetFilter(bson.M{"url": item.URL})
-		op.SetUpdate(bson.M{"$set": item})
+		op.SetFilter(filter)
+		op.SetUpdate(update)
 		op.SetUpsert(true)
 		operations = append(operations, op)
 	}
 	_, err := collection.BulkWrite(ctx, operations)
 	return err
+}
+
+func buildCVEUpsert(item models.CVE) (bson.M, bson.M, error) {
+	update, err := collectorUpsertUpdate(item, "_id")
+	return bson.M{"_id": item.ID}, update, err
+}
+
+func buildURLhausUpsert(item models.URLhausResponse) (bson.M, bson.M, error) {
+	update, err := collectorUpsertUpdate(item)
+	return bson.M{"url": item.URL}, update, err
+}
+
+func buildDreadUpsert(post models.DreadIntel) (bson.M, bson.M, error) {
+	update, err := collectorUpsertUpdate(post)
+	return bson.M{"url": post.URL}, update, err
+}
+
+func collectorUpsertUpdate(document any, omitSetFields ...string) (bson.M, error) {
+	payload, err := bson.Marshal(document)
+	if err != nil {
+		return nil, err
+	}
+
+	var set bson.M
+	if err := bson.Unmarshal(payload, &set); err != nil {
+		return nil, err
+	}
+
+	for field := range pythonOwnedFields {
+		delete(set, field)
+	}
+	for _, field := range omitSetFields {
+		delete(set, field)
+	}
+
+	return bson.M{
+		"$set":         set,
+		"$setOnInsert": bson.M{"processed": false},
+	}, nil
 }

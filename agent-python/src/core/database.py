@@ -14,6 +14,7 @@ from config import APP_VERSION, DB_NAME, MONGO_URI, get_settings
 
 SETTINGS = get_settings()
 CVE_ID_RE = re.compile(r"^cve-\d{4}-\d{4,7}$", re.I)
+SUCCESSFUL_JOB_STATES = {"completed", "completed_with_warnings"}
 URLHAUS_RETRIEVAL_WEAK_TERMS = {
     "affected", "allow", "allows", "application", "arbitrary", "attack",
     "attacker", "buffer", "client", "code", "crafted", "denial", "error",
@@ -76,30 +77,100 @@ class DatabaseManager:
 
     def update_job_lifecycle(self, source: str, doc_id: Any, job_lifecycle: Dict[str, Any]) -> None:
         now = datetime.now(timezone.utc)
-        processed = job_lifecycle.get("state") in {"completed", "completed_with_warnings", "failed", "dead_letter"}
         self.collections[source].update_one(
             self._job_lifecycle_filter(source, doc_id),
+            self._job_lifecycle_update(job_lifecycle, now),
+        )
+
+    def claim_job_lifecycle(self, source: str, doc_id: Any, job_lifecycle: Dict[str, Any], *, now: datetime, force: bool = False) -> Optional[Dict[str, Any]]:
+        collection = self.collections[source]
+        identity_filter = self._job_lifecycle_filter(source, doc_id)
+        if force:
+            matched = collection.find_one_and_update(
+                identity_filter,
+                self._job_lifecycle_update(job_lifecycle, now),
+            )
+            return job_lifecycle if matched else None
+
+        unclaimed_filter = {
+            "$and": [
+                identity_filter,
+                {
+                    "$or": [
+                        {"job_lifecycle": {"$exists": False}},
+                        {"job_lifecycle": None},
+                    ]
+                },
+            ]
+        }
+        matched = collection.find_one_and_update(
+            unclaimed_filter,
+            self._job_lifecycle_update(job_lifecycle, now),
+        )
+        if matched is not None:
+            return job_lifecycle
+
+        retry_at = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+        retry_due_filter = {
+            "$and": [
+                identity_filter,
+                {"job_lifecycle.idempotency_key": job_lifecycle.get("idempotency_key")},
+                {"job_lifecycle.state": "retry_scheduled"},
+                {"job_lifecycle.retry_at": {"$lte": retry_at.isoformat()}},
+            ]
+        }
+        matched = collection.find_one_and_update(
+            retry_due_filter,
             {
                 "$set": {
-                    "job_lifecycle": job_lifecycle,
-                    "job_lifecycle_updated_at": now,
-                    "processed": processed,
+                    "job_lifecycle.state": "running",
+                    "job_lifecycle.updated_at": retry_at.isoformat(),
+                    "job_lifecycle_updated_at": retry_at,
+                    "processed": False,
                 },
                 "$push": {
                     "job_lifecycle_history": {
                         "$each": [
-                            {
-                                "state": job_lifecycle.get("state"),
-                                "attempt_count": job_lifecycle.get("attempt_count"),
-                                "updated_at": now,
-                                "last_error": job_lifecycle.get("last_error"),
-                            }
+                            self._job_lifecycle_history_entry(
+                                {
+                                    **job_lifecycle,
+                                    "state": "running",
+                                },
+                                retry_at,
+                            )
                         ],
                         "$slice": -20,
                     }
                 },
             },
         )
+        if matched and matched.get("job_lifecycle"):
+            return matched["job_lifecycle"]
+        return None
+
+    def _job_lifecycle_update(self, job_lifecycle: Dict[str, Any], now: datetime) -> Dict[str, Any]:
+        processed = job_lifecycle.get("state") in SUCCESSFUL_JOB_STATES
+        return {
+            "$set": {
+                "job_lifecycle": job_lifecycle,
+                "job_lifecycle_updated_at": now,
+                "processed": processed,
+            },
+            "$push": {
+                "job_lifecycle_history": {
+                    "$each": [self._job_lifecycle_history_entry(job_lifecycle, now)],
+                    "$slice": -20,
+                }
+            },
+        }
+
+    def _job_lifecycle_history_entry(self, job_lifecycle: Dict[str, Any], now: datetime) -> Dict[str, Any]:
+        return {
+            "state": job_lifecycle.get("state"),
+            "attempt_count": job_lifecycle.get("attempt_count"),
+            "updated_at": now,
+            "last_error": job_lifecycle.get("last_error"),
+        }
 
     def _job_lifecycle_filter(self, source: str, doc_id: Any) -> Dict[str, Any]:
         identities: List[Dict[str, Any]] = [{"_id": doc_id}]
