@@ -4,20 +4,25 @@ This export is an experimental feasibility check for a possible learned calibrat
 
 Optional learned models are diagnostic only. They do not replace the heuristic scorer, they are not written back to MongoDB, and proxy labels are not ground truth. Skipped model training is an expected outcome when labels are not trainable or scikit-learn is unavailable.
 
-Default `make test-python` requires scikit-learn from `agent-python/requirements.txt`. The learned-calibration tests run in the default Python test profile and can also be run directly with:
+Default `make test-python` includes scikit-learn-backed learned-calibration checks. Scikit-learn is a standard Python test dependency, and the model-training checks run in the default local and CI pytest suite.
+
+The learned-calibration tests can also be run directly with:
 
 ```bash
 make test-python-learned-calibration
 ```
 
-For the default local no-skip Python profile, run:
+The compatibility target remains as an alias for this same default-included test file:
 
 ```bash
-cd agent-python
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m pytest tests -rs -q
+make test-python-optional-ml
 ```
 
-The default profile also runs the Docker/Mongo-backed E2E system test, so MongoDB must be reachable.
+Default `make test-python` includes the Docker/Mongo-backed E2E system test. MongoDB must be reachable locally, and CI provides MongoDB as a service container. The focused E2E target remains as an alias:
+
+```bash
+make test-python-e2e
+```
 
 The command reads existing analyzed CVE records from MongoDB collection `cve_intel` and writes a flat feature dataset plus a small feasibility report under `reports/thesis/learned_calibration/`.
 
@@ -171,8 +176,3 @@ The learned-calibration evaluation module is intentionally kept as a single arti
 ## Interpretation
 
 The export is only a feasibility artifact. Proxy labels are not ground truth, Dread live crawling is not used, and confidence remains separate from risk. A future learned calibration layer would require defensible labels, stronger EPSS/KEV coverage, careful train/test separation, and validation that it does not weaken deterministic evidence gates.
-
-
-Default `make test-python` does not require scikit-learn.
-
-Optional sklearn-gated learned-calibration tests can be run with `make test-python-optional-ml`.

@@ -394,20 +394,26 @@ def test_makefile_uses_venv_interpreter_for_python_targets():
     assert " uvicorn " not in run_api.group(1)
 
 
-def test_optional_sklearn_tests_are_explicitly_gated():
+def test_default_python_suite_runs_sklearn_and_e2e_without_skip_gates():
     repo_root = Path(__file__).resolve().parents[2]
     makefile = (repo_root / "Makefile").read_text(encoding="utf-8")
     learned_tests = (repo_root / "agent-python" / "tests" / "test_learned_calibration.py").read_text(encoding="utf-8")
+    e2e_tests = (repo_root / "agent-python" / "tests" / "test_e2e_system.py").read_text(encoding="utf-8")
     learned_doc = (repo_root / "docs" / "learned_calibration.md").read_text(encoding="utf-8")
     repro_doc = (repo_root / "docs" / "thesis_reproducibility.md").read_text(encoding="utf-8")
 
     assert "test-python-optional-ml:" in makefile
-    assert "SKLEARN_OPTIONAL_TESTS=1" in makefile
+    assert "test-python-e2e:" in makefile
     assert "tests/test_learned_calibration.py" in makefile
-    assert "SKLEARN_OPTIONAL_TESTS" in learned_tests
-    assert "set SKLEARN_OPTIONAL_TESTS=1 to run optional sklearn tests" in learned_tests
+    assert "tests/test_e2e_system.py::test_full_e2e_system_opt_in" in makefile
+    assert "SKLEARN_OPTIONAL_TESTS" not in learned_tests
+    assert "RUN_E2E_SYSTEM" not in e2e_tests
+    assert "pytest.skip" not in learned_tests
+    assert "pytest.skip" not in e2e_tests
+    assert "pytest.importorskip" not in learned_tests
     for doc in (learned_doc, repro_doc):
-        assert "Default `make test-python` does not require scikit-learn" in doc
+        assert "Default `make test-python` includes scikit-learn-backed learned-calibration checks" in doc
+        assert "Default `make test-python` includes the Docker/Mongo-backed E2E system test" in doc
         assert "make test-python-optional-ml" in doc
 
 

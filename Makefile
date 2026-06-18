@@ -3,7 +3,7 @@ PYTHON ?= .venv/bin/python
 UVICORN ?= .venv/bin/uvicorn
 GOTOOLCHAIN ?= go1.24.0
 
-.PHONY: help setup-python setup-python-locked test-python test-python-learned-calibration test-python-optional-ml test-python-full test-python-full-no-skips thesis-scenario thesis-artifacts thesis-artifact-quality thesis-demo thesis-runtime-diagnostics thesis-learned-calibration thesis-learned-calibration-quality e2e-system real-cve-export real-benchmark balanced-benchmark run-api run-worker setup-frontend run-frontend build-frontend test-go docker-up docker-worker docker-down clean
+.PHONY: help setup-python setup-python-locked test-python test-python-learned-calibration test-python-optional-ml test-python-e2e test-python-full test-python-full-no-skips thesis-scenario thesis-artifacts thesis-artifact-quality thesis-demo thesis-runtime-diagnostics thesis-learned-calibration thesis-learned-calibration-quality e2e-system real-cve-export real-benchmark balanced-benchmark run-api run-worker setup-frontend run-frontend build-frontend test-go docker-up docker-worker docker-down clean
 
 help:
 	@echo "Available targets:"
@@ -11,7 +11,8 @@ help:
 	@echo "  setup-python-locked Create Python venv from requirements.lock"
 	@echo "  test-python     Run Python test suite"
 	@echo "  test-python-learned-calibration Run learned-calibration tests directly"
-	@echo "  test-python-optional-ml Run optional sklearn-gated learned calibration tests"
+	@echo "  test-python-optional-ml Alias for learned-calibration tests now included by default"
+	@echo "  test-python-e2e         Alias for Docker/Mongo-backed E2E test now included by default"
 	@echo "  test-python-full Run Python tests with no-skip compatibility checks"
 	@echo "  test-python-full-no-skips Alias for test-python-full"
 	@echo "  thesis-scenario Run deterministic local thesis scenario"
@@ -54,7 +55,10 @@ test-python-learned-calibration:
 	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m pytest -q -p no:ddtrace tests/test_learned_calibration.py
 
 test-python-optional-ml:
-	cd agent-python && SKLEARN_OPTIONAL_TESTS=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m pytest -q -p no:ddtrace tests/test_learned_calibration.py
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m pytest -q -p no:ddtrace tests/test_learned_calibration.py
+
+test-python-e2e:
+	cd agent-python && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src $(PYTHON) -m pytest -q -p no:ddtrace tests/test_e2e_system.py::test_full_e2e_system_opt_in
 
 test-python-full test-python-full-no-skips:
 	cd agent-python && ./scripts/run_full_python_tests.sh

@@ -34,7 +34,7 @@ make setup-python-locked
 
 `setup-python` is the normal development setup from `requirements.txt`. `setup-python-locked` is the thesis reproducibility setup from `requirements.lock` and runs `pip check` after installation.
 
-The default Python test profile uses `agent-python/requirements.txt`, including scikit-learn for learned-calibration tests. `agent-python/requirements-test.txt` remains a compatibility include file for older local workflows.
+The default Python test profile uses `agent-python/requirements.txt` and includes scikit-learn-backed learned-calibration checks. `agent-python/requirements-test.txt` remains a compatibility include file for older local workflows.
 
 `agent-python/requirements.txt` is the human-maintained dependency input used by setup and CI. `agent-python/requirements.lock` is a thesis reproducibility snapshot generated from the tested Python 3.11 virtual environment with:
 
@@ -69,20 +69,25 @@ Expected result:
 - `make thesis-artifact-quality` returns a passing JSON summary.
 - `git status --short` shows only intentional working-tree changes, if any.
 
-Default `make test-python` requires scikit-learn and runs the learned-calibration tests plus the Docker/Mongo-backed E2E system test in the default Python test profile. For a local Python test profile with no skipped tests, run:
-
-```bash
-cd agent-python
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m pytest tests -rs -q
-```
-
-or from the repository root:
+Default `make test-python` includes scikit-learn-backed learned-calibration checks. Default `make test-python` includes the Docker/Mongo-backed E2E system test. It runs the default Python test profile from the repository root with:
 
 ```bash
 make test-python
 ```
 
-The default profile requires Docker, Go, the Python virtual environment, MongoDB 7.x through Compose, and scikit-learn from `agent-python/requirements.txt`.
+The learned-calibration compatibility target remains available as an alias for the default-included learned-calibration test file:
+
+```bash
+make test-python-optional-ml
+```
+
+The focused Docker/Mongo-backed E2E target remains available as an alias for the default-included E2E test:
+
+```bash
+make test-python-e2e
+```
+
+The default profile requires the Python virtual environment, project dependencies, Go for the fixture ingestion step, and a reachable MongoDB 7.x instance. CI provides MongoDB as a service container.
 
 For a demo-oriented flow that runs artifact generation and the quality gate together, use:
 
@@ -303,8 +308,3 @@ The quality gate does not validate statistical correctness, does not prove real-
 - Real-world validation requires larger and independently curated NVD, EPSS, CISA KEV, URLhaus/Dread, and asset-context datasets.
 - Asset-aware operational risk depends on asset inventory quality, product/version matching, exposure classification, patch-state evidence, and compensating-control evidence.
 - Dread evidence is experimental, optional, bounded, and not treated as ground truth.
-
-
-Default `make test-python` does not require scikit-learn.
-
-Optional sklearn-gated learned-calibration tests can be run with `make test-python-optional-ml`.

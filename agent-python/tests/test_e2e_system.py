@@ -1,5 +1,3 @@
-import os
-
 import pytest
 
 from integration import e2e_system
@@ -85,9 +83,6 @@ def test_lifecycle_validation_accepts_processed_records_with_terminal_lifecycle(
 
 
 def test_full_e2e_system_opt_in(tmp_path):
-    if os.getenv("RUN_E2E_SYSTEM") != "1":
-        pytest.skip("Set RUN_E2E_SYSTEM=1 to run Docker/Mongo-backed E2E system test")
-
     report = e2e_system.run_e2e_system(output_dir=tmp_path, generated_at="2026-06-10T00:00:00+00:00")
 
     assert (tmp_path / "e2e_system_report.json").exists()
