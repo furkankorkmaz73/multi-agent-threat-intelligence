@@ -171,3 +171,8 @@ The learned-calibration evaluation module is intentionally kept as a single arti
 ## Interpretation
 
 The export is only a feasibility artifact. Proxy labels are not ground truth, Dread live crawling is not used, and confidence remains separate from risk. A future learned calibration layer would require defensible labels, stronger EPSS/KEV coverage, careful train/test separation, and validation that it does not weaken deterministic evidence gates.
+
+
+Default `make test-python` does not require scikit-learn.
+
+Optional sklearn-gated learned-calibration tests can be run with `make test-python-optional-ml`.

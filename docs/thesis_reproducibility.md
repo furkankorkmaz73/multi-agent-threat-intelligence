@@ -303,3 +303,8 @@ The quality gate does not validate statistical correctness, does not prove real-
 - Real-world validation requires larger and independently curated NVD, EPSS, CISA KEV, URLhaus/Dread, and asset-context datasets.
 - Asset-aware operational risk depends on asset inventory quality, product/version matching, exposure classification, patch-state evidence, and compensating-control evidence.
 - Dread evidence is experimental, optional, bounded, and not treated as ground truth.
+
+
+Default `make test-python` does not require scikit-learn.
+
+Optional sklearn-gated learned-calibration tests can be run with `make test-python-optional-ml`.
