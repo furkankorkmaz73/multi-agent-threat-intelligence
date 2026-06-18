@@ -4,21 +4,20 @@ This export is an experimental feasibility check for a possible learned calibrat
 
 Optional learned models are diagnostic only. They do not replace the heuristic scorer, they are not written back to MongoDB, and proxy labels are not ground truth. Skipped model training is an expected outcome when labels are not trainable or scikit-learn is unavailable.
 
-Default `make test-python` does not require scikit-learn. Optional learned-calibration ML tests require `SKLEARN_OPTIONAL_TESTS=1` and scikit-learn installed, and can be run with:
+Default `make test-python` requires scikit-learn from `agent-python/requirements.txt`. The learned-calibration tests run in the default Python test profile and can also be run directly with:
 
 ```bash
-make test-python-optional-ml
+make test-python-learned-calibration
 ```
 
-For the full local no-skip Python profile, install the optional test dependencies and run:
+For the default local no-skip Python profile, run:
 
 ```bash
 cd agent-python
-.venv/bin/python -m pip install -r requirements-test.txt
-./scripts/run_full_python_tests.sh
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m pytest tests -rs -q
 ```
 
-The full profile also enables the Docker/Mongo-backed E2E system test with `RUN_E2E_SYSTEM=1`.
+The default profile also runs the Docker/Mongo-backed E2E system test, so MongoDB must be reachable.
 
 The command reads existing analyzed CVE records from MongoDB collection `cve_intel` and writes a flat feature dataset plus a small feasibility report under `reports/thesis/learned_calibration/`.
 

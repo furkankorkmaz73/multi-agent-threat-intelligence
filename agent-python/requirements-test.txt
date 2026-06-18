@@ -1,5 +1,1 @@
 -r requirements.txt
-
-# Optional dependencies for local no-skip Python test runs.
-# The default test profile intentionally does not require scikit-learn.
-scikit-learn
