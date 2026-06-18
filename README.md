@@ -150,6 +150,17 @@ It also runs lightweight dependency sanity and tracked-file secret checks withou
 
 For a quick local health check before broader validation, run `make test-python`; it uses the repository Python virtual environment and the same pytest flags as the Makefile target.
 
+The default Python test profile intentionally leaves optional runtime tests gated. To run the full local Python profile with no skipped tests, install the optional test dependencies and run the full target:
+
+```bash
+cd agent-python
+.venv/bin/python -m pip install -r requirements-test.txt
+cd ..
+make test-python-full
+```
+
+`make test-python-full` runs `agent-python/scripts/run_full_python_tests.sh`. The script starts only the `mongodb` Docker Compose service when MongoDB is not already reachable, verifies MongoDB ping, verifies scikit-learn imports, exports `RUN_E2E_SYSTEM=1` and `SKLEARN_OPTIONAL_TESTS=1`, runs `pytest tests -rs -q`, and fails if pytest still reports skipped tests.
+
 ## Thesis Scenario
 
 A deterministic local end-to-end scenario exercises fixture ingestion, worker lifecycle, orchestration, API-compatible result shaping, asset-aware operational risk, and KEV/EPSS evaluation without live MongoDB, OpenAI, network access, or secrets:
@@ -785,6 +796,18 @@ cd agent-python
 source .venv/bin/activate
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src pytest -q -p no:ddtrace
 ```
+
+The default profile does not require Docker, MongoDB, or scikit-learn and may report intentional skips for optional E2E and learned-calibration tests.
+
+For a local no-skip run:
+
+```bash
+cd agent-python
+.venv/bin/python -m pip install -r requirements-test.txt
+./scripts/run_full_python_tests.sh
+```
+
+The no-skip profile requires Docker, Go, MongoDB 7.x via `docker compose up -d mongodb`, the optional scikit-learn test dependency, `RUN_E2E_SYSTEM=1`, and `SKLEARN_OPTIONAL_TESTS=1`. The script sets the two environment variables itself after dependency and service checks.
 
 ### Go Tests
 

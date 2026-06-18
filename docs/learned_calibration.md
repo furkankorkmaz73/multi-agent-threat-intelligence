@@ -10,6 +10,16 @@ Default `make test-python` does not require scikit-learn. Optional learned-calib
 make test-python-optional-ml
 ```
 
+For the full local no-skip Python profile, install the optional test dependencies and run:
+
+```bash
+cd agent-python
+.venv/bin/python -m pip install -r requirements-test.txt
+./scripts/run_full_python_tests.sh
+```
+
+The full profile also enables the Docker/Mongo-backed E2E system test with `RUN_E2E_SYSTEM=1`.
+
 The command reads existing analyzed CVE records from MongoDB collection `cve_intel` and writes a flat feature dataset plus a small feasibility report under `reports/thesis/learned_calibration/`.
 
 ```bash

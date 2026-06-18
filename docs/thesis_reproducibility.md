@@ -34,6 +34,8 @@ make setup-python-locked
 
 `setup-python` is the normal development setup from `requirements.txt`. `setup-python-locked` is the thesis reproducibility setup from `requirements.lock` and runs `pip check` after installation.
 
+Optional no-skip local test runs use `agent-python/requirements-test.txt`. That file extends the normal requirements with scikit-learn for the gated learned-calibration tests. It is not a production runtime dependency file.
+
 `agent-python/requirements.txt` is the human-maintained dependency input used by setup and CI. `agent-python/requirements.lock` is a thesis reproducibility snapshot generated from the tested Python 3.11 virtual environment with:
 
 ```bash
@@ -72,6 +74,22 @@ Default `make test-python` does not require scikit-learn. Optional learned-calib
 ```bash
 make test-python-optional-ml
 ```
+
+For a full local Python test profile with no skipped tests, install the optional test dependencies and run:
+
+```bash
+cd agent-python
+.venv/bin/python -m pip install -r requirements-test.txt
+./scripts/run_full_python_tests.sh
+```
+
+or from the repository root:
+
+```bash
+make test-python-full
+```
+
+The full profile enables `RUN_E2E_SYSTEM=1` and `SKLEARN_OPTIONAL_TESTS=1`, starts only the `mongodb` Docker Compose service when MongoDB is not already reachable, verifies MongoDB ping, verifies scikit-learn imports, runs `pytest tests -rs -q`, and fails if pytest still reports skipped tests. It requires Docker, Go, the Python virtual environment, MongoDB 7.x through Compose, and the optional scikit-learn test dependency.
 
 For a demo-oriented flow that runs artifact generation and the quality gate together, use:
 
