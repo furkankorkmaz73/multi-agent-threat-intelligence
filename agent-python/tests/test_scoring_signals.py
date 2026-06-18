@@ -187,3 +187,35 @@ def test_external_signal_extraction_preserves_unknown_kev():
     assert missing.kev_listed is None
     assert present.epss_probability == 0.42
     assert present.kev_listed is True
+
+
+def test_external_signal_extraction_reads_nested_cve_enrichment():
+    signals = extract_external_risk_signals(
+        {
+            "enrichment": {
+                "epss": {"available": True, "probability": "0.91", "percentile": "0.99"},
+                "kev": {"status_known": True, "listed": False},
+            }
+        }
+    )
+
+    assert signals.epss_probability == 0.91
+    assert signals.epss_available is True
+    assert signals.kev_listed is False
+    assert signals.kev_status_known is True
+
+
+def test_external_signal_extraction_preserves_missing_nested_data_semantics():
+    unavailable = extract_external_risk_signals(
+        {
+            "enrichment": {
+                "epss": {"available": False},
+                "kev": {"status_known": False, "listed": False},
+            }
+        }
+    )
+    listed = extract_external_risk_signals({"enrichment": {"kev": {"status_known": True, "listed": True}}})
+
+    assert unavailable.epss_probability is None
+    assert unavailable.kev_listed is None
+    assert listed.kev_listed is True

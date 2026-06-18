@@ -116,8 +116,8 @@ DEFAULT_RISK_SIGNAL_WEIGHTS: Mapping[str, float] = {
 
 def extract_external_risk_signals(data: Mapping[str, Any], explicit: Mapping[str, Any] | None = None) -> ExternalRiskSignals:
     payload = {**dict(data or {}), **dict(explicit or {})}
-    epss_raw = _first_present(payload, "epss_probability", "epss_score", "epss")
-    kev_raw = _first_present(payload, "kev_listed", "is_kev", "known_exploited", "cisa_kev")
+    epss_raw = _extract_epss_probability(payload)
+    kev_raw = _extract_kev_listed(payload)
     epss_probability = normalize_epss(epss_raw) if epss_raw is not None else None
     kev_listed = _parse_optional_bool(kev_raw)
     return ExternalRiskSignals(epss_probability=epss_probability, kev_listed=kev_listed)
@@ -225,6 +225,35 @@ def _first_present(payload: Mapping[str, Any], *keys: str) -> Any:
         if key in payload and payload[key] is not None:
             return payload[key]
     return None
+
+
+def _extract_epss_probability(payload: Mapping[str, Any]) -> Any:
+    flat = _first_present(payload, "epss_probability", "epss_score", "epss")
+    if flat is not None:
+        return flat
+    epss = _nested_mapping(payload, "enrichment", "epss")
+    if not epss or epss.get("available") is not True:
+        return None
+    return _first_present(epss, "probability", "epss_probability", "epss_score", "epss")
+
+
+def _extract_kev_listed(payload: Mapping[str, Any]) -> Any:
+    flat = _first_present(payload, "kev_listed", "is_kev", "known_exploited", "cisa_kev")
+    if flat is not None:
+        return flat
+    kev = _nested_mapping(payload, "enrichment", "kev")
+    if not kev or kev.get("status_known") is not True:
+        return None
+    return kev.get("listed")
+
+
+def _nested_mapping(payload: Mapping[str, Any], *keys: str) -> Mapping[str, Any] | None:
+    current: Any = payload
+    for key in keys:
+        if not isinstance(current, Mapping):
+            return None
+        current = current.get(key)
+    return current if isinstance(current, Mapping) else None
 
 
 def _parse_optional_bool(value: Any) -> bool | None:

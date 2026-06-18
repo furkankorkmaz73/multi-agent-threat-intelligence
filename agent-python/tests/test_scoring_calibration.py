@@ -154,6 +154,86 @@ def test_missing_epss_and_kev_do_not_crash_or_zero_risk():
     assert 0.0 <= result["risk_score"] <= 10.0
 
 
+def test_cve_analysis_uses_nested_enrichment_fields():
+    payload = _cve(6.5, "Authentication bypass in Example VPN Gateway allows initial access.")
+    payload["enrichment"] = {
+        "epss": {"available": True, "probability": 0.94, "percentile": 0.99, "date": "2026-06-18", "source": "FIRST"},
+        "kev": {"status_known": True, "listed": True, "source": "CISA", "date_checked": "2026-06-18"},
+    }
+
+    result = RiskEngine().evaluate_cve(payload, db=EmptyDB())
+
+    assert result["evidence"]["epss_probability"] == 0.94
+    assert result["evidence"]["epss_available"] is True
+    assert result["evidence"]["kev_status_known"] is True
+    assert result["evidence"]["kev_listed"] is True
+    assert result["feature_breakdown"]["epss_signal"] == 0.94
+    assert result["feature_breakdown"]["kev_signal"] == 1.0
+
+
+def test_loaded_kev_catalog_absent_cve_sets_known_not_listed_in_analysis():
+    payload = _cve(7.5, "A detailed vulnerability in Example Product allows service disruption.")
+    payload["enrichment"] = {
+        "epss": {"available": False, "source": "FIRST"},
+        "kev": {"status_known": True, "listed": False, "source": "CISA", "date_checked": "2026-06-18"},
+    }
+
+    result = RiskEngine().evaluate_cve(payload, db=EmptyDB())
+
+    assert result["evidence"]["epss_available"] is False
+    assert result["evidence"]["kev_status_known"] is True
+    assert result["evidence"]["kev_listed"] is False
+    assert result["feature_breakdown"]["epss_signal"] == 0.0
+    assert result["feature_breakdown"]["kev_signal"] == 0.0
+    assert "kev_status_unknown" not in result["confidence_breakdown"]["coverage_limitations"]
+
+
+def test_low_epss_enrichment_does_not_force_critical():
+    payload = _cve(7.5, "A detailed vulnerability in Example Product allows service disruption.")
+    payload["enrichment"] = {
+        "epss": {"available": True, "probability": 0.01, "percentile": 0.20, "source": "FIRST"},
+        "kev": {"status_known": True, "listed": False, "source": "CISA", "date_checked": "2026-06-18"},
+    }
+
+    result = RiskEngine().evaluate_cve(payload, db=EmptyDB())
+
+    assert result["feature_breakdown"]["epss_signal"] == 0.01
+    assert result["risk_level"] != "CRITICAL"
+    assert result["risk_score"] < 8.5
+
+
+def test_high_epss_enrichment_increases_epss_signal_and_risk():
+    base = _cve(7.5, "A detailed vulnerability in Example Product allows service disruption.")
+    enriched = _cve(7.5, "A detailed vulnerability in Example Product allows service disruption.")
+    enriched["enrichment"] = {
+        "epss": {"available": True, "probability": 0.90, "percentile": 0.98, "source": "FIRST"},
+        "kev": {"status_known": True, "listed": False, "source": "CISA", "date_checked": "2026-06-18"},
+    }
+
+    baseline = RiskEngine().evaluate_cve(base, db=EmptyDB())
+    with_epss = RiskEngine().evaluate_cve(enriched, db=EmptyDB())
+
+    assert baseline["feature_breakdown"]["epss_signal"] == 0.0
+    assert with_epss["feature_breakdown"]["epss_signal"] == 0.9
+    assert with_epss["risk_score"] > baseline["risk_score"]
+
+
+def test_kev_listed_enrichment_increases_kev_signal_and_risk():
+    base = _cve(7.5, "A detailed vulnerability in Example Product allows service disruption.")
+    enriched = _cve(7.5, "A detailed vulnerability in Example Product allows service disruption.")
+    enriched["enrichment"] = {
+        "epss": {"available": False, "source": "FIRST"},
+        "kev": {"status_known": True, "listed": True, "source": "CISA", "date_checked": "2026-06-18"},
+    }
+
+    baseline = RiskEngine().evaluate_cve(base, db=EmptyDB())
+    with_kev = RiskEngine().evaluate_cve(enriched, db=EmptyDB())
+
+    assert baseline["feature_breakdown"]["kev_signal"] == 0.0
+    assert with_kev["feature_breakdown"]["kev_signal"] == 1.0
+    assert with_kev["risk_score"] > baseline["risk_score"]
+
+
 def test_intrinsic_criticality_floor_lifts_recent_cvss10_high_context_without_external_evidence():
     result = RiskEngine().evaluate_cve(
         _cve(
